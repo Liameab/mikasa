@@ -19,6 +19,7 @@ PyInstaller，再跑这两个。
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import shutil
 import subprocess
@@ -64,6 +65,30 @@ def app_version() -> str:
     return match.group(1)
 
 
+def append_checksum(path: Path) -> Path | None:
+    """把刚编译出的 Setup.exe 追加进 dist/SHA256SUMS.txt。
+
+    为什么写在这里而不是 make_release.py：那个脚本跑在编译**之前**，它写校验和
+    时 Setup.exe 还不存在——于是清单里只有 zip 与内层 exe，而绝大多数用户下载的
+    偏偏是 Setup.exe，成了唯一没有校验和的产物（2026-09-11 发布前复查发现）。
+
+    幂等：同名行先删再追加，重编译不会留两行。清单不存在则返回 None——那份清单
+    归 make_release.py 管，这里不凭空造一份只含 Setup 的残缺版。
+    """
+    sums = path.parent / "SHA256SUMS.txt"
+    if not sums.is_file():
+        return None
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    kept = [
+        line
+        for line in sums.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.endswith("  " + path.name)
+    ]
+    kept.append(f"{digest}  {path.name}")
+    sums.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    return sums
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="编译单文件安装向导")
     parser.add_argument("--iscc", default=None, help="ISCC.exe 路径（缺省自动查找）")
@@ -97,6 +122,9 @@ def main() -> int:
     if not out.is_file():
         raise SystemExit(f"ISCC 报成功但没找到产物：{out}")
     print(f"安装向导已生成：{out.relative_to(REPO_ROOT)}（{out.stat().st_size / 1e6:.0f} MB）")
+    sums = append_checksum(out)
+    if sums is not None:
+        print(f"校验和已更新：{sums.relative_to(REPO_ROOT)}")
     return 0
 
 
