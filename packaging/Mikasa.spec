@@ -68,11 +68,14 @@ exe = EXE(  # noqa: F821
     [],
     exclude_binaries=True,
     name="Mikasa",
+    # 应用图标（tools/make_icon.py 生成：深色圆角 + 品牌绿 + 文档线条 + 引用标记）
+    icon=str(SPEC_DIR / "Mikasa.ico"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=True,  # 保留控制台：日志、错误提示、Ctrl+C 停止服务都靠它
+    # 无控制台：双击时不该弹黑窗口（正经软件的样子）。代价是出错时用户看不见，
+    # 由 entry.py 的系统弹窗兜底，日志照常落 %LOCALAPPDATA%\Mikasa\logs    console=False,
 )
 
 coll = COLLECT(  # noqa: F821
