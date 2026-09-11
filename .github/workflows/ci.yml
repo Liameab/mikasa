@@ -61,3 +61,30 @@ jobs:
 
       - name: CLI smoke test (offline profile)
         run: python -m mikasa doctor --profile offline
+
+      # 安装器/启动脚本的语法检查。这两条 .ps1 只有 Windows 上才跑得到，而
+      # ruff/mypy/pytest 都不碰它们——2026-09-11 的审查正是在这里放过了几个
+      # 数据破坏级缺陷（清盘根、卸载误删）。[Parser]::ParseFile 是零依赖的
+      # 语法门：解析不过就红，比"等用户双击才发现"便宜得多。
+      - name: PowerShell syntax check (installers)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem packaging -Filter *.ps1 | ForEach-Object {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName, [ref]$null, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              Write-Host "::error file=$($_.FullName)::$($errors[0].Message)"
+              $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
+          Write-Host "PowerShell scripts parse cleanly."
+
+      # 发布脚本的静态检查：它们不进 src/，mypy 的 files=["src"] 覆盖不到。
+      # 只在 Ubuntu 跑一次即可（与平台无关），Windows 那边省一轮安装时间。
+      - name: Release tooling smoke (collect only)
+        if: runner.os == 'Linux'
+        run: python -c "import ast, pathlib; [ast.parse(p.read_text(encoding='utf-8')) for p in pathlib.Path('tools').glob('*.py')]"

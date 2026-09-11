@@ -1,0 +1,30 @@
+# 依赖更新自动化。
+#
+# 为什么需要：pip 依赖从不更新不是"稳定"，而是**把已知漏洞一直带在身上**——
+# 尤其这个项目要分发 exe，用户拿到的是我们打进去的那一整套依赖。Dependabot
+# 会在有新版（含安全修复）时开 PR，由 CI 判定能不能合。
+#
+# 为什么不直接在 CI 里跑 pip-audit：那需要每次构建都联网查漏洞库，网络抖动
+# 会让 CI 无故变红（本项目 CI 已因编码问题红过一次，不值得再加一条噪声源）。
+# Dependabot 是"有更新才打扰"，与这套 CI 的分工更合。
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: ["deps"]
+    commit-message:
+      prefix: "deps"
+    # 大版本升级单独提，避免一次 PR 里混进破坏性变更
+    groups:
+      patch-and-minor:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    labels: ["deps", "ci"]
