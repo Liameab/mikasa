@@ -318,9 +318,7 @@ def test_same_name_bad_reupload_keeps_old_document(tmp_path, offline_settings):
     assert (offline_settings.uploads_dir / "笔记.md").is_file(), "uploads 旧副本必须保留"
 
 
-def test_same_name_reupload_embed_failure_keeps_old_copy(
-    tmp_path, offline_settings, monkeypatch
-):
+def test_same_name_reupload_embed_failure_keeps_old_copy(tmp_path, offline_settings, monkeypatch):
     """同名重传时嵌入失败：盘上的旧副本必须保住（2026-09-11 打包前审查修复）。
 
     旧行在解析通过后就被删掉并提交，若随后嵌入阶段失败（API 限流/超时），
