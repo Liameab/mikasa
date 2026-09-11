@@ -25,11 +25,11 @@ from rich.text import Text
 
 from mikasa import __version__
 from mikasa.config.settings import (
-    REPO_ROOT,
     VALID_PROFILES,
     Settings,
     load_dotenv_file,
     load_settings,
+    resource_root,
 )
 from mikasa.errors import ConfigError, EvalError, ZhiwenError
 from mikasa.ingest.service import IngestService, IngestSummary
@@ -372,7 +372,10 @@ def _print_summary(console: Console, summary: IngestSummary) -> None:
     table.add_row("新增块数", str(summary.chunks_added))
     console.print(table)
     for file, reason in summary.failed:
-        console.print(f"  [red]✘[/] {file}\n     {reason}")
+        # 文件名/原因走 Text：含小写方括号（如 notes[ab].md）会被 rich 当标记吞字
+        line = Text("  ✘ ", style="red")
+        line.append(f"{file}\n     {reason}")
+        console.print(line)
     if summary.failed:
         console.print("[red]部分文件导入失败，详见上方原因（密钥/格式/网络问题）。[/]")
 
@@ -571,7 +574,7 @@ def run(
     golden: Annotated[
         Path,
         typer.Option("--golden", help="黄金集 JSON（缺省 evals/golden_set.json）"),
-    ] = REPO_ROOT / "evals" / "golden_set.json",
+    ] = resource_root() / "evals" / "golden_set.json",
     profile: PROFILE_OPT = "api",
     config: CONFIG_OPT = None,
 ) -> None:
@@ -868,7 +871,13 @@ def main() -> None:  # noqa: D103
     _ensure_console_encoding()
     setup_logging()
     load_dotenv_file()
-    app()
+    try:
+        app()
+    except ZhiwenError as exc:
+        # 顶层兜底：business 错误（配置非法/找不到 profile/密钥缺失）给一句中文，
+        # 不再吐二十行 typer 调用栈。命令内部已自行处理的不受影响（不会走到这）。
+        Console().print(f"[red]{exc}[/]")
+        raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":

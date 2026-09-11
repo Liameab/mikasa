@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -20,8 +21,48 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from mikasa.errors import ConfigError
 
-# 包所在位置向上三级即仓库根目录（src/mikasa/config/settings.py -> <repo>）
-REPO_ROOT = Path(__file__).resolve().parents[3]
+
+def is_frozen() -> bool:
+    """是否运行在 PyInstaller 打包产物里（exe），而不是源码仓库中。"""
+    return bool(getattr(sys, "frozen", False))
+
+
+def resource_root() -> Path:
+    """**只读**资源根：随包发布的文件（profile 配置、示例语料、黄金集）。
+
+    开发时 = 仓库根（src/mikasa/config/settings.py 向上三级）；
+    打包后 = 解包目录（sys._MEIPASS）——PyInstaller 把 --add-data 的内容
+    放在那里，而 `__file__` 的 `parents[N]` 会算到临时目录的上一级，不能再用。
+    """
+    if is_frozen():
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    return Path(__file__).resolve().parents[3]
+
+
+def user_data_root() -> Path:
+    """**可写**数据根：数据库 / uploads / 索引快照 / 日志。
+
+    开发时 = 仓库根/data（保持原有行为，备份就是复制 data/）；
+    打包后 = 用户可写目录——exe 可能装在 Program Files（无写权限），
+    而 onefile 的临时解包目录会被系统清理，都不能当数据家。
+    Windows 用 %LOCALAPPDATA%\\Mikasa，其他平台用 ~/.local/share/Mikasa。
+    环境变量 MIKASA_DATA_DIR 在两种形态下都可显式覆盖。
+    """
+    override = os.environ.get("MIKASA_DATA_DIR")
+    if override:
+        return Path(override).expanduser()
+    if is_frozen():
+        if sys.platform == "win32":
+            base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+        else:
+            base = Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
+        return base / "Mikasa"
+    return resource_root() / "data"
+
+
+# 兼容别名：只读资源的既有引用点（黄金集、示例语料）继续用它；
+# **可写路径一律走 user_data_root()**，别再往这里写东西。
+REPO_ROOT = resource_root()
 
 VALID_PROFILES = ("api", "local", "offline")
 
@@ -199,7 +240,8 @@ class Settings(BaseModel):
 
     profile: Literal["api", "local", "offline"]
     config_path: Path | None = None
-    data_dir: Path = REPO_ROOT / "data"
+    # 可写数据根（打包后自动落到用户目录，见 user_data_root 的说明）
+    data_dir: Path = Field(default_factory=user_data_root)
 
     chunking: ChunkingConfig = ChunkingConfig()
     retrieval: RetrievalConfig = RetrievalConfig()
@@ -259,7 +301,12 @@ def _config_lookup(profile: str, config_path: Path | None) -> tuple[Path, str, s
             raise ConfigError(f"配置文件不存在：{config_path}")
         return config_path, profile, str(config_path)
 
-    for cwd_file in (Path.cwd() / "config" / "config.yaml", REPO_ROOT / "config" / "config.yaml"):
+    # cwd 只在开发时参与查找：打包后双击 exe 的 cwd 可能是 System32 之类，
+    # 命中无关 config.yaml 还会按它的 profile 字段静默改档（打包审查发现）
+    candidates = [REPO_ROOT / "config" / "config.yaml"]
+    if not is_frozen():
+        candidates.insert(0, Path.cwd() / "config" / "config.yaml")
+    for cwd_file in candidates:
         if cwd_file.is_file():
             declared = _declared_profile(cwd_file)
             return cwd_file, declared or profile, str(cwd_file)
@@ -343,8 +390,26 @@ def _default_section_dict() -> dict[str, Any]:
     }
 
 
+def _dotenv_candidates() -> list[Path]:
+    """`.env` 的查找顺序：显式指定 → 用户数据目录 → 随包资源根 → exe 同级。
+
+    打包后 `REPO_ROOT` 指向解包目录，用户既找不到也改不了那里的 `.env`；
+    而数据目录（%LOCALAPPDATA%\\Mikasa）才是他能写的地方。开发时数据根就是
+    仓库根/data，因此"仓库根 .env"这条仍然命中，行为不变。
+    """
+    candidates: list[Path] = []
+    explicit = os.environ.get("MIKASA_ENV_FILE")
+    if explicit:
+        candidates.append(Path(explicit).expanduser())
+    candidates.append(user_data_root() / ".env")
+    candidates.append(resource_root() / ".env")
+    if is_frozen():
+        candidates.append(Path(sys.executable).parent / ".env")  # 绿色版：放 exe 旁边
+    return candidates
+
+
 def load_dotenv_file() -> None:
-    """把仓库根目录 .env 载入环境变量（python-dotenv，只在文件存在时生效）。
+    """按查找链载入 `.env`（python-dotenv；文件不存在就跳过下一个）。
 
     密钥按设计只经环境变量注入，.env 提供"复制 .env.example 即用"的本地体验。
     不覆盖进程里已显式 export 的同名变量（load_dotenv 默认 override=False）。
@@ -353,9 +418,13 @@ def load_dotenv_file() -> None:
     """
     try:
         from dotenv import load_dotenv
-
-        load_dotenv(REPO_ROOT / ".env")
     except ImportError:  # python-dotenv 缺失（老环境未重装）时降级，别让命令崩
         from mikasa.utils.logging import get_logger
 
         get_logger("config").warning("python-dotenv 未安装：.env 不会自动加载，请显式 export 密钥")
+        return
+
+    for path in _dotenv_candidates():
+        if path.is_file():
+            load_dotenv(path)
+            return

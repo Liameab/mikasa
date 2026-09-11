@@ -166,11 +166,27 @@ class IngestService:
                     keep_title, keep_folder = kept
 
         copied = False
+        displaced: Path | None = None  # 同名替换时被"让位"的旧副本
         if file.resolve() != copy_path.resolve():
             # 源文件就是入库副本（reindex 扫 uploads 的场景）：无需复制，
             # 否则 shutil 会报"同一文件"（真实 bug 的回归见 test_service）
             copy_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(file, copy_path)  # 副本入库后再解析：原文件可随意移动
+            # 同名替换：旧副本先**改名让位**（同目录 rename 瞬时完成、不复制
+            # 数据），入库成功后才真删。为什么不直接覆盖——旧行在上面已经
+            # 删掉并提交，若随后嵌入阶段失败（API 限流/超时/维度不符），
+            # 回滚会把新行和副本一起清掉，**旧文档在库与磁盘上同时消失**。
+            # 2026-09-11 打包前审查发现：当天"解析提前"只挡住了坏文件，
+            # 没挡住嵌入失败这条路径。
+            if copy_path.is_file():
+                displaced = copy_path.with_name(f"{copy_path.name}.replacing")
+                displaced.unlink(missing_ok=True)
+                copy_path.rename(displaced)
+            try:
+                shutil.copyfile(file, copy_path)  # 副本入库后再解析：原文件可随意移动
+            except OSError:
+                if displaced is not None:  # 连复制都没成：把旧副本放回去
+                    displaced.rename(copy_path)
+                raise
             copied = True
 
         doc_id: int | None = None
@@ -191,7 +207,13 @@ class IngestService:
             # reindex 开头已清空全部行，等于文档在库和磁盘上同时消失。
             if copied:
                 copy_path.unlink(missing_ok=True)
+            # 让位的旧副本放回原位：库里那行虽然没了，盘上的原件要保住，
+            # 用户重传或 reindex 都能把它接回来（宁留文件，不留半成品）
+            if displaced is not None:
+                displaced.rename(copy_path)
             raise
+        if displaced is not None:
+            displaced.unlink(missing_ok=True)  # 成功：旧副本正式退役
         return "ingested", len(chunks), loaded.char_count
 
     def reindex(self) -> IngestSummary:

@@ -99,9 +99,15 @@ class IndexManager:
                     ids, loaded_matrix = loaded
                     expected = [c.id for c in chunks]
                     if ids != expected:
+                        # 两种成因要分开说：① 正在入库的中间态——chunks 已提交、
+                        # 向量还没写完（大文件分批嵌入可持续数十秒），此时提问撞上
+                        # 属正常，等一会自愈；② 嵌入中断/模型切换残留，那才需要重建。
+                        # 旧文案把①也说成"库坏了"，把人引向没必要的 reindex
+                        # （2026-09-11 打包前审查发现）。
                         raise StorageError(
-                            "向量矩阵与 chunk 表不一致（可能是嵌入中断/模型切换残留）。"
-                            "请运行 mikasa ingest --reindex 重建。"
+                            "索引正在更新或与语料不一致（若刚上传过文档，"
+                            "等入库完成后重试即可；否则可能是嵌入中断/模型切换残留，"
+                            "请运行 mikasa ingest --reindex 重建）。"
                         )
                     matrix = loaded_matrix
                     embedding_model = settings.embedding.model

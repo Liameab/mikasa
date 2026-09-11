@@ -10,6 +10,7 @@ SiliconFlow rerank 端点（非 Chat 兼容）用标准库 urllib 实现，
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -91,7 +92,12 @@ class ApiReranker:
             raise ProviderError(f"Reranker HTTP {exc.code}（{self.model}）：{detail}") from exc
         except urllib.error.URLError as exc:
             raise ProviderError(f"Reranker 网络错误（{self.model}）：{exc.reason}") from exc
-        except (TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        except (
+            OSError,
+            http.client.HTTPException,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+        ) as exc:
             # 读超时与坏响应体（网关 HTML 错误页）**不是** URLError 的子类：
             # urllib 只把"请求阶段"的 OSError 包成 URLError，`resp.read()` 阶段
             # 的 TimeoutError 与 json 解析失败会裸穿到上层（CLI 变 traceback，

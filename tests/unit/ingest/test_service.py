@@ -316,3 +316,34 @@ def test_same_name_bad_reupload_keeps_old_document(tmp_path, offline_settings):
     assert rows[0].title == "我改过的名字", "用户改过的标题必须保留"
     assert rows[0].folder_id == folder_id, "文件夹归属必须保留"
     assert (offline_settings.uploads_dir / "笔记.md").is_file(), "uploads 旧副本必须保留"
+
+
+def test_same_name_reupload_embed_failure_keeps_old_copy(
+    tmp_path, offline_settings, monkeypatch
+):
+    """同名重传时嵌入失败：盘上的旧副本必须保住（2026-09-11 打包前审查修复）。
+
+    旧行在解析通过后就被删掉并提交，若随后嵌入阶段失败（API 限流/超时），
+    旧实现会把新副本也 unlink —— 文档在库里和磁盘上同时消失。现在旧副本
+    先改名让位（同目录 rename，不复制数据），失败则原样放回。
+    """
+    note = _write_note(tmp_path, "笔记.md", CONTENT_A)
+    svc = _svc(offline_settings)
+    svc.ingest_one(note)
+    copy_path = offline_settings.uploads_dir / "笔记.md"
+    assert copy_path.is_file()
+    original_text = copy_path.read_text(encoding="utf-8")
+
+    # 同名、内容已变的新文件；让嵌入阶段失败
+    changed = _write_note(tmp_path, "笔记.md", CONTENT_A.replace("Adam", "AdamW 优化器"))
+
+    def boom(self, chunks):
+        raise ProviderError("模拟嵌入服务故障（429）")
+
+    monkeypatch.setattr(IngestService, "_embed_chunks", boom)
+    with pytest.raises(ProviderError):
+        svc.ingest_one(changed)
+
+    assert copy_path.is_file(), "旧副本必须放回原位（否则文档彻底消失）"
+    assert copy_path.read_text(encoding="utf-8") == original_text, "放回的应是旧版内容"
+    assert not list(offline_settings.uploads_dir.glob("*.replacing")), "让位文件不能残留"

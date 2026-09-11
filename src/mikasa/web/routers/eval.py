@@ -14,7 +14,7 @@ import json
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
-from mikasa.config.settings import REPO_ROOT, Settings
+from mikasa.config.settings import Settings, resource_root
 from mikasa.errors import EvalError
 from mikasa.eval.golden import GoldenSet, load_golden
 from mikasa.eval.service import run_and_persist
@@ -31,7 +31,7 @@ logger = get_logger("web.routers.eval")
 
 # 黄金集默认路径与 CLI eval run 一致（evals/ 与 data/ 都在仓库根，
 # 运行时前置：tools/build_golden.py 已冻结题库）
-_GOLDEN_DEFAULT = REPO_ROOT / "evals" / "golden_set.json"
+_GOLDEN_DEFAULT = resource_root() / "evals" / "golden_set.json"
 
 
 def _preflight_golden(settings: Settings) -> GoldenSet:

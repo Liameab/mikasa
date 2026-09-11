@@ -71,8 +71,21 @@ function stepZoom(delta) {
   setZoom(zoomPercent + delta * ZOOM_STEP);
 }
 
+/** 缩放基准宽：100% 时页面图的显示宽度（图片原始像素，受容器宽限制）。 */
+function pageBaseWidth() {
+  const img = refs?.pageCanvas.querySelector(".rd-page-img");
+  if (!img) return 0;
+  const natural = img.naturalWidth || 0;
+  const avail = Math.max(0, refs.pageCanvas.clientWidth - 24); // canvas 左右各 12px 内边距
+  return natural > 0 ? Math.min(natural, avail) : avail;
+}
+
 function applyZoom() {
   const z = zoomPercent / 100;
+  // 以**图片原始显示宽度**为基准（100% = 1:1）。不能让 100% 走 fit-content、
+  // 其余走"容器比例"——两套模型在 100% 处会跳变：实测容器 1827px、页面图
+  // 910px 时，滑条从 95%(1736px) 拖到 100% 反而缩到 910px（用户会当成 bug）。
+  refs?.pageCanvas.style.setProperty("--page-base", `${Math.round(pageBaseWidth())}px`);
   refs?.pageCanvas.style.setProperty("--page-zoom", String(z));
   refs?.pageCanvas.classList.toggle("zoomed", z !== 1);
   // 放大后才可拖动平移（未放大时是 grab 光标会误导）
@@ -250,6 +263,10 @@ export function initReader(host = null, { onClose = null } = {}) {
   zoomIn.addEventListener("click", () => stepZoom(1));
   zoomRange.addEventListener("input", () => setZoom(zoomRange.value));
   zoomReset.addEventListener("click", () => setZoom(100));
+  // 容器尺寸变了要重算基准宽：缩放态的宽是像素值，不会自己跟随窗口
+  window.addEventListener("resize", () => {
+    if (pageMode && refs && zoomPercent !== 100) applyZoom();
+  });
   applyZoom();
 
   // 放大后按住拖动平移（浏览器原生只给滚动条，拖不动——2026-09-11 用户反馈）
@@ -330,6 +347,7 @@ export async function openDocument(docId, { chunkId = null, mode = null, locatio
   refs.title.textContent = data.document.title;
   refs.orig.replaceChildren(); // 换文档后原文件视图需重建
   refs.orig.dataset.built = "";
+  delete refs.orig.dataset.framePage; // 页码也要清：否则 iframe 打开在上一篇的第 N 页
   // 跳页上界优先用**原件**页数（file_pages）：page_max 只是解析出正文的最大
   // 页码，参考文献区被剔除后会明显小于原文件（doc 71 实测 189 vs 301）。
   const pageCap = data.file_pages ?? data.page_max;
@@ -362,8 +380,10 @@ export async function openDocument(docId, { chunkId = null, mode = null, locatio
 
 /** 引用跳转入口：chunk_id → 所属文档 + 定位（Citation 不带 document_id）。 */
 export async function openChunk(chunkId, { mode = "text" } = {}) {
+  const seq = loadSeq; // 同 locateAndShow：先点 A 后点 B 时，A 的响应后到会把人拽回 A
   try {
     const info = await apiFetch(`/api/chunks/${Number(chunkId)}`);
+    if (seq !== loadSeq) return; // 已过期：用户点了别的
     await openDocument(info.document_id, { chunkId: Number(chunkId), mode });
   } catch (err) {
     initReader();
@@ -392,6 +412,11 @@ export function closeReader() {
   if (!root) return;
   refs.orig.replaceChildren(); // 移除 iframe：28MB PDF 的阅读器不必常驻
   refs.orig.dataset.built = "";
+  delete refs.orig.dataset.framePage;
+  // 页面视图同理：连续模式会建几百个页面节点 + 文字层的 ResizeObserver，
+  // 关面板要一起放掉（否则已解码的位图与观察者会挂到下次 showPage 为止）
+  refs.pageCanvas?.querySelectorAll(".rd-textlayer").forEach((l) => l._ro?.disconnect());
+  refs.pageCanvas?.replaceChildren();
   refs.foot.classList.add("hidden");
   cache = null; // 语料可能已重新入库，下次重新拉
   if (inline) onCloseHook?.();
@@ -513,7 +538,9 @@ function pageNode(n) {
 function updatePageBar(total) {
   refs.pageLabel.textContent = total ? `第 ${currentPage} / ${total} 页` : `第 ${currentPage} 页`;
   refs.pagePrev.disabled = currentPage <= 1;
-  refs.pageNext.disabled = Boolean(total) && currentPage >= total;
+  // 总页数未知（原件缺失等）时页面视图只有第 1 页：下一页没有可去之处，禁掉
+  // 比"能点但没反应"诚实（2026-09-11 打包前审查发现）
+  refs.pageNext.disabled = !total || currentPage >= total;
 }
 
 /** 归一化矩形 → 高亮块（百分比定位，与渲染 DPI 无关）。 */
@@ -611,17 +638,18 @@ function setPageMode(mode) {
 
 /** 引用跳转的 PDF 分支：定位该块 → 切到页面视图并高亮。定位不到返回 false。 */
 async function locateAndShow(chunkId) {
+  const seq = loadSeq; // 发起时的文档序号：期间用户换了文档就别渲染（会张冠李戴）
+  let loc;
   try {
-    const loc = await apiFetch(`/api/documents/${cache.docId}/locate/${Number(chunkId)}`);
-    if (loc.page) {
-      setMode("page");
-      await showPage(loc.page, loc.rects);
-      return true;
-    }
+    loc = await apiFetch(`/api/documents/${cache.docId}/locate/${Number(chunkId)}`);
   } catch {
-    /* 定位是增强，失败降级到文本视图高亮 */
+    return false; // 定位是增强项：失败降级到文本视图高亮
   }
-  return false;
+  if (seq !== loadSeq) return true; // 过期响应：丢弃（否则 A 的页码/高亮会画到 B 身上）
+  if (!loc.page) return false;
+  setMode("page");
+  await showPage(loc.page, loc.rects);
+  return true;
 }
 
 /** 原文件视图（懒加载：只在切过来时构建一次，换文档由 openDocument 重置）。 */

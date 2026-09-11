@@ -373,10 +373,24 @@ async def run(args) -> int:
               const label = () =>
                 (document.querySelector('.rd-zoom-label')?.textContent || '').trim();
               const before = { label: label(), pannable: !!canvas?.classList.contains('pannable') };
-              if (range) {
-                range.value = '200';
+              // 单调性：95% < 100% < 105%。修复前 100% 走 fit-content、其余走
+              // "容器比例"，两套模型在 100% 处跳变（用户实测：拖到 100% 反而
+              // 缩小一半）。现在统一以"图片原始显示宽度"为基准。
+              const fitW = () => {
+                const f = document.querySelector('.rd-page-fit');
+                return f ? Math.round(f.getBoundingClientRect().width) : 0;
+              };
+              const widths = {};
+              for (const v of ['95', '100', '105']) {
+                range.value = v;
                 range.dispatchEvent(new Event('input', { bubbles: true }));
+                await wait(350);
+                widths[v] = fitW();
               }
+              // 溢出与拖动用 300%：基准改成"图片原始宽度"后，200% 在宽容器里
+              // 可能并不溢出（探针页面图仅 910px 宽），断言改用大倍数
+              range.value = '300';
+              range.dispatchEvent(new Event('input', { bubbles: true }));
               await wait(600);
               const img = document.querySelector('.rd-page-img');
               const layer = document.querySelector('.rd-page-layer');
@@ -404,12 +418,15 @@ async def run(args) -> int:
                 range.value = '100';
                 range.dispatchEvent(new Event('input', { bubbles: true }));
               }
-              return { before, zoomed, panned };
+              return { before, zoomed, panned, widths };
             })()""")
             if zoomtest["before"]["label"] != "100%":
                 bad.append(f"默认缩放应为 100%：{zoomtest['before']}")
-            if zoomtest["zoomed"]["label"] != "200%":
-                bad.append(f"滑条改 200% 后标签未跟随：{zoomtest['zoomed']}")
+            if zoomtest["zoomed"]["label"] != "300%":
+                bad.append(f"滑条改 300% 后标签未跟随：{zoomtest['zoomed']}")
+            w = zoomtest.get("widths", {})
+            if not (w.get("95", 0) < w.get("100", 0) < w.get("105", 0)):
+                bad.append(f"缩放必须单调（95% < 100% < 105%）：{w}")
             if not zoomtest["zoomed"]["pannable"] or not zoomtest["zoomed"]["overflows"]:
                 bad.append(f"放大后应可拖动且内容溢出：{zoomtest['zoomed']}")
             if not zoomtest["zoomed"]["layerAligned"]:

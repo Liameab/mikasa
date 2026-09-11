@@ -508,9 +508,10 @@ def upload_document(
     finally:
         try:
             tmp_path.unlink(missing_ok=True)  # uploads 副本由 ingest_one 管理
+            tmp_path.parent.rmdir()  # 连同本次独占的子目录一起收走
         except OSError:  # pragma: no cover - 句柄被外部程序（杀毒/索引器）占用
             # web-tmp 不是权威数据，删不掉也只是留个临时文件，不升级为用户可见错误
-            logger.warning("web-tmp 临时文件未能删除：%s", tmp_path)
+            logger.warning("web-tmp 临时目录未能清理：%s", tmp_path.parent)
     services.ask.invalidate_index()  # 语料变了：下次提问自动重建快照
 
     if status == "skipped":
@@ -558,7 +559,9 @@ def delete_document(
     # D:\Code\MyProject1\... 路径，实测 23 行里 21 行如此），无条件 unlink
     # 会删掉 uploads 之外的同名文件（2026-09-11 加固，口径同 _inside_uploads）
     if doc.file_path:
-        copy = _inside_uploads(Path(doc.file_path), settings.uploads_dir)
+        # uploads 目录要 resolve：与 _resolve_upload_file 同口径。传相对路径时
+        # is_relative_to 永远为假 → 副本静默不删 → 下次 reindex 把它"复活"
+        copy = _inside_uploads(Path(doc.file_path), settings.uploads_dir.resolve())
         if copy is not None:
             copy.unlink(missing_ok=True)
     services.ask.invalidate_index()

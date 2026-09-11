@@ -1195,6 +1195,7 @@ table.list td.num { text-align: right; font-variant-numeric: tabular-nums; }
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  min-width: 0; /* 同上：内嵌阅读器也要能窄于内容 */
 }
 .reader-inline .rd-body { flex: 1; min-height: 0; }
 .reader-inline .rd-text,
@@ -1216,9 +1217,7 @@ table.list td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* 字号：变量由 reader.js 挂在阅读器根节点上（只影响阅读区，不污染全站） */
 .rd-text,
-.rd-raw { font-size: var(--reader-font, 14px); }
-.rd-font { display: flex; gap: 4px; }
-.rd-font-btn { font-size: 12px; padding: 4px 9px; font-variant-numeric: tabular-nums; }
+.rd-raw { font-size: 14px; }
 
 /* 段落感：chunk 改块级后 margin 才生效（inline 的 <span> 上 margin 无效）。
    原来整篇是一坨 pre-wrap 文本，没有段距、读起来密。 */
@@ -1230,7 +1229,14 @@ table.list td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .rd-head-mark[data-level="3"] { font-size: 1em; opacity: 0.92; }
 
 /* 页面视图：原样渲染的 PDF 页 + 引用高亮覆盖层 */
-.rd-page-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.rd-page-view {
+  flex: 1;
+  min-height: 0;
+  min-width: 0; /* 关键：flex 子项默认 min-width:auto 会被内容撑开，
+                   页面图放大后会把阅读区顶宽而不是产生横向滚动 */
+  display: flex;
+  flex-direction: column;
+}
 .rd-page-view.hidden { display: none; }
 .rd-page-bar {
   flex: none;
@@ -1289,7 +1295,6 @@ table.list td.num { text-align: right; font-variant-numeric: tabular-nums; }
   user-select: none;
 }
 .rd-page-label { color: var(--muted); font-size: 12px; flex: 1; text-align: center; }
-.rd-page-open { color: var(--cyan); font-size: 12px; text-decoration: none; white-space: nowrap; }
 .rd-page-open:hover { text-decoration: underline; }
 .rd-page-canvas {
   flex: 1;
@@ -1314,7 +1319,9 @@ table.list td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .rd-page-fit + .rd-page-fit { margin-top: 18px; }
 /* 缩放 >100%：按倍数撑开页面框，超出容器由 .rd-page-canvas 横向滚动 */
 .rd-page-canvas.zoomed .rd-page-fit {
-  width: calc(var(--page-zoom, 1) * 100%);
+  /* 基准宽由 JS 按"图片原始显示宽度"写入 --page-base（100% = 1:1）；
+     不乘容器百分比，否则与 100% 的 fit-content 语义在临界点打架 */
+  width: calc(var(--page-base, 100%) * var(--page-zoom, 1));
   max-width: none;
 }
 /* 图片必须**跟着页面框一起放大**：它只有 max-width:100%，放大超过原生分辨率
