@@ -15,6 +15,7 @@
 import { $, el, initTopbar, toast } from "./common.js";
 import { clearDocSelection, initCorpusTree, refreshCorpusTree } from "./kb-tree.js";
 import { initReader, openDocument, updateLocation } from "./reader.js"; // 阅读器（两页共用）
+import { initOnboard } from "./onboard.js"; // 首启引导（空库时弹一次）
 
 const dropzone = $("#dropzone");
 const fileInput = $("#file-input");
@@ -110,7 +111,7 @@ function onSelect(doc, location) {
 
 /* ---------------- 启动 ---------------- */
 
-initTopbar("documents");
+initTopbar("documents").then((health) => void initOnboard(health));
 // 内嵌模式：阅读器挂进右栏，收起时交还上传/总览视图
 initReader(readerHost, {
   onClose: () => {

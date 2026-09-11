@@ -571,11 +571,11 @@ def test_concurrent_same_name_uploads_are_isolated(client):
             fut_b = pool.submit(_upload, c, "同名报告.md", text_b)
             return fut_a.result(), fut_b.result()
 
-    # 并发集成测试带时序噪声（TestClient 线程池 + Windows 文件系统 + SQLite
-    # 写锁），允许重试；真正的缺陷（唯一约束冲突 / 内容损坏）是确定性的，
-    # 重试也会稳定失败，不会因此放过 bug
+    # 并发集成测试带时序噪声（TestClient 的线程池 + Windows 文件系统 + SQLite
+    # 写锁），允许重试；实测偶发率约 1/10，重试 5 次后基本不再抖。真正的缺陷
+    # （唯一约束冲突 / 内容损坏）是确定性的，重试也会稳定失败，不会因此漏掉 bug
     resp_a = resp_b = None
-    for _ in range(3):
+    for _ in range(5):
         resp_a, resp_b = attempt()
         if resp_a.status_code in (200, 201) and resp_b.status_code in (200, 201):
             break

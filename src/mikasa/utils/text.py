@@ -33,18 +33,46 @@ def normalize_text(text: str) -> str:
     return "".join(ch for ch in text if _keep(ch)).strip()
 
 
+# 探测候选白名单：中文笔记的常见编码 + BOM 可辨的 UTF-16。
+# 不给候选集时 charset-normalizer 会在短样本上给出 utf_16_le 这类离谱猜测。
+_ENCODING_CANDIDATES = ("utf-8", "gb18030", "gbk", "big5", "shift_jis", "utf_16")
+
+
 def guess_encoding(raw: bytes) -> str:
-    """编码探测：优先 UTF-8，其次 GBK（Windows 中文文档高频编码）。
+    """编码探测：严格 UTF-8 → 统计判定（charset-normalizer）→ GBK 兜底。
+
+    **为什么不能"UTF-8 解不开就试 GBK"**：GBK 的双字节覆盖率极高，**几乎不会
+    解码失败**——只有极端字节序列才抛 UnicodeDecodeError。于是这个顺序等价于
+    "非 UTF-8 一律当 GBK"，碰上 Big5 / Shift-JIS / **混合编码**（前段 GBK、
+    后段 UTF-8，剪切粘贴产生）的文件会整篇解成乱码，且不报任何错
+    （2026-09-11 审查实测）。
+
+    charset-normalizer 是**统计判定**（requests 的依赖，已在依赖树里），
+    比"能不能解码成功"可靠得多。严格 UTF-8 仍放最前：能解开的就没有歧义，
+    且省掉一次统计扫描。
 
     fallback 一律 errors='replace' 保证不抛异常、不中断导入。
     """
-    for encoding in ("utf-8", "gbk"):
-        try:
-            raw.decode(encoding)
-            return encoding
-        except UnicodeDecodeError:
-            continue
-    return "utf-8"  # 探测失败时按 UTF-8 容错解码
+    if not raw:
+        return "utf-8"
+    try:
+        raw.decode("utf-8")
+        return "utf-8"
+    except UnicodeDecodeError:
+        pass
+    try:
+        import charset_normalizer
+
+        # **必须限制候选集**：不限制时它对短样本会给出离谱猜测——实测
+        # `"中文笔记 abc".encode("gbk")` 被判成 utf_16_le，解出来是乱码，
+        # 比原来还糟。给一份贴合本项目的白名单（中文笔记 + 常见东亚编码）
+        # 后，同一个样本稳定判为 gb18030（正确）。
+        best = charset_normalizer.from_bytes(raw, cp_isolation=list(_ENCODING_CANDIDATES)).best()
+        if best is not None and best.encoding:
+            return best.encoding
+    except Exception:  # noqa: BLE001 - 统计库缺席/异常都不能挡住导入
+        pass
+    return "gbk"  # 最后兜底：Windows 中文文档的高频编码
 
 
 def decode_text(raw: bytes) -> str:

@@ -13,12 +13,11 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from mikasa.config.settings import Settings
-from mikasa.errors import StorageError
 from mikasa.index.bm25 import BM25Index
 from mikasa.index.tokenizer import get_tokenizer
 from mikasa.models.document import Chunk
 from mikasa.storage.db import open_db
-from mikasa.storage.repo import all_chunks_ordered, count_chunks, load_embedding_matrix
+from mikasa.storage.repo import all_chunks_ordered, corpus_fingerprint, load_embedding_matrix
 from mikasa.utils.logging import get_logger
 
 logger = get_logger("index.manager")
@@ -61,21 +60,25 @@ class IndexManager:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._corpus: Corpus | None = None
-        self._count_seen: int = -1
+        self._fingerprint: tuple[int, int] | None = None
 
     def invalidate(self) -> None:
         """数据变更后调用（ingest/删除文档后）。"""
         self._corpus = None
-        self._count_seen = -1
+        self._fingerprint = None
 
     def corpus(self) -> Corpus:
-        """当前快照：行数未变则复用缓存，否则重建。"""
+        """当前快照：语料指纹未变则复用缓存，否则重建。
+
+        指纹是 (chunk 数, 最大 id)：只比数量识别不出**另一个进程 reindex 后
+        id 整体平移而总数不变**的情况，详见 repo.corpus_fingerprint。
+        """
         with open_db(self._settings.db_path) as conn:
-            count = count_chunks(conn)
-        if self._corpus is not None and count == self._count_seen:
+            fingerprint = corpus_fingerprint(conn)
+        if self._corpus is not None and fingerprint == self._fingerprint:
             return self._corpus
         self._corpus = self._rebuild()
-        self._count_seen = count
+        self._fingerprint = fingerprint
         return self._corpus
 
     def _rebuild(self) -> Corpus:
@@ -99,18 +102,28 @@ class IndexManager:
                     ids, loaded_matrix = loaded
                     expected = [c.id for c in chunks]
                     if ids != expected:
-                        # 两种成因要分开说：① 正在入库的中间态——chunks 已提交、
-                        # 向量还没写完（大文件分批嵌入可持续数十秒），此时提问撞上
-                        # 属正常，等一会自愈；② 嵌入中断/模型切换残留，那才需要重建。
-                        # 旧文案把①也说成"库坏了"，把人引向没必要的 reindex
-                        # （2026-09-11 打包前审查发现）。
-                        raise StorageError(
-                            "索引正在更新或与语料不一致（若刚上传过文档，"
-                            "等入库完成后重试即可；否则可能是嵌入中断/模型切换残留，"
-                            "请运行 mikasa ingest --reindex 重建）。"
+                        # 向量行与 chunk 对不上时**降级运行，不抛异常**。
+                        #
+                        # 这里原来 raise StorageError，代价是：入库中途进程被杀
+                        # （关窗、崩溃、断电）会留下"chunk 已提交、向量还没写完"
+                        # 的文档，此后**每一次提问都失败**，而提示里说的"等入库
+                        # 完成"永远不会发生——没有进程在跑，只能人工 reindex 才
+                        # 能恢复（2026-09-11 审查实测）。
+                        #
+                        # 对桌面应用来说"整体不可用"比"检索质量下降"严重得多：
+                        # 这里改为丢掉 dense 路、用 BM25 继续服务，同时打一条
+                        # ERROR 让用户知道该做什么。
+                        logger.error(
+                            "向量与语料不一致（%d 条向量 vs %d 个 chunk）——"
+                            "本次启动降级为 BM25 单路检索（关键词可用、语义检索不可用）。"
+                            "常见成因：入库中途被强制关闭，或切换过嵌入模型。"
+                            "修复：运行 mikasa ingest --reindex 重建向量。",
+                            len(ids),
+                            len(expected),
                         )
-                    matrix = loaded_matrix
-                    embedding_model = settings.embedding.model
+                    else:
+                        matrix = loaded_matrix
+                        embedding_model = settings.embedding.model
             logger.debug(
                 "索引重建完成：chunks=%d bm25 词表=%d dense=%s",
                 len(chunks),

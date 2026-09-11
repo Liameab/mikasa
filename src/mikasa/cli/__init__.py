@@ -33,7 +33,7 @@ from mikasa.config.settings import (
 )
 from mikasa.errors import ConfigError, EvalError, ZhiwenError
 from mikasa.ingest.service import IngestService, IngestSummary
-from mikasa.utils.logging import get_logger, setup_logging
+from mikasa.utils.logging import default_log_file, get_logger, setup_logging
 
 app = typer.Typer(
     name="mikasa",
@@ -869,7 +869,12 @@ def _ensure_console_encoding() -> None:
 
 def main() -> None:  # noqa: D103
     _ensure_console_encoding()
-    setup_logging()
+    # 文件日志是窗口形态（无控制台）唯一的排障入口，始终挂上。
+    # 必须 force=True：本模块顶部的 `logger = get_logger("cli")` 在**导入时**
+    # 就触发过一次无参 setup_logging()，把 _CONFIGURED 置了真——不 force 的话
+    # 这里会被幂等守卫直接 return，FileHandler 永远挂不上（实测：data/logs 与
+    # %LOCALAPPDATA%\Mikasa\logs 一直是空目录，而打包版弹窗还让用户去看它）。
+    setup_logging(log_file=default_log_file(), force=True)
     load_dotenv_file()
     try:
         app()

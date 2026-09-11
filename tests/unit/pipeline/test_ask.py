@@ -951,3 +951,21 @@ def test_ask_stream_bilingual_delta_concat_equals_done(tmp_path, offline_setting
     with open_db(offline_settings.db_path) as conn:
         messages = repo.messages_by_session(conn, events[0].session_id)
     assert messages[1]["content"] == done.text
+
+
+def test_rerank_indices_are_sanitized():
+    """重排服务返回非法下标时不能让它穿成 500，也不能静默截断候选。
+
+    越界 → IndexError 直通 Web 的"内部错误"；重复 → 候选被悄悄截短。
+    两者都来自外部服务，响应不完全可控（2026-09-11 审查指出）。
+    """
+    from mikasa.pipeline.retriever import _sanitize_indices
+
+    # 越界丢掉、顺序保持
+    assert _sanitize_indices([2, 0, 99, -1], 3) == [2, 0]
+    # 重复去掉（保留首次出现的位置）
+    assert _sanitize_indices([1, 1, 0, 1], 2) == [1, 0]
+    # 正常输入原样返回
+    assert _sanitize_indices([0, 1, 2], 3) == [0, 1, 2]
+    # 全非法 → 空（宁可没有候选，也不要 500）
+    assert _sanitize_indices([], 3) == []

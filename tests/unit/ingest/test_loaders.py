@@ -443,3 +443,61 @@ def test_cut_reference_tail_keeps_blank_page_slots(tmp_path: Path):
     # 标题行是该页第一行 → "截到标题行前"即整页清空（页位仍在，不能删元素）
     assert out[6] == "", "标题行所在页应被清空但保留页位"
     assert "[1] Someone" not in "".join(out), "参考文献条目及其后各页被丢弃"
+
+
+def test_cross_page_table_header_survives_furniture_dedup():
+    """跨页表格的**表头行**不能被当成页眉页脚删掉。
+
+    表头在断表续排时会跨页逐字重复，而它只出现在表格跨越的那两三页；页眉页脚
+    则几乎每页都有。判据因此不能只是"重复 >= 2 次"（那会把表头从所有页删光，
+    列名彻底丢失、切块后只剩无表头的数据行），还要看**占比**。
+    """
+    from mikasa.ingest.loaders import _drop_page_furniture
+
+    pages = [
+        "论文页眉\nTable header A B C\nTable header A B C\ndata1",
+        "论文页眉\nTable header A B C\ndata2",
+        "论文页眉\ndata3",
+        "论文页眉\ndata4",
+    ]
+    out = _drop_page_furniture(pages)
+
+    assert len(out) == len(pages), "一页一元素的不变量不能破"
+    assert all("Table header A B C" in out[i] for i in (0, 1)), "表头必须保留"
+    assert all("论文页眉" not in page for page in out), "页眉仍要被剔除"
+
+
+def test_same_page_repeat_is_not_furniture():
+    """同一页内重复出现不算"跨页重复"——按页去重后才累加。"""
+    from mikasa.ingest.loaders import _drop_page_furniture
+
+    out = _drop_page_furniture(["重复行\n重复行\n正文"])
+    assert out[0].count("重复行") == 2
+
+
+def test_large_text_skips_repeated_line_cleanup(tmp_path, monkeypatch):
+    """超大文本文件跳过"重复行清理"——那是内存峰值 4× 的主要来源。
+
+    该步骤按行建计数器，内存与文件大小同阶（实测 10.9MB → 峰值 43.7MB）。
+    upload_max_mb 允许到 500MB，换算下来峰值近 2GB，桌面版会被系统杀掉。
+    宁可不做噪声清理（检索里多几行噪声），也不能让整篇文档进不来。
+    """
+    import mikasa.ingest.loaders as loaders
+
+    big = tmp_path / "big.md"
+    big.write_text("每页重复的页眉\n正文一行\n" * 200, encoding="utf-8")
+
+    monkeypatch.setattr(loaders, "_DEDUP_MAX_BYTES", 10)  # 调低阈值以走大文件分支
+    out = loaders._read_text(big)
+
+    assert "每页重复的页眉" in out, "跳过清理时重复行应原样保留"
+
+
+def test_small_text_still_cleans_repeated_lines(tmp_path):
+    """小文件仍要做清理（别把降级路径写成默认路径）。"""
+    from mikasa.ingest.loaders import _read_text
+
+    small = tmp_path / "small.md"
+    small.write_text("页眉\n正文\n页眉\n正文\n页眉\n", encoding="utf-8")
+
+    assert _read_text(small) == "页眉\n正文\n正文"

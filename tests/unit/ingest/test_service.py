@@ -13,6 +13,7 @@ import pytest
 
 from mikasa.errors import ProviderError, ZhiwenError
 from mikasa.ingest.service import IngestService
+from mikasa.models.document import Chunk
 from mikasa.storage import repo
 from mikasa.storage.db import open_db
 
@@ -112,7 +113,7 @@ def test_embed_failure_rolls_back_document_and_copy(tmp_path, offline_settings, 
     note = _write_note(tmp_path, "a.md", CONTENT_A)
     svc = _svc(offline_settings)
 
-    def boom(self):
+    def boom(chunks, doc_title):  # 挂在实例上 → 不绑定 self，签名与调用点一致
         raise RuntimeError("模拟嵌入服务故障")
 
     monkeypatch.setattr(svc, "_embed_chunks", boom)
@@ -279,7 +280,7 @@ def test_reindex_failure_keeps_uploads_source(tmp_path, offline_settings, monkey
     copy_path = offline_settings.uploads_dir / "a.md"
     assert copy_path.is_file()
 
-    def boom(self, chunks):
+    def boom(self, chunks, doc_title):
         raise ProviderError("模拟嵌入服务故障（如 429）")
 
     monkeypatch.setattr(IngestService, "_embed_chunks", boom)
@@ -335,7 +336,7 @@ def test_same_name_reupload_embed_failure_keeps_old_copy(tmp_path, offline_setti
     # 同名、内容已变的新文件；让嵌入阶段失败
     changed = _write_note(tmp_path, "笔记.md", CONTENT_A.replace("Adam", "AdamW 优化器"))
 
-    def boom(self, chunks):
+    def boom(self, chunks, doc_title):
         raise ProviderError("模拟嵌入服务故障（429）")
 
     monkeypatch.setattr(IngestService, "_embed_chunks", boom)
@@ -345,3 +346,97 @@ def test_same_name_reupload_embed_failure_keeps_old_copy(tmp_path, offline_setti
     assert copy_path.is_file(), "旧副本必须放回原位（否则文档彻底消失）"
     assert copy_path.read_text(encoding="utf-8") == original_text, "放回的应是旧版内容"
     assert not list(offline_settings.uploads_dir.glob("*.replacing")), "让位文件不能残留"
+
+
+def test_reindex_with_empty_uploads_refuses_instead_of_wiping(tmp_path, offline_settings):
+    """uploads 为空时 reindex 必须**中止**，而不是把现有库清空。
+
+    反过来的顺序（先把行删干净、commit，才发现 uploads 里没东西可灌）会让命令
+    输出一个空 summary、退出码 0，而用户的全部文档与向量已经无声消失
+    （2026-09-11 审查实测）。用户清过一次 uploads、换过 data 目录、副本被误删
+    都会命中。所以先查 uploads 再动数据库。
+    """
+    _write_note(tmp_path, "a.md", CONTENT_A)
+    svc = _svc(offline_settings)
+    svc.ingest_paths([tmp_path])
+    with open_db(offline_settings.db_path) as conn:
+        assert repo.count_documents(conn) == 1
+
+    # 模拟 uploads 副本被清掉（源目录 tmp_path 不影响，reindex 只看 uploads）
+    for f in offline_settings.uploads_dir.rglob("*"):
+        if f.is_file():
+            f.unlink()
+
+    with pytest.raises(ZhiwenError, match="uploads"):
+        svc.reindex()
+
+    with open_db(offline_settings.db_path) as conn:
+        assert repo.count_documents(conn) == 1, "库必须原封不动"
+
+
+def test_index_text_honours_title_prefix_knob(offline_settings):
+    """`chunking.title_prefix=false` 必须真的改变索引词空间。
+
+    配置项与三处文档（architecture.md 中英、design-decisions）都把它当"可消融的
+    旋钮"，但在此之前**没有任何代码读过它**——标题是无条件拼上去的
+    （2026-09-11 审查发现）。
+    """
+    svc = _svc(offline_settings)
+
+    on = svc._index_text("论文", "1. 章", "正文")
+    assert on.startswith("《论文》｜1. 章"), on
+
+    svc.settings.chunking = svc.settings.chunking.model_copy(update={"title_prefix": False})
+    assert svc._index_text("论文", "1. 章", "正文") == "正文"
+
+
+def test_embedding_uses_index_text_not_raw_content(offline_settings):
+    """向量必须嵌入**索引词空间**（标题前置 + 正文），不是裸 content。
+
+    代码注释与 architecture.md 都写着"标题前置提升稀疏/稠密两路召回"、
+    `_index_text` 的 docstring 也写着"BM25/向量共用"，而实现里 dense 一直只看
+    content——标题从未进过向量（2026-09-11 审查发现）。
+    """
+    import numpy as np
+
+    seen: list[list[str]] = []
+
+    class _Spy:
+        model = "spy"
+        dim = 2
+
+        def embed_documents(self, texts: list[str]) -> np.ndarray:
+            seen.append(list(texts))
+            return np.zeros((len(texts), 2), dtype=np.float32)
+
+    svc = _svc(offline_settings)
+    svc._embedding = _Spy()
+    # 先落一篇真文档：_embed_chunks 会把向量写回库，chunk 没有对应的
+    # documents 行会撞外键（测试夹具的坑，不是被测逻辑的问题）
+    from mikasa.models.document import Document
+
+    with open_db(offline_settings.db_path) as conn:
+        doc_id = repo.insert_document(
+            conn,
+            Document(
+                title="论文标题", file_path="a.md", file_type="md", file_sha256="sha", char_count=1
+            ),
+        )
+        repo.insert_chunks(
+            conn,
+            [
+                Chunk(
+                    document_id=doc_id,
+                    seq=0,
+                    content="正文内容",
+                    content_sha256="s",
+                    heading_path="1. 章",
+                )
+            ],
+        )
+        chunk = repo.chunks_by_document(conn, doc_id)[0]
+
+    svc._embed_chunks([chunk], "论文标题")
+
+    assert seen and seen[0][0].startswith("《论文标题》｜1. 章")
+    assert "正文内容" in seen[0][0]

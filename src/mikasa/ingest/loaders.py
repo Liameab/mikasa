@@ -404,10 +404,26 @@ def _drop_page_furniture(page_texts: list[str]) -> list[str]:
         return page_texts
     from collections import Counter
 
+    # **计数必须先按页去重、再跨页累加**：同一页内重复出现不算"页眉页脚"。
+    # 直接对整篇逐行累加的话，一页里出现两次的行（跨页断表的**表头重复行**是
+    # 典型）会被判定为重复，然后从**所有**页里删掉——实测 4 页 PDF 里第 1 页
+    # 出现两次的表头会把第 1、2 页的表头全删光，表格列名彻底丢失，切块后只剩
+    # 无表头的数据行（2026-09-11 审查实测）。docstring 声明的规则本就是
+    # "跨页逐字重复"，这里让实现与之一致。
     total: Counter[str] = Counter()
     for text in page_texts:
-        total.update(line.strip() for line in text.splitlines() if line.strip())
-    repeated = {line for line, count in total.items() if count >= 2 and line != TABLE_MARK}
+        total.update({line.strip() for line in text.splitlines() if line.strip()})
+    # 判据 = "出现在 ≥2 页" **且** "出现在 ≥60% 的页"。
+    # 只用"≥2 次"太松：跨页表格的**表头行**也会在多页逐字重复（断表续排），
+    # 于是被当页眉从所有页删掉，表格列名彻底丢失（2026-09-11 审查实测）。
+    # 页眉页脚的特征是"几乎每页都有"，而表头只出现在它跨越的那两三页——占比
+    # 能把两者分开。宁可放过一点噪声，也不能删正文（漏删只是检索时多几行噪声，
+    # 误删是不可恢复的信息丢失）。
+    page_count = len([t for t in page_texts if t is not None])
+    page_quorum = max(2, -(-page_count * 3 // 5))  # ceil(60%)
+    repeated = {
+        line for line, count in total.items() if count >= page_quorum and line != TABLE_MARK
+    }
 
     cleaned: list[str] = []
     for text in page_texts:
@@ -421,9 +437,29 @@ def _drop_page_furniture(page_texts: list[str]) -> list[str]:
     return cleaned
 
 
+# 超过这个大小就跳过"重复行清理"。
+#
+# 那一步要按行建计数器，内存与文件大小同阶：实测 10.9 MB 的 md 峰值 43.7 MB
+# （约 4×）——字节缓冲 + 解码后的字符 + Counter 的每行一条 + kept 列表 + 最终
+# join 同时驻留。Web 端的 upload_max_mb 允许到 500 MB，换算下来峰值接近 2 GB，
+# 桌面版（单进程 pywebview）会被系统直接杀掉。**宁可不做噪声清理，也不能崩**：
+# 页眉页脚残留只是检索里多几行噪声，OOM 是整篇文档进不来。
+_DEDUP_MAX_BYTES = 64 * 1024 * 1024
+
+
 def _read_text(path: Path) -> str:
+    size = path.stat().st_size
     raw = path.read_bytes()
     text = decode_text(raw)
+    del raw  # 尽早释放字节缓冲：解码后的字符还要驻留，两者同时在场是峰值的一半
+    if size > _DEDUP_MAX_BYTES:
+        from mikasa.utils.logging import get_logger
+
+        get_logger("ingest.loaders").warning(
+            "文件较大（%.0f MB），跳过重复行清理以控制内存占用——页眉页脚可能残留",
+            size / 1e6,
+        )
+        return text
     # 页眉/页脚等噪声做保守清理（PDF 已做逐页处理，此处兜底）
     return strip_repeated_lines(text)
 

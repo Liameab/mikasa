@@ -206,3 +206,35 @@ def test_invalid_parameters_raise():
 def test_blank_paragraphs_ignored():
     chunks = chunk_paragraphs([_para("   "), _para("正文"), _para("\n\n")], size=400, overlap=50)
     assert _text(chunks) == "正文"
+
+
+def test_single_row_oversized_table_does_not_recurse():
+    """单行超长表格不得无限递归（2026-09-11 审查实测的 RecursionError）。
+
+    表格块走"按行打包"，而只有一行时行切没有任何进展：_pack 发现该行仍 > size
+    又会递归回 _split_text、再次进入表格分支 → 一直递归到 RecursionError，
+    整个文档入库失败。真实输入是一页被解析成单行长表格（宽表/无换行分隔）。
+    """
+    from mikasa.ingest.loaders import TABLE_MARK
+
+    chunks = chunk_paragraphs([_para(TABLE_MARK + "|" * 60)], size=50, overlap=10)
+
+    assert _text(chunks).count("|") == 60, "内容不得丢失"
+    assert all(len(c.content) <= 50 for c in chunks), "块长仍须 ≤ size"
+    assert chunks[0].content.startswith(TABLE_MARK), "表格标记要落在首块"
+
+
+def test_window_len_counts_the_separator_it_is_about_to_add():
+    """块长上界是**对外承诺的不变量**，加一段时的分隔符也要算进预算。
+
+    原来按 (n-1) 个分隔符算，而加完下一段需要 n 个 —— 块长能超 size 两个字符
+    （2026-09-11 审查实测：size=10 切出 11 字符的块）。
+    """
+    chunks = chunk_paragraphs([_para("甲" * 5), _para("乙" * 4)], size=10, overlap=2)
+
+    assert all(len(c.content) <= 10 for c in chunks), (
+        f"块长超上界：{[len(c.content) for c in chunks]}"
+    )
+    # 内容不能丢（overlap 会让相邻块重复，故不能直接拼起来比对）
+    joined = _text(chunks)
+    assert "甲" * 5 in joined and "乙" * 4 in joined

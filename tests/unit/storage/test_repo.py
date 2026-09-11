@@ -124,3 +124,60 @@ def test_eval_run_insert_get_update_roundtrip(offline_settings):
         # 回填不改变其他列
         assert after["metrics_json"] == before["metrics_json"]
         assert after["corpus_sha256"] == before["corpus_sha256"]
+
+
+def test_corpus_fingerprint_detects_id_shift_with_same_count(offline_settings):
+    """reindex 后 chunk 总数不变、id 整体平移时，指纹必须变。
+
+    这是"引用变死 id"的根因：Web 的内存快照若只比数量，就会以为库没变、
+    继续用旧快照发引用——`citation.chunk_id` 在库里已不存在（/api/chunks/{id}
+    404、高亮跳转全废），标题也退化成"未知文档"。
+    """
+    from mikasa.models.document import Chunk, Document
+
+    def _chunks(n: int, doc_id: int) -> list[Chunk]:
+        return [
+            Chunk(document_id=doc_id, seq=i, content=f"块{i}", content_sha256=f"s{i}")
+            for i in range(n)
+        ]
+
+    with open_db(offline_settings.db_path) as conn:
+        doc_id = repo.insert_document(
+            conn,
+            Document(
+                title="样本", file_path="样本.md", file_type="md", file_sha256="sha", char_count=1
+            ),
+        )
+        repo.insert_chunks(conn, _chunks(3, doc_id))
+        first = repo.corpus_fingerprint(conn)
+
+        # 模拟 `mikasa ingest --reindex`：整表重建，数量一样但 id 后移
+        conn.execute("DELETE FROM chunks")
+        repo.insert_chunks(conn, _chunks(3, doc_id))
+        second = repo.corpus_fingerprint(conn)
+
+    assert first[0] == second[0], "本用例的前提是 chunk 数不变"
+    assert first != second, "id 平移了而指纹没变 → 快照不重建，引用会指向死 id"
+
+
+def test_corpus_fingerprint_stable_when_unchanged(offline_settings):
+    """没有变更时指纹必须稳定——否则每个请求都重建索引，检索直接变慢。"""
+    from mikasa.models.document import Chunk, Document
+
+    with open_db(offline_settings.db_path) as conn:
+        doc_id = repo.insert_document(
+            conn,
+            Document(
+                title="样本", file_path="样本.md", file_type="md", file_sha256="sha", char_count=1
+            ),
+        )
+        repo.insert_chunks(
+            conn, [Chunk(document_id=doc_id, seq=0, content="块", content_sha256="s0")]
+        )
+        assert repo.corpus_fingerprint(conn) == repo.corpus_fingerprint(conn)
+
+
+def test_corpus_fingerprint_on_empty_db(offline_settings):
+    """空库也要有确定的指纹（MAX(id) 为 NULL，COALESCE 兜住成 0）。"""
+    with open_db(offline_settings.db_path) as conn:
+        assert repo.corpus_fingerprint(conn) == (0, 0)

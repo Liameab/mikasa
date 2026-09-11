@@ -81,3 +81,27 @@ def test_is_english_dominant_cjk_ratio_boundary():
         "with the number of load cycles and the applied amplitude 中文"
     )
     assert is_english_dominant(few)
+
+
+def test_guess_encoding_handles_non_gbk_non_utf8():
+    """UTF-16 不该被当成 GBK 解成乱码。
+
+    原来的顺序是"UTF-8 解不开就试 GBK"——而 **GBK 几乎不会解码失败**
+    （双字节覆盖率高），于是这条路等价于"非 UTF-8 一律当 GBK"：Big5 /
+    Shift-JIS / 混合编码的文件会整篇解成乱码且不报错（2026-09-11 审查实测）。
+    现在先过一遍统计判定（候选集受限，见 _ENCODING_CANDIDATES）。
+    """
+    from mikasa.utils.text import decode_text, guess_encoding
+
+    assert decode_text("中文笔记 abc".encode("gbk")) == "中文笔记 abc"
+    assert decode_text("中文".encode("utf-16")) == "中文"
+    assert decode_text("中文笔记".encode()) == "中文笔记"
+    assert guess_encoding(b"") == "utf-8"
+
+
+def test_guess_encoding_candidates_are_restricted():
+    """候选集必须受限：不限制时 charset-normalizer 会把 GBK 短样本判成
+    utf_16_le（解出来是乱码，比不做统计判定还糟）。"""
+    from mikasa.utils.text import guess_encoding
+
+    assert guess_encoding("中文笔记 abc".encode("gbk")) in ("gbk", "gb18030")

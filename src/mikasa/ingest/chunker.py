@@ -64,9 +64,16 @@ def chunk_paragraphs(
     out: list[ChunkSpec] = []
     _SEP = "\n\n"
 
-    def window_len() -> int:
-        # 段落以 _SEP 连接，n 段多出 (n-1) 个分隔符，预算必须计入
-        return sum(len(p) for p in pieces) + len(_SEP) * max(0, len(pieces) - 1)
+    def window_len(extra: str = "") -> int:
+        """当前窗口的字符数；`extra` 是"假如再加这一段的长度"。
+
+        **必须把将要新增的那个分隔符也算进去**：n 段之间有 (n-1) 个 _SEP，加完
+        下一段就是 n+1 段、需要 n 个。只按 (n-1) 算的话，块长会超出 size 最多
+        len(_SEP) 个字符，破坏"块 ≤ size"这条对外承诺的不变量（2026-09-11 审查
+        实测：size=10 时切出 11 字符的块）。下游按 size 估 token 上限的地方会跟着偏。
+        """
+        count = len(pieces) + (1 if extra else 0)
+        return sum(len(p) for p in pieces) + len(extra) + len(_SEP) * max(0, count - 1)
 
     def emit() -> None:
         """把当前窗口固化为一个块，并记录可续接的重叠尾巴。"""
@@ -98,7 +105,7 @@ def chunk_paragraphs(
 
     def feed(part: str) -> None:
         """把一段（≤size，由调用方保证）放入窗口；放不下先固化再续重叠。"""
-        while window_len() + len(part) > size:
+        while window_len(part) > size:
             emit()
             seed_overlap_for(len(part))
 
@@ -180,11 +187,17 @@ def _split_text(text: str, size: int) -> list[str]:
 
     if text.startswith(TABLE_MARK):
         rows = [r for r in text.splitlines() if r.strip()]
-        # 行切必须带 \n 拼接：_pack 默认无分隔符（句子自带句读），
-        # 表格行若直接拼接会把相邻行并成一串（2026-09-10 测试暴露）
-        packed = _pack(rows, size, sep="\n")
-        if packed:
-            return packed
+        # **单行表格不能走行切**：行切对"只有一行"没有任何进展，_pack 发现该行
+        # 仍 > size 又会递归回本函数、再次进入这条分支 → 无限递归直到
+        # RecursionError，整个文档入库失败（2026-09-11 审查实测：一页被解析成
+        # 单行长表格即可触发，宽表/无换行分隔的表格页在真实 PDF 里很常见）。
+        # 只有 ≥2 行才交给 _pack；单行落到下面的标点/硬切路径，那条一定会收敛。
+        if len(rows) > 1:
+            # 行切必须带 \n 拼接：_pack 默认无分隔符（句子自带句读），
+            # 表格行若直接拼接会把相邻行并成一串（2026-09-10 测试暴露）
+            packed = _pack(rows, size, sep="\n")
+            if packed:
+                return packed
 
     for pattern in (_SENTENCE_SPLIT_RE, _COMMA_SPLIT_RE):
         parts = [p.strip() for p in pattern.split(text) if p.strip()]

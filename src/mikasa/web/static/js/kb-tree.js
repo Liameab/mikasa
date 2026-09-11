@@ -230,7 +230,12 @@ function scanVisible() {
 function renderTree() {
   scanVisible();
   listBox.innerHTML = "";
-  if (!searchText && !docsCache.length) {
+  // 判据必须是**建好的树**而不是文档数：语料库可以一篇文档都没有却有文件夹
+  // （用户新建夹子就是合法操作），按 docsCache 判会连文件夹一起挡掉——建夹
+  // 请求 201 成功、行也进了库，界面上却始终只有"还没有文档"，用户以为没建成
+  // 便反复新建（2026-09-11 实测：库里躺着连建的同名文件夹 5 个）。与
+  // qa-tree.js 的 renderTree 对齐（那边一直是判 lastTree）。
+  if (!searchText && !lastTree.roots.length && !lastTree.unowned.length) {
     listBox.append(el("div", { class: "empty" }, "还没有文档——先在右侧上传资料"));
     return;
   }

@@ -21,6 +21,32 @@ from mikasa.utils.logging import get_logger
 logger = get_logger("pipeline")
 
 
+def _sanitize_indices(indices: list[int], size: int) -> list[int]:
+    """过滤重排服务返回的下标：保序去重 + 丢掉越界值。
+
+    重排是**外部服务**（SiliconFlow 等），响应不完全可控。越界下标会让
+    `rows[i]` 抛 IndexError 直接穿到 Web 变成"内部错误"（provider 层其它路径
+    都规整地包成 ProviderError，只有这里没有）；重复下标则让候选被静默截断
+    （2026-09-11 审查指出）。
+    """
+    safe: list[int] = []
+    seen: set[int] = set()
+    for idx in indices:
+        if not isinstance(idx, int) or not 0 <= idx < size:
+            continue
+        if idx in seen:
+            continue
+        seen.add(idx)
+        safe.append(idx)
+    if len(safe) != len(indices):
+        logger.warning(
+            "重排返回了非法下标（越界或重复）：收到 %d 个、可用 %d 个，已丢弃",
+            len(indices),
+            len(safe),
+        )
+    return safe
+
+
 class Retriever:
     """一次检索 = 语料快照 + 配置；由 AskService 每次提问时构造。
 
@@ -118,7 +144,12 @@ class Retriever:
             indices = self._reranker.rerank(
                 question, documents, top_n=top_n if top_n > 0 else len(documents)
             )
-            reranked_rows = [reranked_rows[i] for i in indices]
+            # 校验上游返回的下标（见 _sanitize_indices 的说明）。**必须真的调用
+            # 它**：此前这里把同一段过滤内联复制了一份，而单测 import 的是那个
+            # 函数——于是测试守着一份没人执行的副本，改坏真正生效的内联版也不会
+            # 变红（2026-09-11 复查发现）。
+            safe = _sanitize_indices(indices, len(reranked_rows))
+            reranked_rows = [reranked_rows[i] for i in safe]
             lat["rerank"] = (perf_counter() - t1) * 1000.0
         else:
             lat["rerank"] = 0.0

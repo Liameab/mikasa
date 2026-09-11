@@ -200,6 +200,20 @@ def count_chunks(conn: sqlite3.Connection) -> int:
     return int(conn.execute("SELECT COUNT(*) AS n FROM chunks").fetchone()["n"])
 
 
+def corpus_fingerprint(conn: sqlite3.Connection) -> tuple[int, int]:
+    """语料指纹：(chunk 数, 最大 chunk id)——给检索快照判断"要不要重建"。
+
+    **为什么不能只比数量**：`mikasa ingest --reindex` 会整表重建，chunk 总数
+    可能**一个不差**而 id 全部平移（AUTOINCREMENT 只增不减）。Web 进程的内存
+    快照若按数量判等，就会以为"库没变"而继续用旧快照——回答里给出的
+    `citation.chunk_id` 在库里已不存在（`/api/chunks/{id}` 404、高亮跳转全废），
+    引用标题也退化成"未知文档"（旧 chunk 的 document_id 已失效），要重启服务
+    才恢复。带上 max(id) 即可识别这种整体平移（2026-09-11 跨进程审查复现）。
+    """
+    row = conn.execute("SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS m FROM chunks").fetchone()
+    return int(row["n"]), int(row["m"])
+
+
 def _row_to_chunk(row: sqlite3.Row) -> Chunk:
     tokens: list[str] = json.loads(row["tokens"]) if row["tokens"] else []
     return Chunk(
@@ -471,11 +485,17 @@ def folder_descendant_ids(conn: sqlite3.Connection, folder_id: int) -> list[int]
     含自身是有意为之：防环判据"新 parent 不得是自身或任何后代"一条
     `parent_id in folder_descendant_ids(...)` 即完成；前端"移动菜单里
     自身+后代灰显"也复用本函数。
+
+    **必须用 UNION 而不是 UNION ALL**：防环校验（读 parent 链 → 判断 → 写回）
+    不是原子的，两个并发移动请求互相认父时两边都能通过校验，库里就真的留下
+    一个环。`UNION ALL` 不去重，遇到环会**无限递归**——SQLite 没有递归深度上限，
+    该请求线程与连接会永久卡死并持续吃内存（2026-09-11 审查发现）。`UNION`
+    去重后环会在第二圈收敛，最坏结果是遍历早停，不是挂死。
     """
     rows = conn.execute(
         """WITH RECURSIVE subtree(id) AS (
                SELECT id FROM qa_folders WHERE id = ?
-               UNION ALL
+               UNION  -- 不是 UNION ALL：去重才能防环（见下）
                SELECT f.id FROM qa_folders f JOIN subtree s ON f.parent_id = s.id
            )
            SELECT id FROM subtree ORDER BY id""",
@@ -545,11 +565,14 @@ def delete_kb_folder(conn: sqlite3.Connection, folder_id: int) -> None:
 
 
 def kb_folder_descendant_ids(conn: sqlite3.Connection, folder_id: int) -> list[int]:
-    """文件夹自身 + 全部后代的 id 列表（WITH RECURSIVE，同 qa 套语义）。"""
+    """文件夹自身 + 全部后代的 id 列表（WITH RECURSIVE，同 qa 套语义）。
+
+    UNION（非 UNION ALL）的理由见 folder_descendant_ids：去重是防环的最后一道保险。
+    """
     rows = conn.execute(
         """WITH RECURSIVE subtree(id) AS (
                SELECT id FROM kb_folders WHERE id = ?
-               UNION ALL
+               UNION  -- 不是 UNION ALL：去重才能防环（见下）
                SELECT f.id FROM kb_folders f JOIN subtree s ON f.parent_id = s.id
            )
            SELECT id FROM subtree ORDER BY id""",

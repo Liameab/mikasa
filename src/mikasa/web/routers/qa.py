@@ -182,12 +182,17 @@ def _to_frames(
                     },
                 )
     except Exception as exc:  # noqa: BLE001 - 流已开始，异常处理器不生效
-        if new_session and not produced:
-            _drop_session_if_empty(settings, session_id)
         # 业务错误（空库/空问题/上游失败）消息本就脱敏可回显；未预期
         # 异常不回显细节（日志已由 AskService/上层记录）
         message = str(exc) if isinstance(exc, ZhiwenError) else "生成中断：服务器内部错误"
         yield sse_event("error", {"message": message})
+    finally:
+        # 清理必须放 finally：客户端中途断开（关标签页/刷新，前端没有 AbortController，
+        # 只能这样中断）时生成器被 close()，抛的是 **GeneratorExit**——它是
+        # BaseException，`except Exception` 接不住，于是"一个事件都没产出"的空会话
+        # 会留在会话树里（2026-09-11 审查发现）。
+        if new_session and not produced:
+            _drop_session_if_empty(settings, session_id)
 
 
 def _decode_message(row: dict) -> dict:

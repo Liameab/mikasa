@@ -353,3 +353,34 @@ def test_new_db_bootstrap_recovers_from_halfway_crash(tmp_path):
         ).fetchone()["version"]
     assert "folder_id" in cols
     assert version == db.SCHEMA_VERSION
+
+
+def test_concurrent_first_connect_does_not_hit_database_locked(tmp_path):
+    """多线程同时**首次**连同一个新库时不能抛 database is locked。
+
+    WAL 切换要拿一个短暂的排他锁，而它不走 busy timeout（timeout 只作用于普通
+    读写）。审查实测：库文件尚不存在时 160 次里 82 次直接抛 `database is locked`；
+    库已存在时 0 次失败。Web 端"首次运行 + 并发上传 + 后台评测"就能凑齐。
+    """
+    import threading
+
+    from mikasa.storage.db import open_db
+
+    failures: list[str] = []
+
+    def worker() -> None:
+        try:
+            with open_db(db_path) as conn:
+                conn.execute("SELECT 1")
+        except Exception as exc:  # noqa: BLE001 - 测试要看到具体异常类型
+            failures.append(f"{type(exc).__name__}: {exc}")
+
+    for _ in range(3):  # 每轮都是全新的库文件（失败只发生在首连）
+        db_path = tmp_path / f"fresh-{_}.db"
+        threads = [threading.Thread(target=worker) for _ in range(20)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+    assert not failures, failures[:3]

@@ -15,6 +15,7 @@
 
 import { $, apiFetch, el, fmtTime, initTopbar, toast } from "./common.js";
 import { renderRunReport } from "./report.js";
+import { initOnboard } from "./onboard.js"; // 首启引导（空库时弹一次）
 
 let pollTimer = null; // 轮询句柄（页面卸载/任务收尾时清除）
 const startBtn = $("#start-eval");
@@ -170,7 +171,7 @@ async function openRun(runId) {
 /* ---------------- 启动 ---------------- */
 
 startBtn.addEventListener("click", startEval);
-initTopbar("eval");
+initTopbar("eval").then((health) => void initOnboard(health));
 refreshRuns();
 // 恢复态：服务进程里可能已有 running 任务（页面刷新/409 跟随）
 apiFetch("/api/eval/jobs/current")

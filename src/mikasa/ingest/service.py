@@ -25,7 +25,7 @@ import numpy as np
 from mikasa.config.settings import Settings
 from mikasa.errors import ZhiwenError
 from mikasa.index.tokenizer import get_tokenizer
-from mikasa.ingest.chunker import ChunkSpec, chunk_paragraphs
+from mikasa.ingest.chunker import chunk_paragraphs
 from mikasa.ingest.loader import load_document
 from mikasa.ingest.types import LoadedDocument
 from mikasa.models.document import Chunk, Document
@@ -191,10 +191,10 @@ class IngestService:
 
         doc_id: int | None = None
         try:
-            doc_id, chunks = self._chunk_and_persist(
+            doc_id, chunks, doc_title = self._chunk_and_persist(
                 loaded, copy_path, sha, title=keep_title, folder_id=keep_folder
             )
-            self._embed_chunks(chunks)
+            self._embed_chunks(chunks, doc_title)
             self._mark_done(doc_id, len(chunks))
         except Exception:
             # 回滚半成品：保证索引一致与幂等（重跑可完整重建）
@@ -216,6 +216,16 @@ class IngestService:
             displaced.unlink(missing_ok=True)  # 成功：旧副本正式退役
         return "ingested", len(chunks), loaded.char_count
 
+    def exclusive(self) -> threading.RLock:
+        """把入库锁交给调用方用 `with` 包住一段外部操作。
+
+        为什么需要：删除文档是"删行 + 按路径 unlink uploads 副本"两步，而 reindex
+        会**按同一路径**重建新行。两者不互斥时，reindex 刚建好的行会用着一个已经被
+        删掉的副本——`/file`、`/page/*`、下次 reindex 全部失效，文档等于凭空消失且
+        不可恢复（2026-09-11 审查发现）。锁本身是 RLock，嵌套调用安全。
+        """
+        return self._lock
+
     def reindex(self) -> IngestSummary:
         """全量重建：清空语料后重新导入 data/uploads 下全部入库副本。
 
@@ -227,6 +237,18 @@ class IngestService:
             return self._reindex()
 
     def _reindex(self) -> IngestSummary:
+        # **先确认 uploads 里有东西，再动数据库。** 反过来写过一版，后果是：
+        # 库已经删空并 commit，才发现 uploads 是空的 → 直接返回空 summary，
+        # 命令输出 `ingested=[] skipped=[] failed=[]`、退出码 0，而用户的全部
+        # 文档与向量已经无声消失（2026-09-11 审查实测）。触发它并不难：用户在
+        # 资源管理器里清过一次 uploads、或换过 data 目录、或副本被误删。
+        uploads = self.settings.uploads_dir
+        files = sorted(uploads.rglob("*")) if uploads.is_dir() else []
+        if not any(f.is_file() for f in files):
+            raise ZhiwenError(
+                f"uploads 目录里没有可重建的文件，reindex 已中止（避免清空现有知识库）：{uploads}\n"
+                "如果确实要清空知识库，请逐篇删除文档；uploads 丢失时可从自己的原始资料重新上传。"
+            )
         self._reindex_keep = {}
         with open_db(self.settings.db_path) as conn:
             for doc in repo.list_documents(conn):
@@ -239,13 +261,7 @@ class IngestService:
                 if doc.id is not None:
                     repo.delete_document(conn, doc.id)
             conn.commit()
-        uploads = self.settings.uploads_dir
-        files = sorted(uploads.rglob("*")) if uploads.is_dir() else []
-        summary = (
-            self.ingest_paths([uploads], force=True)
-            if any(f.is_file() for f in files)
-            else IngestSummary()
-        )
+        summary = self.ingest_paths([uploads], force=True)
         self._sync_meta()
         return summary
 
@@ -290,7 +306,7 @@ class IngestService:
         *,
         title: str | None = None,
         folder_id: int | None = None,
-    ) -> tuple[int, list[Chunk]]:
+    ) -> tuple[int, list[Chunk], str]:
         """分块 + 落库。title/folder_id 是重建时的组织属性保留值（同名替换、
         reindex 场景由 ingest_one 传入）：title=None 用文件主名（默认语义），
         folder_id=None 落根级（新文档默认）。索引词空间用**显示标题**——
@@ -302,7 +318,7 @@ class IngestService:
         for seq, spec in enumerate(specs):
             # 正文原样保存；标题只在索引词空间前置（title augmentation：
             # 提升稀疏/稠密召回，而生成与展示不重复标题，见 architecture.md）
-            index_text = self._index_text(doc_title, spec)
+            index_text = self._index_text(doc_title, spec.heading_path, spec.content)
             chunks.append(
                 Chunk(
                     document_id=-1,  # 占位，落库前替换为真实 id
@@ -342,20 +358,34 @@ class IngestService:
         logger.info(
             "文档已入库：%s（%d 字符 → %d 块）", loaded.title, loaded.char_count, len(chunks)
         )
-        return doc_id, chunks
+        # 把 doc_title 一并返回：向量侧要用**同一个**标题构造索引文本，
+        # 各算各的迟早会漂移
+        return doc_id, chunks, doc_title
 
-    @staticmethod
-    def _index_text(title: str, spec: ChunkSpec) -> str:
-        """索引词空间：标题路径前置 + 正文（BM25/向量共用的检索表示）。"""
+    def _index_text(self, title: str, heading_path: str | None, content: str) -> str:
+        """索引词空间：标题路径前置 + 正文——**BM25 与向量共用的检索表示**。
+
+        `chunking.title_prefix=false` 时退回纯正文：配置项与文档（architecture.md
+        中英两版、design-decisions）都把它当"可消融的旋钮"，但在此之前**没有任何
+        代码读过它**，标题是无条件拼上去的（2026-09-11 审查发现）。
+        """
+        if not self.settings.chunking.title_prefix:
+            return content
         head = f"《{title}》"
-        if spec.heading_path:
-            head += f"｜{spec.heading_path}"
-        return f"{head}\n{spec.content}"
+        if heading_path:
+            head += f"｜{heading_path}"
+        return f"{head}\n{content}"
 
-    def _embed_chunks(self, chunks: list[Chunk]) -> None:
+    def _embed_chunks(self, chunks: list[Chunk], doc_title: str) -> None:
         if self._embedding is None:
             return  # 无向量模式（offline）：跳过，dense 路自然关闭
-        contents = [c.content for c in chunks]
+        # **向量也必须用索引词空间**（标题前置 + 正文），不是裸 content：
+        # 本函数上方的注释与 architecture.md 都写明"标题前置提升稀疏/稠密两路
+        # 召回"、`_index_text` 的 docstring 也写着"BM25/向量共用"——而实现里
+        # dense 一直只看 content，标题从未进过向量（2026-09-11 审查发现）。
+        # 注意：改了嵌入输入，**既有库需要 `mikasa ingest --reindex`** 才能让
+        # 旧数据也带上标题。
+        contents = [self._index_text(doc_title, c.heading_path, c.content) for c in chunks]
         batches: list[np.ndarray] = []
         for start in range(0, len(contents), _EMBED_BATCH):
             batches.append(self._embedding.embed_documents(contents[start : start + _EMBED_BATCH]))

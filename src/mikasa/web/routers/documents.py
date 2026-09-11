@@ -38,7 +38,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
 from mikasa.config.settings import Settings
-from mikasa.errors import ZhiwenError
+from mikasa.errors import ZhiwenError, strip_paths
 from mikasa.ingest.pagelocate import locate_in_page
 from mikasa.ingest.stitch import stitch_chunks
 from mikasa.models.document import Document
@@ -54,8 +54,11 @@ router = APIRouter(tags=["documents"])
 
 logger = get_logger("web.routers.documents")
 
-# 后缀白名单与 loader 支持表对齐（.markdown 归一为 .md 展示）
-_ALLOWED_SUFFIXES = {".md", ".txt", ".pdf", ".docx"}
+# 后缀白名单**必须与 loader 的 LOADERS 表对齐**：`ingest/loader.py` 里
+# `.markdown` 是一等公民，Web 侧漏了它就会出现"同一个文件 CLI 能入库、网页却说
+# 不支持的文件类型"（2026-09-11 审查发现——注释早就写着"与 loader 支持表对齐"，
+# 但代码里从来没有 .markdown）。
+_ALLOWED_SUFFIXES = {".md", ".markdown", ".txt", ".pdf", ".docx"}
 # 文件名净化：剥路径成分、去控制字符与 Windows 保留字符、去首尾空白
 _FILENAME_BAD = re.compile(r"[\x00-\x1f\x7f/\\:*?\"<>|]")
 # 文件主名上限（不含后缀）：文件名总长 ≈ 115 + 后缀
@@ -459,7 +462,7 @@ def upload_document(
         shown = suffix if suffix else "（无扩展名）"
         raise HTTPException(
             status_code=415,
-            detail=f"不支持的文件类型 {shown}（支持：md / txt / pdf / docx）",
+            detail=f"不支持的文件类型 {shown}（支持：md / markdown / txt / pdf / docx）",
         )
 
     # ---- 大小上限：seek 量真实字节数 → 413 ----
@@ -503,7 +506,7 @@ def upload_document(
         status, added_chunks, added_chars = services.ingest.ingest_one(tmp_path)
     except (ZhiwenError, OSError) as exc:
         raise HTTPException(
-            status_code=400, detail=f"入库失败：{type(exc).__name__}: {exc}"
+            status_code=400, detail=f"入库失败：{type(exc).__name__}: {strip_paths(str(exc))}"
         ) from exc
     finally:
         try:
@@ -519,7 +522,12 @@ def upload_document(
         # 哈希找既有文档展示——可能"同内容不同名"（旧文档在前）
         with open_db(settings.db_path) as conn:
             duplicate = repo.get_document_by_sha(conn, file_sha)
-        assert duplicate is not None, "skipped 语义保证存在同内容文档"
+        # 不能用 assert：它是**请求路径上的校验**，并发下真会不成立（这个文档
+        # 可能刚被另一个请求删掉），此时 assert 变成 500；而 `python -O` 会把断言
+        # 整个剥掉，`_public_document(None)` 再抛 AttributeError——同样 500 但更难查
+        # （2026-09-11 审查指出）。
+        if duplicate is None:
+            raise HTTPException(status_code=409, detail="该内容对应的文档刚被删除，请重新上传")
         return JSONResponse(
             status_code=200,
             content={
@@ -531,7 +539,10 @@ def upload_document(
     # ingested：uploads 副本路径确定（uploads/<净化名>），直接按路径查行
     with open_db(settings.db_path) as conn:
         row = repo.get_document_by_path(conn, str(settings.uploads_dir / safe_name))
-    assert row is not None, "ingested 状态必然落有 uploads 副本行"
+    # 同上：入库刚成功、这一行也可能被并发删除请求清掉，assert 会变成 500
+    if row is None:
+        raise HTTPException(status_code=409, detail="文档刚被删除，请刷新列表确认")
+
     logger.info("Web 上传入库：%s（+%d 块）", safe_name, added_chunks)
     return JSONResponse(
         status_code=201,
@@ -548,22 +559,28 @@ def delete_document(
     services: AppServices = Depends(get_services),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    """删除文档（chunks/embeddings 级联清理）+ 失效索引快照。"""
-    with open_db(settings.db_path) as conn:
-        doc = repo.get_document(conn, doc_id)
-        if doc is None:
-            raise HTTPException(status_code=404, detail="文档不存在")
-        repo.delete_document(conn, doc_id)
-    # 删 uploads 副本：否则 reindex 会扫到它"复活"成新文档。
-    # 必须先过容器校验——file_path 可能是历史脏值（项目改名前的
-    # D:\Code\MyProject1\... 路径，实测 23 行里 21 行如此），无条件 unlink
-    # 会删掉 uploads 之外的同名文件（2026-09-11 加固，口径同 _inside_uploads）
-    if doc.file_path:
-        # uploads 目录要 resolve：与 _resolve_upload_file 同口径。传相对路径时
-        # is_relative_to 永远为假 → 副本静默不删 → 下次 reindex 把它"复活"
-        copy = _inside_uploads(Path(doc.file_path), settings.uploads_dir.resolve())
-        if copy is not None:
-            copy.unlink(missing_ok=True)
+    """删除文档（chunks/embeddings 级联清理）+ 失效索引快照。
+
+    **整段与 ingest/reindex 互斥**：删行与"按路径 unlink 副本"是两步，而 reindex
+    会按同一路径重建新行——不互斥时 reindex 刚建好的行会用着已被删掉的副本，
+    文档凭空消失且不可恢复（2026-09-11 审查发现）。
+    """
+    with services.ingest.exclusive():
+        with open_db(settings.db_path) as conn:
+            doc = repo.get_document(conn, doc_id)
+            if doc is None:
+                raise HTTPException(status_code=404, detail="文档不存在")
+            repo.delete_document(conn, doc_id)
+        # 删 uploads 副本：否则 reindex 会扫到它"复活"成新文档。
+        # 必须先过容器校验——file_path 可能是历史脏值（项目改名前的
+        # D:\Code\MyProject1\... 路径，实测 23 行里 21 行如此），无条件 unlink
+        # 会删掉 uploads 之外的同名文件（2026-09-11 加固，口径同 _inside_uploads）
+        if doc.file_path:
+            # uploads 目录要 resolve：与 _resolve_upload_file 同口径。传相对路径时
+            # is_relative_to 永远为假 → 副本静默不删 → 下次 reindex 把它"复活"
+            copy = _inside_uploads(Path(doc.file_path), settings.uploads_dir.resolve())
+            if copy is not None:
+                copy.unlink(missing_ok=True)
     services.ask.invalidate_index()
     return {"deleted": doc_id, "title": doc.title}
 

@@ -31,10 +31,13 @@ import {
 import { initSidebar, refreshSessions, setActiveSession } from "./qa-tree.js"; // 会话树（文件夹 + 行内管理）
 import { initSettings, nickname } from "./settings.js"; // 聊天设置（昵称/字号/背景）
 import { initReader, openChunk } from "./reader.js"; // 阅读器（两页共用）
+import { initOnboard } from "./onboard.js"; // 首启引导（空库时弹一次）
 
 /* ---------------- 状态与 DOM 引用 ---------------- */
 
 let activeSession = null; // null=新会话；number=会话 id（续问）
+// 会话加载序号：连点两个会话时"后点的赢"（响应的到达顺序是随机的）
+let sessionSeq = 0;
 let busy = false; // 发送进行中（禁输入防重入）
 let currentMode = "kb"; // 当前问答模式：kb=知识库检索 / free=自由问答（ADR-0013）
 let freeAllowed = true; // offline（mock）下自由问答置灰（health 到达前默认放行，守卫兜底）
@@ -92,11 +95,18 @@ function isKbMessage(m) {
 async function openSession(id) {
   if (busy) return; // 流式中不切会话（避免消息串台）
   activeSession = id;
+  // 过期守卫：会话树里快速连点 A、B 时两次请求都在途，谁先回来是随机的。
+  // 没有这道守卫的话 A 的响应后到会把界面画成 A，而 activeSession 已是 B
+  // ——**屏幕上显示 A、下一句提问却发往 B**（2026-09-11 审查发现；
+  // reader.js 的 openDocument 早就有同款守卫，这里漏了）。
+  const seq = ++sessionSeq;
   try {
     const { messages } = await apiFetch(`/api/sessions/${id}/messages`);
+    if (seq !== sessionSeq) return; // 期间又点了别的会话：丢弃，别把人拽回去
     renderThread(messages);
     setActiveSession(id);
   } catch (err) {
+    if (seq !== sessionSeq) return;
     toast(`会话加载失败：${err.message}`, "error");
   }
 }
@@ -105,6 +115,7 @@ async function openSession(id) {
 function newSession() {
   if (busy) return;
   activeSession = null;
+  sessionSeq += 1; // 作废在途的会话加载：否则它回来会盖掉欢迎态
   messagesBox.innerHTML = welcomeHTML;
   questionInput.focus();
   setActiveSession(null);
@@ -403,7 +414,10 @@ questionInput.addEventListener("input", () => {
   questionInput.style.height = `${Math.min(questionInput.scrollHeight, 150)}px`;
 });
 
-initTopbar("qa").then(applyModeAvailability); // health 到达后置灰 offline 的 free
+initTopbar("qa").then((health) => {
+  applyModeAvailability(health); // health 到达后置灰 offline 的 free
+  void initOnboard(health); // 空库 + 首次打开 → 欢迎面板
+});
 initSettings(); // 聊天设置面板（昵称/字号/对话框背景，本地持久化）
 initReader(); // 阅读面板：点引用角标 → 打开并定位到原文块（js/reader.js）
 refreshSessions();

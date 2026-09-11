@@ -208,6 +208,7 @@ export function initReader(host = null, { onClose = null } = {}) {
     orig,
     foot,
     pageView,
+    zoomBox,
     pageCanvas,
     pagePrev,
     pageNext,
@@ -236,6 +237,13 @@ export function initReader(host = null, { onClose = null } = {}) {
   // 拖动平移：仅在放大状态启用（未放大时内容不溢出，拖动没有意义）
   pageCanvas.addEventListener("mousedown", (ev) => {
     if (!pageCanvas.classList.contains("pannable") || ev.button !== 0) return;
+    // **起点落在文字上就交给文字选择，不pan**。
+    // "拖动平移"与"拖选文字"都是"按住左键拖"，天然互斥：原先这里无条件
+    // preventDefault，于是放大之后**一个字都选不中**（2026-09-11 用户实测）。
+    // 判据用文字层：它是透明覆盖全页的，但 span 只铺在真实文字上——
+    // 拖字 = 选择，拖页面空白/行间 = 平移，两个功能都保住。
+    // （平移也仍可用滚动条与滚轮。）
+    if (ev.target.closest(".rd-textlayer span")) return;
     drag = {
       x: ev.clientX,
       y: ev.clientY,
@@ -243,7 +251,7 @@ export function initReader(host = null, { onClose = null } = {}) {
       top: pageCanvas.scrollTop,
     };
     pageCanvas.classList.add("dragging");
-    ev.preventDefault(); // 拖动期间不触发文字选择（松手即恢复，见 CSS）
+    ev.preventDefault(); // 平移期间不触发文字选择（松手即恢复，见 CSS）
   });
   // 连续滚动：滚动时把"第 N 页"标签跟到视口中线所在的那一页
   pageCanvas.addEventListener("scroll", () => {
@@ -257,6 +265,7 @@ export function initReader(host = null, { onClose = null } = {}) {
     if (seen !== currentPage) {
       currentPage = seen;
       updatePageBar(cache?.data?.file_pages ?? 0);
+      syncTextLayers(); // 过了页边界才动文字层（滚到就铺、滚远就撤）
     }
   });
   zoomOut.addEventListener("click", () => stepZoom(-1));
@@ -286,8 +295,24 @@ export function initReader(host = null, { onClose = null } = {}) {
   if (!inline) {
     // 点外部关闭。白名单必须含**开启源**（引用角标/引用卡/文档行）：它们的
     // click 处理先于本处理器执行，不放行就会"刚打开就被这里关掉"。
+    // 「点外部关闭」必须看**按下点**，不能只看 click 的 target：
+    // 从面板里往外拖选文字、或放大后按住拖动平移时，鼠标常常移到面板外才松开
+    // ——那时浏览器把这次 click 的 target 记成 body，于是整个面板被关掉，选中的
+    // 文字与阅读位置一起丢（2026-09-11 审查实测）。要求"按下的那一刻也在外面"
+    // 才是用户心里的"点了别处"。
+    let pressedOutside = false;
+    document.addEventListener(
+      "mousedown",
+      (ev) => {
+        pressedOutside = !ev.target.closest(
+          "#reader-panel, .cite, .cite-card, .doc-item, #toast"
+        );
+      },
+      true // 捕获阶段：先于面板内部可能的 stopPropagation 记下起点
+    );
     document.addEventListener("click", (ev) => {
       if (root.classList.contains("hidden")) return;
+      if (!pressedOutside) return; // 起点在面板内/开启源上 → 拖选或内部点击，不关
       if (ev.target.closest("#reader-panel, .cite, .cite-card, .doc-item, #toast")) return;
       closeReader();
     });
@@ -380,7 +405,12 @@ export async function openDocument(docId, { chunkId = null, mode = null, locatio
 
 /** 引用跳转入口：chunk_id → 所属文档 + 定位（Citation 不带 document_id）。 */
 export async function openChunk(chunkId, { mode = "text" } = {}) {
-  const seq = loadSeq; // 同 locateAndShow：先点 A 后点 B 时，A 的响应后到会把人拽回 A
+  // **先占号**：本函数会去打开一篇文档，连点两个引用角标时必须是**后点的赢**。
+  // 原来的写法是 `const seq = loadSeq`——取的是"进本函数之前"的号，而号是
+  // openDocument 内部才 `++` 的，于是两次点击拿到**同一个号**：先返回的那个通过
+  // 校验并打开文档，后返回的反被判成过期丢弃。用户点的是 B、看到的却是 A，
+  // 且两个响应的到达顺序是随机的（2026-09-11 审查实测）。
+  const seq = ++loadSeq;
   try {
     const info = await apiFetch(`/api/chunks/${Number(chunkId)}`);
     if (seq !== loadSeq) return; // 已过期：用户点了别的
@@ -506,6 +536,9 @@ function setMode(mode) {
   refs.text.classList.toggle("hidden", !isText);
   refs.orig.classList.toggle("hidden", currentMode !== "file");
   refs.pageView.classList.toggle("hidden", currentMode !== "page");
+  // 缩放只作用于页面视图（md/txt/docx 没有页面图，原文件是 iframe）——不藏起来
+  // 用户点了毫无反应，像是坏了（2026-09-11 审查发现）
+  refs.zoomBox.classList.toggle("hidden", currentMode !== "page");
   if (currentMode === "file") void renderFile();
   else if (currentMode === "page") void showPage(currentPage);
   else if (cache) {
@@ -580,11 +613,29 @@ async function showPage(n, rects = null) {
   if (rects && rects.length) {
     fit?.querySelector(".rd-page-layer")?.append(...makeHighlights(rects));
   }
-  // 文字层只在单页模式铺：连续模式几百页会有几万个 span，DOM 撑不住
-  // （要选字复制就切单页——按钮就在翻页栏里）
-  if (pageMode === "single" && fit) void renderTextLayer(page, fit);
+  if (pageMode === "single" && fit) {
+    void renderTextLayer(page, fit); // 单页模式：就这一页，直接铺
+  } else if (pageMode === "scroll") {
+    syncTextLayers(); // 连续模式：只铺当前页前后几页（见该函数的取舍说明）
+  }
   // 有高亮时居中（把命中的行摆进视野中央），否则页顶对齐
-  fit?.scrollIntoView({ block: rects?.length ? "center" : "start" });
+  const intoView = () => fit?.scrollIntoView({ block: rects?.length ? "center" : "start" });
+  intoView();
+  // 连续模式下页图是 `loading="lazy"` 的：**未加载的页节点高度≈0**，布局是塌的，
+  // 这一次 scrollIntoView 按压缩后的高度算，随后页图陆续加载、内容回流，落点就
+  // 漂了（2026-09-11 审查实测：300 页 PDF 跳第 250 页，静置后视口停在第 246 或
+  // 276 页；页图已全部加载的 60 页样本则精确命中）。等目标页的图加载完再纠一次。
+  // 只在用户没走开时纠（currentPage 仍等于目标页），否则会把人拽回去。
+  if (pageMode === "scroll" && fit) {
+    const resync = () => {
+      if (fit.isConnected && currentPage === page) intoView();
+    };
+    const img = fit.querySelector(".rd-page-img");
+    if (img && !img.complete) {
+      img.addEventListener("load", resync, { once: true });
+      setTimeout(resync, 600); // 兜底：图命中缓存时不触发 load
+    }
+  }
 }
 
 /**
@@ -595,37 +646,83 @@ async function showPage(n, rects = null) {
  * 跟随，不必重算（ResizeObserver 只在图片尺寸真的变了时更新基准）。
  */
 async function renderTextLayer(pageNo, fit) {
-  let data;
+  // 幂等：连续模式下来回滚动会让同一页反复进入视野，已铺好或正在铺就跳过
+  // （不挡的话会叠出第二层，选中同一段会重复命中）
+  if (fit.querySelector(".rd-textlayer") || fit._tlPending) return;
+  fit._tlPending = true;
   try {
-    data = await apiFetch(`/api/documents/${cache.docId}/page/${pageNo}/text`);
-  } catch {
-    return; // 文字层是增强项：取不到就保持纯图，不影响看图与高亮
+    let data;
+    try {
+      data = await apiFetch(`/api/documents/${cache.docId}/page/${pageNo}/text`);
+    } catch {
+      return; // 文字层是增强项：取不到就保持纯图，不影响看图与高亮
+    }
+    if (cache?.docId == null || !fit.isConnected) return; // 期间换了文档/换了页
+    // 还要复查这一页**是否仍在窗口内**：跳页/快速滚动时 syncTextLayers 会按当时
+    // 的 currentPage 一次发起好几页的请求，响应回来时那批页可能已经滚出窗口了。
+    // 照铺不误的话要多占一份 DOM，且要等下一次越过页边界才被回收
+    // （2026-09-11 审查实测：跳页后 0.05s 的层集合里混着已过期的页）。
+    if (pageMode === "scroll" && Math.abs(pageNo - currentPage) > TEXT_LAYER_WINDOW) return;
+    const layer = el("div", { class: "rd-textlayer" });
+    for (const s of data.spans) {
+      layer.append(
+        el(
+          "span",
+          {
+            style:
+              `left:${s.x * 100}%;top:${s.y * 100}%;` +
+              `width:${s.w * 100}%;height:${s.h * 100}%;font-size:${s.size * 100}em;`,
+          },
+          s.t
+        )
+      );
+    }
+    fit.append(layer);
+    const sync = () => {
+      const h = fit.clientHeight;
+      if (h) layer.style.fontSize = `${h / 100}px`; // span 的 em = 图片高度的 1%
+    };
+    sync();
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(sync);
+      ro.observe(fit);
+      layer._ro = ro; // 换页时由 showPage 断开
+    }
+  } finally {
+    fit._tlPending = false;
   }
-  if (cache?.docId == null || !fit.isConnected) return; // 期间换了文档/换了页
-  const layer = el("div", { class: "rd-textlayer" });
-  for (const s of data.spans) {
-    layer.append(
-      el(
-        "span",
-        {
-          style:
-            `left:${s.x * 100}%;top:${s.y * 100}%;` +
-            `width:${s.w * 100}%;height:${s.h * 100}%;font-size:${s.size * 100}em;`,
-        },
-        s.t
-      )
-    );
-  }
-  fit.append(layer);
-  const sync = () => {
-    const h = fit.clientHeight;
-    if (h) layer.style.fontSize = `${h / 100}px`; // span 的 em = 图片高度的 1%
-  };
-  sync();
-  if (typeof ResizeObserver !== "undefined") {
-    const ro = new ResizeObserver(sync);
-    ro.observe(fit);
-    layer._ro = ro; // 换页时由 showPage 断开
+}
+
+/** 撤掉某页的文字层（滚出视野后回收 DOM；选择中的页面不会被撤，见余量说明）。 */
+function dropTextLayer(fit) {
+  const layer = fit.querySelector(".rd-textlayer");
+  if (!layer) return;
+  layer._ro?.disconnect();
+  layer.remove();
+}
+
+/**
+ * 连续滚动模式的"按需文字层"：只铺当前页前后各几页，滚过页边界时同步一次。
+ *
+ * 为什么不能一次铺满：一页一两百个 span × 几百页 = 几万个节点，DOM 与内存都
+ * 扛不住——原实现因此在连续模式下**干脆不铺**，代价是选不中、复制不了字
+ * （2026-09-11 用户实测："连续滚动的状态下不可以选择文字"）。
+ *
+ * 为什么**不**用"视口内就铺"的 IntersectionObserver：页图是 loading="lazy" 的，
+ * 图没加载完时页节点高度≈0，几百页会**同时**落进视口判定 → 一次性把所有页的
+ * 文字层都请求回来，正好是要避免的那件事（2026-09-11 无头验收实测：24 页里
+ * 15 页被铺）。按**页号**取窗口则与图片加载程度无关，常驻层数恒为 2W+1 页。
+ *
+ * 窗口留 2 页余量：拖动选择时会自动滚动，挨着的那页得已经能选。
+ */
+const TEXT_LAYER_WINDOW = 2; // 当前页前后各铺几页
+
+function syncTextLayers() {
+  if (pageMode !== "scroll" || !refs?.pageCanvas) return;
+  for (const fit of refs.pageCanvas.querySelectorAll(".rd-page-fit")) {
+    const n = Number(fit.dataset.page);
+    if (Math.abs(n - currentPage) <= TEXT_LAYER_WINDOW) void renderTextLayer(n, fit);
+    else dropTextLayer(fit); // 滚远了回收 DOM（renderTextLayer 自带幂等，重复调无妨）
   }
 }
 

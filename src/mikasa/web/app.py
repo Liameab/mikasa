@@ -12,16 +12,19 @@ serve_app_factory：uvicorn --reload 专用入口（reload 需要 import string�
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.requests import ClientDisconnect
 
 from mikasa import __version__
 from mikasa.config.settings import Settings
-from mikasa.errors import ProviderError, ZhiwenError
+from mikasa.errors import ProviderError, ZhiwenError, strip_paths
 from mikasa.utils.logging import get_logger
+from mikasa.web.limits import BodySizeLimit, body_limit_bytes
 from mikasa.web.routers import documents, eval, health, qa, sessions
 from mikasa.web.services import AppServices
 
@@ -59,6 +62,9 @@ def create_app(settings: Settings) -> FastAPI:
     app.state.settings = settings
     app.state.services = services
 
+    # ---- 请求体上限：必须在**读取之前**生效（见 limits 模块的说明） ----
+    app.add_middleware(BodySizeLimit, max_bytes=body_limit_bytes(settings.web.upload_max_mb))
+
     # ---- 页面与静态资源（演示时浏览器直开 / 即首页） ----
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     for route, page in _PAGES.items():
@@ -72,6 +78,40 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(sessions.router)
 
     # ---- 异常 → 统一错误 JSON（路由内不散落 try/except） ----
+    @app.exception_handler(ClientDisconnect)
+    async def client_disconnect_handler(request: Request, exc: ClientDisconnect) -> JSONResponse:
+        """读到一半断流：多数是被上面的请求体上限掐断的，回 413。
+
+        真正的客户端主动断开（关标签页）也走这里——那时响应没人收，
+        返回什么都无所谓；但把 413 语义写在前面，超限场景才能给用户一句人话。
+        """
+        del exc
+        logger.warning("请求体在读入过程中被中断：%s %s", request.method, request.url.path)
+        return _error_body(
+            413,
+            "too_large",
+            f"上传内容超过大小上限（{settings.web.upload_max_mb} MB），已中断。",
+        )
+
+    @app.exception_handler(sqlite3.IntegrityError)
+    async def integrity_error_handler(
+        request: Request, exc: sqlite3.IntegrityError
+    ) -> JSONResponse:
+        """外键/唯一约束冲突 → 409（并发下"检查→写入"竞态的语义化）。
+
+        路由里的"目标存在吗"用 SELECT 校验，写入是之后的 UPDATE/INSERT，两者不在
+        同一事务里。并发下目标可能在两者之间被删掉（移动文档到刚被删的文件夹、
+        会话移入刚被删的目录），随后撞 FOREIGN KEY 约束——原本直通到兜底 500
+        （2026-09-11 审查实测）。对调用方来说这就是"你要的目标没了"，409 才对。
+        """
+        logger.warning(
+            "完整性约束冲突（并发检查-写入竞态）：%s %s（%s）",
+            request.method,
+            request.url.path,
+            exc,
+        )
+        return _error_body(409, "conflict", "目标已被其他操作改动（可能已删除），请刷新后重试。")
+
     @app.exception_handler(ZhiwenError)
     async def mikasa_error_handler(request: Request, exc: ZhiwenError) -> JSONResponse:
         """业务错误：ProviderError（上游 API 失败）502，其余 400。
@@ -79,8 +119,11 @@ def create_app(settings: Settings) -> FastAPI:
         """
         del request
         status = 502 if isinstance(exc, ProviderError) else 400
+        # strip_paths：异常消息常带服务器绝对路径（OSError/pymupdf 尤其多），
+        # `--host 0.0.0.0` 下未鉴权客户端据此就能摸清目录布局
         return JSONResponse(
-            status_code=status, content={"error": {"type": type(exc).__name__, "message": str(exc)}}
+            status_code=status,
+            content={"error": {"type": type(exc).__name__, "message": strip_paths(str(exc))}},
         )
 
     @app.exception_handler(OverflowError)

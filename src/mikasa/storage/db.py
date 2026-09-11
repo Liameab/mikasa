@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -26,6 +28,9 @@ from mikasa.utils.text import fold_title
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 3
+
+# 初始化串行化锁（见 open_db 的说明）
+_INIT_LOCK = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # schema 定义（按段拼装：HEAD/TAIL 是 v1~v3 共享的公共段，qa 段各自独立）
@@ -196,7 +201,14 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
     """
     names = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
     if column not in names:
-        conn.execute(ddl)
+        try:
+            conn.execute(ddl)
+        except sqlite3.OperationalError as exc:
+            # 并发首次建库：两个连接都看到"列不存在"，都去 ALTER，慢的那个撞
+            # "duplicate column name"。此时列已经在了，忽略即可——这正是本函数
+            # 想要的结果（2026-09-11 并发首连测试暴露）。
+            if "duplicate column name" not in str(exc):
+                raise
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -204,10 +216,35 @@ def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=15.0)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    _enable_wal(conn)
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA synchronous=NORMAL")
     return conn
+
+
+def _enable_wal(conn: sqlite3.Connection, attempts: int = 5) -> None:
+    """切换 WAL，撞上"数据库正忙"就退避重试。
+
+    **为什么必须重试**：WAL 切换要拿一个短暂的排他锁，而它**不走 busy timeout**
+    （timeout 只作用于普通读写）。多个线程同时对**尚不存在**的库文件首连时，
+    实测 160 次里 82 次直接抛 `database is locked`；库文件已存在时 0 次失败
+    （2026-09-11 审查实测）。Web 端"首次运行 + 并发上传 + 后台评测"就能凑齐。
+
+    最终仍失败也**不抛**：默认的 rollback journal 一样能用，只是并发差些——
+    为这件事让整个应用起不来，代价远大于收益。
+    """
+    for attempt in range(attempts):
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError:
+            if attempt == attempts - 1:
+                logging.getLogger("mikasa.storage.db").warning(
+                    "无法切换到 WAL 日志模式（%s），继续用默认模式——并发写入可能变慢",
+                    conn.execute("PRAGMA journal_mode").fetchone()[0],
+                )
+                return
+            time.sleep(0.05 * (attempt + 1))
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +271,11 @@ def init_db(conn: sqlite3.Connection) -> None:
         conn.executescript(_SCHEMA_SQL)
         # ALTER 单独走幂等补列（理由见 _ensure_column 的 docstring）
         _ensure_column(conn, "documents", "folder_id", _SCHEMA_DOC_FOLDER_ALTER)
-        conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+        # **幂等写入**：并发首次建库时两个连接都会走到这里（都看到"没有版本行"），
+        # 一个先插入，另一个撞 UNIQUE constraint failed: schema_version.version
+        # ——原本是 500（2026-09-11 并发首连测试暴露）。OR IGNORE 让后来者静默成为
+        # 空操作：它想写的那个版本行已经在库里了，这正是期望结果。
+        conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
         conn.commit()
         return
     version = int(row["version"])
@@ -368,7 +409,12 @@ def open_db(db_path: Path) -> Iterator[sqlite3.Connection]:
     """
     conn = connect(db_path)
     try:
-        init_db(conn)
+        # 进程内串行化初始化：并发首请求时多个线程会同时走到"没有版本行"这个
+        # 判断上，然后一起建表、一起插版本行。SQL 层已各自幂等（IF NOT EXISTS /
+        # OR IGNORE / duplicate column 容错），这把锁只是把无谓的相互撞车省掉。
+        # **只覆盖本进程**——跨进程（serve + CLI）靠上面那层幂等 SQL 兜底。
+        with _INIT_LOCK:
+            init_db(conn)
         yield conn
         conn.commit()  # 调用方已 commit 则此处为空操作（幂等）
     except Exception:

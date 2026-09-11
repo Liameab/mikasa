@@ -79,3 +79,21 @@ def get_logger(name: str = "mikasa") -> logging.Logger:
     if not _CONFIGURED:
         setup_logging()
     return logging.getLogger(f"mikasa.{name}" if name != "mikasa" else "mikasa")
+
+
+def default_log_file() -> Path:
+    """文件日志的默认位置：可写数据目录下的 `logs/mikasa.log`。
+
+    打包版以 console=False 构建（双击不弹黑窗口），控制台日志等于扔进黑洞，
+    **文件是唯一的排障入口**。所以"装在哪"这件事必须只有一处定义：CLI 入口
+    （cli.main）与窗口入口（packaging/entry.py 的双击路径）都要挂它。
+
+    2026-09-11 实测教训：这个位置一度只在 cli.main() 里传，而双击走的是
+    entry.py 的 `_serve_forever`（**不经过 cli.main**）——结果是弹窗让用户
+    去看的那个目录在窗口形态下永远空着。两个入口现在共用本函数。
+
+    目录由 setup_logging 负责创建；这里只算路径，不碰文件系统。
+    """
+    from mikasa.config.settings import user_data_root  # 延迟导入：避免循环依赖
+
+    return user_data_root() / "logs" / "mikasa.log"
