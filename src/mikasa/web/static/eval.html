@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<!-- ============================================================================
+     Mikasa —— 评测页
+     顶部：语料概况 + 开始评测按钮 + 后台任务进度条（1s 轮询）；
+     下部左右分栏：历史评测列表（左）→ 报告渲染（右，JS：report.js）。
+     JS 入口：/static/js/eval.js
+     ============================================================================ -->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>评测 · Mikasa</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" href="data:,">
+</head>
+<body>
+
+  <header class="topbar">
+    <a class="brand" href="/">Mikasa<small>RAG 问答</small></a>
+    <nav class="main">
+      <a href="/" data-page="qa">问答</a>
+      <a href="/documents" data-page="documents">知识库</a>
+      <a href="/eval" data-page="eval">评测</a>
+    </nav>
+    <div class="health-pill"><span class="muted small">正在连接服务…</span></div>
+  </header>
+
+  <main>
+
+    <!-- 评测控制区 -->
+    <section class="card">
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+        <div>
+          <h2 style="margin:0">黄金集评测</h2>
+          <div id="corpus-hint" class="muted small">语料指纹与题库需一致方可评测（否则服务端会拒绝并说明）</div>
+        </div>
+        <div class="grow"></div>
+        <button id="start-eval" class="btn primary" type="button">▶ 开始评测</button>
+      </div>
+      <!-- 后台任务进度（仅 running 时显示；done/error 由轮询收尾处理） -->
+      <div id="job-panel" hidden>
+        <div style="display:flex;justify-content:space-between;margin:14px 0 6px">
+          <span class="small muted" id="job-label">准备中…</span>
+          <span class="small" id="job-ratio">0 / 0</span>
+        </div>
+        <div class="progress-track"><div class="progress-bar" id="job-bar"></div></div>
+        <div class="small muted" id="job-meta"></div>
+      </div>
+    </section>
+
+    <!-- 历史列表 + 报告区 -->
+    <section class="eval-layout grow">
+      <aside class="card">
+        <h2>历史评测</h2>
+        <div class="run-list" id="run-list"></div>
+      </aside>
+      <section class="card" style="min-height:0;overflow-y:auto">
+        <div id="report-head"></div>
+        <div id="report-body"></div>
+      </section>
+    </section>
+
+  </main>
+
+  <div id="toast"></div>
+  <script type="module" src="/static/js/eval.js"></script>
+</body>
+</html>

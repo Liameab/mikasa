@@ -1,0 +1,543 @@
+# ============================================================
+# Mikasa黄金题本（人工撰写，不做任何自动生成）
+#
+# 使用流程：
+#   1. 语料入库：          mikasa ingest sample-corpus
+#   2. 冻结黄金集：        python tools/build_golden.py
+#      （锚句 anchors 被解析成真实 chunk_id + corpus_sha256，
+#       冻结为 evals/golden_set.json —— 本文件只描述"题"，不含数据库 id）
+#   3. 执行评测：          mikasa eval run --profile offline
+#
+# 撰写规范（build 时会硬校验）：
+#   - answerable 必填 difficulty 与 anchors；anchors 必须是从语料原文
+#     逐字抄录的句子（build 要求每句恰好命中一个 chunk，多命中=有歧义、
+#     零命中=题面与语料对不上，都会报错拒绝生成）；
+#   - 注意分块重叠窗口：相邻块会共享块尾句子，这类句子不能当锚句
+#     （如"概率论要点"重叠块的 MLE 句、PDF 清单尾页的重复行）；
+#   - unanswerable 必填 reason：unrelated（完全无关）/ insufficient
+#     （沾边但资料不足）/ hallucination_bait（模型常识可答但资料没有——
+#     最能考验"只依据资料"的纪律）；
+#   - notes：可答题写期望答到的知识点（裁判判分的参考答案要点），
+#     不可答题写该拒答的原因（人工复核依据）。
+# ============================================================
+
+name: mikasa-golden
+corpus_dir: sample-corpus
+
+items:
+  # =================================================================
+  # 可答题 —— easy（直接复述语料定义与事实）
+  # =================================================================
+  - id: q001
+    kind: answerable
+    question: 线性回归假设目标与特征之间是什么关系？最常用的损失函数是什么？
+    difficulty: easy
+    anchors:
+      - "线性回归假设目标与特征之间是线性关系：y = w·x + b"
+      - "最常用的损失是均方误差 MSE，即预测值与真实值差的平方的平均"
+    notes: 线性关系 y=w·x+b；MSE=预测与真实之差的平方的平均；训练目标是最小化损失。
+
+  - id: q002
+    kind: answerable
+    question: 特征矩阵 X 列满秩时，线性回归存在什么形式的解？叫什么名字？
+    difficulty: easy
+    anchors:
+      - "当特征矩阵 X 列满秩时，损失函数存在闭式解，也就是正规方程"
+      - "正规方程需要求矩阵逆，复杂度约为 O(n·d²)"
+    notes: 正规方程 w=(XᵀX)⁻¹Xᵀy；闭式解无需迭代；代价是求逆 O(n·d²)、XᵀX 可能不可逆。
+
+  - id: q003
+    kind: answerable
+    question: 梯度下降里学习率设置过大或过小分别会怎样？
+    difficulty: easy
+    anchors:
+      - "学习率太大，参数会在最优点附近来回震荡甚至发散；学习率太小，收敛会非常缓慢"
+    notes: 学习率控制每次更新步长；太大震荡/发散，太小收敛缓慢——需要适中或调度。
+
+  - id: q004
+    kind: answerable
+    question: 逻辑回归如何把线性输出转成概率？决策边界长什么样？
+    difficulty: easy
+    anchors:
+      - "逻辑回归先把线性输出 z = w·x + b 经过 sigmoid 函数 σ(z) = 1 / (1 + e⁻ᶻ) 压缩到 (0, 1)，解释为样本属于正类的概率"
+      - "逻辑回归的决策边界在原始特征空间里仍然是一条（超）直线"
+    notes: sigmoid 把 z 压缩到 (0,1) 视为正类概率；σ≥0.5 判正类；边界在原空间仍为（超）直线。
+
+  - id: q005
+    kind: answerable
+    question: 为什么逻辑回归不用均方误差而改用交叉熵损失？
+    difficulty: easy
+    anchors:
+      - "如果分类任务沿用 MSE，损失函数会变成非凸的，优化困难"
+    notes: MSE 在分类上损失非凸、优化困难；交叉熵最小化等价于让模型分布逼近真实分布。
+
+  - id: q006
+    kind: answerable
+    question: 什么是过拟合？它和欠拟合的区别是什么？
+    difficulty: easy
+    anchors:
+      - "过拟合指模型在训练集上表现很好、在未见过的测试集上表现明显变差，本质是模型容量超过了数据能支撑的信息量，把训练集中的噪声也当成了规律"
+      - "欠拟合则相反，是模型太简单、连训练集都学不好"
+    notes: 过拟合=训练好测试差，容量超过数据信息量、把噪声当规律；欠拟合=模型太简单连训练集都学不好。
+
+  - id: q007
+    kind: answerable
+    question: L2 正则化为什么也叫权重衰减？它鼓励什么样的权重？
+    difficulty: easy
+    anchors:
+      - "L2 正则化（也叫权重衰减）在损失函数中加入 λ·‖w‖²，梯度里出现 −2λw 这一项，等价于每步更新都让权重向零收缩一点，鼓励模型使用小而分散的权重"
+    notes: L2=λ‖w‖²，梯度 −2λw 每步把权重向零收缩；鼓励小而分散的权重、假设空间变平滑。
+
+  - id: q008
+    kind: answerable
+    question: Dropout 在训练和测试时的行为有什么不同？为什么测试时要除 p？
+    difficulty: easy
+    anchors:
+      - "训练时每个神经元以概率 p 被随机丢弃（置零），相当于每次都在训练一个不同的子网络，最后共享权重取平均"
+      - "测试时不丢弃，为了让期望输出一致，标准实现（inverted dropout）在训练时把保留的神经元输出除以 p"
+    notes: 训练随机置零造子网络集合；测试全用但不丢弃；inverted dropout 训练期除以 p 保期望一致。
+
+  - id: q009
+    kind: answerable
+    question: 随机森林与普通 Bagging 的关键区别是什么？
+    difficulty: easy
+    anchors:
+      - "与普通 Bagging 不同的是，每棵树分裂时只从全部特征里随机抽一个子集（如 √d 个）候选，进一步降低树间相关性"
+    notes: 树分裂只从随机特征子集选切分点；作用=降树间相关性、强化方差削减。
+
+  - id: q010
+    kind: answerable
+    question: KNN 为什么对特征尺度极其敏感？使用前要做什么？
+    difficulty: easy
+    anchors:
+      - "KNN 对特征尺度极其敏感——某个量纲大的特征会主导距离计算，所以使用前必须标准化或归一化"
+    notes: 大尺度特征主导欧氏距离计算；必须标准化/归一化后再算距离。
+
+  - id: q011
+    kind: answerable
+    question: 为什么神经网络里的激活函数必须是非线性的？
+    difficulty: easy
+    anchors:
+      - "激活函数必须非线性，否则多层网络无论叠多深都等价于单层线性模型"
+    notes: 线性复合仍线性→深网络退化等价单层线性；ReLU/sigmoid/tanh 提供非线性。
+
+  - id: q012
+    kind: answerable
+    question: 卷积层相比全连接层的两大设计特性是什么？
+    difficulty: easy
+    anchors:
+      - "局部连接——每个输出只看输入的一小片邻域；权值共享——同一个核扫过整张图，参数数量与图像尺寸无关"
+    notes: 局部连接+权值共享；编码了图像特征平移不变性的先验；参数量与图尺寸无关。
+
+  - id: q013
+    kind: answerable
+    question: 缩放点积注意力为什么要除以根号 dk？
+    difficulty: easy
+    anchors:
+      - "除以 √dₖ 是为了防止点积随维度增大而方差过大、把 softmax 推到饱和区导致梯度消失"
+    notes: 除 √dₖ 防点积方差随维度过大；避免 softmax 饱和区梯度消失。
+
+  - id: q014
+    kind: answerable
+    question: one-hot 表示词有哪些问题？分布式词向量解决了什么？
+    difficulty: easy
+    anchors:
+      - "它的问题有两个：维度灾难，以及任意两个词的向量正交、完全无法体现语义关系"
+      - "分布式表示（词嵌入）把每个词映射成低维稠密向量，语义相近的词在向量空间中距离也近"
+    notes: one-hot=维度灾难+词向量正交无语义关系；词嵌入低维稠密且语义相近距离近，类比关系进向量几何。
+
+  - id: q015
+    kind: answerable
+    question: RAG 相比微调（fine-tuning）有什么优势？
+    difficulty: easy
+    anchors:
+      - "相比微调，RAG 的资料可随时增删、无需训练、成本低，是个人知识库和私域问答的主流方案"
+    notes: 资料可随时增删、无需训练、成本低——私域问答主流方案。
+
+  - id: q016
+    kind: answerable
+    question: 严谨实验里训练集、验证集、测试集分别做什么用？
+    difficulty: easy
+    anchors:
+      - "训练集学参数，验证集调超参数与做早停，测试集只在全部决定做完后评估一次"
+      - "防止“对着测试集调参”造成的乐观偏差"
+    notes: 训练集学参数；验证集调超参/早停；测试集只在全部决定后评一次，防乐观偏差。
+
+  # =================================================================
+  # 可答题 —— medium（对比、成因与适用场景）
+  # =================================================================
+  - id: q017
+    kind: answerable
+    question: 批量梯度下降和小批量随机梯度下降各有什么特点？
+    difficulty: medium
+    anchors:
+      - "每次更新用全部样本计算的叫批量梯度下降，数据量大时很慢，因此实践中常用小批量随机梯度下降，每个小批量估计一次梯度，兼顾稳定性与速度"
+    notes: 批量=全样本慢但梯度准；小批量=每小批估一次梯度，稳定性与速度折中。
+
+  - id: q018
+    kind: answerable
+    question: 为什么特征尺度差异大时梯度下降收敛慢？怎么缓解？
+    difficulty: medium
+    anchors:
+      - "特征尺度差异大时，等高线会变成狭长椭圆，梯度下降走“之”字形收敛很慢，所以做梯度类优化前通常要对特征做标准化"
+    notes: 尺度不齐→等高线狭长椭圆→之字形震荡慢；对策=特征标准化。
+
+  - id: q019
+    kind: answerable
+    question: 判断模型开始过拟合的常规信号是什么？这个信号为什么可靠？
+    difficulty: medium
+    anchors:
+      - "判断是否过拟合的常规做法是监控验证集曲线：训练损失持续下降而验证损失开始回升，就是过拟合的信号"
+    notes: 训练损失降但验证损失回升=过拟合信号；验证集独立于训练集故信号可靠。
+
+  - id: q020
+    kind: answerable
+    question: L1 与 L2 正则化作用有什么不同？L1 为什么能做特征选择？
+    difficulty: medium
+    anchors:
+      - "L1 正则化加的是 λ·‖w‖₁，其梯度恒为 ±λ，会把不重要的权重直接压到零，产生稀疏解，可用来做特征选择"
+      - "L2 正则化（也叫权重衰减）在损失函数中加入 λ·‖w‖²"
+    notes: L1 梯度恒 ±λ 把不重要权重压零→稀疏解→特征选择；L2 把权重向零收缩→小权重平滑解。
+
+  - id: q021
+    kind: answerable
+    question: 除了正则化项，数据层面和训练流程上还有哪些防过拟合手段？
+    difficulty: medium
+    anchors:
+      - "获取更多数据是最直接的正则化；图像任务可用随机裁剪、翻转、颜色扰动等数据增强扩大有效样本量"
+      - "早停（early stopping）在验证集指标不再改善时停止训练，等效于限制模型容量，实现成本最低"
+    notes: 更多数据/数据增强扩样本；早停=验证集不再改善即停，等效限制容量、成本最低；常多手段组合。
+
+  - id: q022
+    kind: answerable
+    question: 决策树分裂时衡量"不纯度下降"的三种准则分别对应哪些经典算法？
+    difficulty: medium
+    anchors:
+      - "衡量标准有信息增益（ID3，基于熵 H = −Σ pᵢ log pᵢ）、信息增益率（C4.5）和基尼指数（CART：Gini = 1 − Σ pᵢ²）"
+    notes: ID3 用信息增益（熵）；C4.5 用信息增益率；CART 用基尼指数。
+
+  - id: q023
+    kind: answerable
+    question: Bagging 与 Boosting 分别主要降低模型的哪一类误差？
+    difficulty: medium
+    anchors:
+      - "树间差异越大，集成后的方差削减越明显——这正是 Bagging 降低方差的思想"
+      - "每轮让新模型重点学习前一轮的残差，主要降低偏差"
+    notes: Bagging（随机森林）降方差：并行+投票平均；Boosting（GBDT/XGBoost）串行学残差：降偏差。
+
+  - id: q024
+    kind: answerable
+    question: SVM 软间隔里的惩罚系数 C 起什么作用？C 太大或太小各有什么后果？
+    difficulty: medium
+    anchors:
+      - "软间隔 SVM 引入松弛变量 ξᵢ 和惩罚系数 C，允许少量样本越界，在“间隔大”和“错误少”之间做权衡"
+      - "C 越大越不容忍误分类，容易过拟合；C 越小边界越宽松"
+    notes: C 在间隔与误分类间权衡；C 大不容忍误分→易过拟合；C 小边界宽松。
+
+  - id: q025
+    kind: answerable
+    question: SVM 为什么是"稀疏"的——最终解只由哪些样本决定？
+    difficulty: medium
+    anchors:
+      - "最终解只由落在间隔边界上的少数“支持向量”决定，因此 SVM 对远离边界的样本不敏感、泛化有理论保证"
+    notes: 解只由间隔边界上的支持向量决定；对远离边界的样本不敏感。
+
+  - id: q026
+    kind: answerable
+    question: KNN 中 K 取太大或太小分别有什么问题？
+    difficulty: medium
+    anchors:
+      - "K 太小决策只受最近邻左右，容易过拟合、对噪声敏感；K 太大则边界过于平滑，可能把不同类糊在一起"
+    notes: K 小→过拟合噪声敏感；K 大→边界过平滑混类；K 是唯一主要超参数。
+
+  - id: q027
+    kind: answerable
+    question: K-means 对初始化敏感，工程上怎么缓解？K 值怎么选？
+    difficulty: medium
+    anchors:
+      - "初始化对结果影响大，常用 K-means++ 让初始中心尽量分散，或多次随机初始化取 SSE 最小的一次"
+      - "K 需要预先给定，可用肘部法则辅助选择：画 SSE-K 曲线，拐点之后的边际收益变缓处就是合理的 K"
+    notes: K-means++ 让初始中心分散 / 多次随机初始化取最优；肘部法则=SSE-K 曲线拐点选 K。
+
+  - id: q028
+    kind: answerable
+    question: 自注意力相对 RNN 在处理序列时最大的结构优势是什么？
+    difficulty: medium
+    anchors:
+      - "每个位置都能直接看到全序列任意位置——一步建模全局依赖，这正是它相对 RNN 最大的优势"
+    notes: 每位置一步直达全序列任意位置、一步建模全局依赖——相对 RNN 逐时刻递推的最大优势。
+
+  - id: q029
+    kind: answerable
+    question: Transformer 为什么需要位置编码？有哪些实现变体？
+    difficulty: medium
+    anchors:
+      - "由于自注意力本身不感知顺序，Transformer 需要注入位置编码"
+      - "原始论文用不同频率的正弦余弦函数，后来也有可学习位置编码与旋转位置编码（RoPE）等变体"
+    notes: 自注意力不感知顺序故需位置编码；原论文正余弦、后有可学习位置编码与 RoPE 变体。
+
+  - id: q030
+    kind: answerable
+    question: Word2Vec 的 CBOW 与 Skip-gram 两种训练目标分别是什么？负采样解决什么问题？
+    difficulty: medium
+    anchors:
+      - "有 CBOW（用上下文词预测中心词）和 Skip-gram（用中心词预测上下文词）两种训练目标"
+      - "为了训练可行，用负采样代替全词典 softmax：每个正样本配若干随机采样的负样本做二分类，大幅降低计算量"
+    notes: CBOW 上下文预测中心词 / Skip-gram 反向；负采样以正+若干负样本二分类代替全词典 softmax 降计算。
+
+  - id: q031
+    kind: answerable
+    question: PPL 作为语言模型指标有什么已知局限？
+    difficulty: medium
+    anchors:
+      - "同一模型在不同语料上的 PPL 不可直接比较，且 PPL 下降不代表生成质量一定提升，但它仍是训练时最常用的监控指标"
+    notes: 跨语料不可直接比；PPL 降不代表生成质量升；仍是训练主监控指标。
+
+  - id: q032
+    kind: answerable
+    question: 上下文学习里用 few-shot 示例要注意什么？
+    difficulty: medium
+    anchors:
+      - "示例的选择与顺序都会影响效果"
+      - "注意：示例也占用上下文窗口，且示例的选择与顺序都会影响效果"
+    notes: 示例占上下文窗口；示例的选择与顺序都影响效果。
+
+  - id: q033
+    kind: answerable
+    question: 混合检索（BM25+向量）为什么通常优于单路检索？
+    difficulty: medium
+    anchors:
+      - "词法检索（如 BM25）擅长精确匹配术语，稠密向量检索擅长语义相似，两者用 RRF 之类的排序融合合并，往往优于任意单路"
+    notes: BM25 精确匹配术语、dense 语义相似；RRF 融合常优于任意单路。
+
+  - id: q034
+    kind: answerable
+    question: 做消融实验时为什么要强调控制变量？
+    difficulty: medium
+    anchors:
+      - "控制变量是消融的灵魂——如果同时改了两处，指标变化就无法归因"
+    notes: 一次只切换一个组件；同时改多处→指标变化无法归因。
+
+  - id: q035
+    kind: answerable
+    question: 偏差-方差分解说了什么？正则化在其中的作用是什么？
+    difficulty: medium
+    anchors:
+      - "模型总误差 = 偏差²（模型够不够强）+ 方差（对数据扰动敏不敏感）+ 噪声（不可约），正则化正是在偏差与方差之间做权衡"
+    notes: 总误差=偏差²+方差+噪声；正则化在偏差与方差之间权衡。
+
+  # =================================================================
+  # 可答题 —— hard（跨块综合、推导式与设计思路）
+  # =================================================================
+  - id: q036
+    kind: answerable
+    question: 正规方程有哪些局限？特征维度高或 XᵀX 不可逆时工程上怎么办？
+    difficulty: hard
+    anchors:
+      - "正规方程需要求矩阵逆，复杂度约为 O(n·d²)，n 是样本数、d 是特征数；特征维度高时计算代价大，而且 XᵀX 可能不可逆"
+      - "梯度下降不直接求闭式解，而是从初始参数出发，反复沿损失函数负梯度方向更新"
+    notes: 正规方程局限=O(n·d²) 求逆、XᵀX 可能不可逆；对策=梯度下降（+标准化），收敛到全局最优。
+
+  - id: q037
+    kind: answerable
+    question: 逻辑回归的决策边界为什么是线性的？它如何推广到多分类？
+    difficulty: hard
+    anchors:
+      - "当 σ(z) ≥ 0.5 时判为正类，否则判为负类，因此逻辑回归的决策边界在原始特征空间里仍然是一条（超）直线"
+      - "softmax 是 sigmoid 的多类推广"
+    notes: σ 单调→阈值在 z 空间等价线性超平面；softmax 把 logits 变分布，是 sigmoid 多类推广。
+
+  - id: q038
+    kind: answerable
+    question: 从"过拟合的本质"出发解释：为什么噪声会被模型当成规律？怎么用容量视角看待正则化与数据增强？
+    difficulty: hard
+    anchors:
+      - "本质是模型容量超过了数据能支撑的信息量，把训练集中的噪声也当成了规律"
+      - "训练损失持续下降而验证损失开始回升，就是过拟合的信号"
+    notes: 容量超数据信息量→噪声当规律；正则化（容量惩罚）/数据增强（加信息量）从两端修正。
+
+  - id: q039
+    kind: answerable
+    question: 反向传播相比数值差分求梯度快在哪？现代深度学习框架如何实现它？
+    difficulty: hard
+    anchors:
+      - "直接对每个参数做数值差分代价高且不精确，反向传播利用微积分链式法则，把“输出层的误差”沿计算图逐层往回传导，一次前向加一次反向即可得到全部参数的梯度"
+      - "现代深度学习框架都以“计算图 + 自动微分”为核心：用户声明前向计算，框架自动记录图并反向求导"
+    notes: 数值差分每参数一次、代价高不精确；BP 一次前向+一次反向得全部梯度；框架=计算图+自动微分。
+
+  - id: q040
+    kind: answerable
+    question: RNN 的"长期依赖难题"在数学上是怎么产生的？LSTM 用什么结构绕过它？
+    difficulty: hard
+    anchors:
+      - "RNN 的梯度沿时间反向传播时，每步都要乘 U 的 Jacobian，如果 U 的最大奇异值小于 1，梯度会指数级衰减，长距离依赖根本学不到；大于 1 又会梯度爆炸"
+      - "细胞状态 c 像传送带一样贯穿全序列，由遗忘门决定丢弃多少旧记忆、输入门决定写入多少新信息、输出门决定暴露多少给当前隐状态"
+      - "细胞状态上的梯度通路接近恒等，长距离信息可以几乎无损地流动"
+    notes: 梯度回传每步乘 U 的 Jacobian，奇异值<1 指数衰减/大于 1 爆炸；LSTM 以细胞状态传送带+三门的近恒等通路保长距离信息。
+
+  - id: q041
+    kind: answerable
+    question: 为什么 Transformer 最终取代了 RNN 成为大模型主流架构？
+    difficulty: hard
+    anchors:
+      - "循环结构必须按时间步串行计算，难以并行，且超长序列仍有遗忘风险。这些短板是后来 Transformer 全面取代 RNN 做语言建模的直接原因"
+      - "每个位置都能直接看到全序列任意位置——一步建模全局依赖"
+      - "它的另一大优势是可并行：序列内所有位置同时计算，训练速度远超逐时刻串行的 RNN"
+    notes: 串行难并行+长序列遗忘风险；自注意力一步全局依赖；全序列可并行训练快。
+
+  - id: q042
+    kind: answerable
+    question: 为什么大模型主流选择 decoder-only 架构而不是 BERT 式编码器？
+    difficulty: hard
+    anchors:
+      - "BERT 则是编码器架构，用掩码语言模型（随机遮住部分词让模型还原）做双向预训练，擅长理解类任务但对生成不友好"
+      - "decoder-only 架构统一了理解和生成，且因果注意力天然适配自回归采样，因此成为大模型的主流选择"
+    notes: BERT 双向预训练擅长理解但生成不友好；decoder-only 统一理解+生成、因果注意力适配自回归。
+
+  - id: q043
+    kind: answerable
+    question: RLHF 对齐的三段式流程是什么？为什么说模型"知道"不等于"做到"？
+    difficulty: hard
+    anchors:
+      - "对齐流程一般分三步：监督微调（SFT）——用人工撰写的指令-回答对教模型按指令行事；奖励模型训练——让人对多个回答排序，训练一个打分模型编码人类偏好；强化学习（如 PPO）——用奖励模型做反馈，进一步优化策略"
+      - "对齐后模型的能力还会继续分层：基础能力在预训练阶段决定，指令遵循和价值观在 SFT/RLHF 阶段塑造"
+      - "模型“知道”与“做到”不是一回事，评测一个模型要看它在真实任务上的表现而非参数大小"
+    notes: SFT→奖励模型→PPO 三步；能力分层=预训练定基础、对齐塑遵循与价值观；评测看真实任务表现。
+
+  - id: q044
+    kind: answerable
+    question: RAG 流水线里分块质量为什么直接影响召回？块太大和块太小各有什么坏处？
+    difficulty: hard
+    anchors:
+      - "分块质量直接影响召回：块太大噪声多、块太小上下文割裂，实践上要结合文档的标题结构切分"
+    notes: 块太大噪声多、块太小上下文割裂；按标题结构切分+重叠窗口缓解边界切断。
+
+  - id: q045
+    kind: answerable
+    question: 评测一个 RAG 系统时为什么要"分层看指标"？各层分别看什么？
+    difficulty: hard
+    anchors:
+      - "评测 RAG 系统也不能只看回答好不好听，要分层看指标：检索层看召回率（recall@k，真相关文档有没有被召回到）；生成层看引用精确率（引用的片段是否真支撑该句）与拒答准确率（不可答问题是否被正确拒绝）"
+    notes: 分层=检索层 recall@k 看真相关是否召回、生成层看引用精确率与拒答准确率；有据能答、无据能拒，两者都要测。
+
+  - id: q046
+    kind: answerable
+    question: 语料建议的论文阅读方法是怎样的？读完一篇要追问什么问题？
+    difficulty: hard
+    anchors:
+      # PDF 折行把句子断成两行（"…如果\n放在…"），锚句必须落在单行内
+      - "每篇论文按动机-方法-实验-局限四段式写笔记，并追问一个问题"
+    notes: 四段式笔记=动机-方法-实验-局限；追问=方法放进自己 RAG 项目消融实验怎么设计。
+
+  - id: q047
+    kind: answerable
+    question: 语料里"项目要能扛住追问"具体指什么标准？
+    difficulty: hard
+    anchors:
+      - "项目要写到能扛住追问的程度：每个设计决策都能说出取舍，每张评测表都来自真实实验"
+    notes: 每个设计决策能说出取舍；每张评测表来自真实实验——可复现可归因。
+
+  # =================================================================
+  # 不可答题 —— unrelated（与语料完全无关，必须拒答）
+  # =================================================================
+  - id: q048
+    kind: unanswerable
+    question: 杭州明天会下雨吗？
+    reason: unrelated
+    notes: 天气信息语料全无，属时间敏感的开放信息，必须拒答。
+
+  - id: q049
+    kind: unanswerable
+    question: 在家做一杯拿铁咖啡的正确步骤是什么？
+    reason: unrelated
+    notes: 咖啡制作与学习资料无关，任何"给出步骤"的回答都来自模型自身知识。
+
+  - id: q050
+    kind: unanswerable
+    question: 推荐一本适合复习间隙看的侦探小说。
+    reason: unrelated
+    notes: 语料不含任何文学作品信息，推荐即幻觉。
+
+  - id: q051
+    kind: unanswerable
+    question: 从北京坐高铁到上海需要多长时间？
+    reason: unrelated
+    notes: 交通时长是外部事实数据，语料无此信息。
+
+  - id: q052
+    kind: unanswerable
+    question: 最近有什么适合写代码时听的歌单推荐吗？
+    reason: unrelated
+    notes: 音乐推荐超出知识库范围且依赖时效信息。
+
+  - id: q053
+    kind: unanswerable
+    question: 8GB 显存的显卡能跑多大的大模型？
+    reason: unrelated
+    notes: 硬件规格与显存推理配置语料未覆盖，属设备经验问题。
+
+  # =================================================================
+  # 不可答题 —— insufficient（沾边但资料不足，必须拒答而非硬答）
+  # =================================================================
+  - id: q054
+    kind: unanswerable
+    question: 训练一个模型通常要循环几个 epoch 才够？
+    reason: insufficient
+    notes: 语料只讲训练算法原理，没有训练轮数的经验值，具体 epoch 取决于任务规模。
+
+  - id: q055
+    kind: unanswerable
+    question: 给高斯核选 γ 一般有哪些经验做法？
+    reason: insufficient
+    notes: 语料只给出 RBF 核公式，没有超参数调优经验，硬答即编造。
+
+  - id: q056
+    kind: unanswerable
+    question: RAG 论文在开放域问答基准上具体提升了多少个百分点？
+    reason: insufficient
+    notes: 语料只说"显著提升事实准确性"，未给出任何数值结果。
+
+  - id: q057
+    kind: unanswerable
+    question: 把 KNN 用在文本分类上效果通常怎样？
+    reason: insufficient
+    notes: 语料仅提及文本高维稀疏用余弦相似度更合适，未讨论 KNN 文本分类的整体表现。
+
+  - id: q058
+    kind: unanswerable
+    question: 语料对"大模型什么时候会涌现"给出过明确的条件吗？
+    reason: insufficient
+    notes: 语料只说更大的模型会出现涌现能力，未定义涌现的条件与阈值——提问的"明确条件"资料没有。
+
+  # =================================================================
+  # 不可答题 —— hallucination_bait（模型常识可答但资料没有，最能考验纪律）
+  # =================================================================
+  - id: q059
+    kind: unanswerable
+    question: Attention Is All You Need 这篇论文一共有几位作者？
+    reason: hallucination_bait
+    notes: 语料提到论文与贡献，但作者人数属于模型可能"记得"的外部知识，资料中没有，必须拒答。
+
+  - id: q060
+    kind: unanswerable
+    question: Transformer 的每一层参数量大概是多少？
+    reason: hallucination_bait
+    notes: 语料讲了结构与机制，没有任何参数量数字；模型凭常识能编出数字，正是幻觉高发题。
+
+  - id: q061
+    kind: unanswerable
+    question: ResNet-50 的结构里一共用了多少次池化操作？
+    reason: hallucination_bait
+    notes: 语料只介绍残差连接思想与经典网络演进，ResNet-50 具体结构数字资料没有。
+
+  - id: q062
+    kind: unanswerable
+    question: 当前公认最强的开源大模型叫什么？
+    reason: hallucination_bait
+    notes: 时效性事实（最强模型随发布变化），语料不可能覆盖，答"某个模型"即幻觉+过期信息。
+
+  - id: q063
+    kind: unanswerable
+    question: Attention 机制最早是被提出用来解决什么任务的？
+    reason: hallucination_bait
+    notes: 语料只讲注意力的计算与在 Transformer 中的作用，不涉及机制的历史溯源。

@@ -1,0 +1,63 @@
+# CI：双平台（Windows + Ubuntu）跑 lint / 类型检查 / 测试 / CLI 冒烟
+# 全程使用 offline profile（MockLLM + 纯 BM25），无需任何 API 密钥、无需网络请求模型服务
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    env:
+      # 终端按 UTF-8 输出：CI 的英文 Windows 控制台默认 cp1252，中文日志会
+      # 变成问号（代码侧已有 errors="replace" 兜底，这里让日志可读）
+      PYTHONUTF8: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.13"]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # 必须连 [local] 一起装：CI 与开发环境要一致。
+      # 只装 [dev] 时 fastembed 缺席，`ignore_missing_imports` 会把整个导入忽略，
+      # 于是 reranker.py 里 `# type: ignore[attr-defined]` 变成**多余**，
+      # 撞上 `warn_unused_ignores = true` → mypy 报错（2026-09-11 首次 CI 实测）
+      - name: Install package (dev + local extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,local]"
+
+      # 诊断：CI 失败时先确认"环境与本地差在哪"（解释器版本、默认编码、
+      # 依赖版本）——2026-09-11 首次上线时本地怎么都复现不出 CI 的失败
+      - name: Environment info
+        run: |
+          python -c "import sys, locale; print('python:', sys.version); print('stdout:', sys.stdout.encoding); print('preferred:', locale.getpreferredencoding()); print('filesystem:', sys.getfilesystemencoding())"
+          pip list
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: Mypy type check
+        run: mypy src
+
+      # -x：首个失败即停，日志聚焦；--tb=short：完整断言上下文但去掉长栈
+      - name: Pytest (offline, no API keys needed)
+        run: pytest -v --cov=mikasa --cov-report=term -x --tb=short
+
+      - name: CLI smoke test (offline profile)
+        run: python -m mikasa doctor --profile offline

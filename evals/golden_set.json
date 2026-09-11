@@ -1,0 +1,672 @@
+{
+  "name": "mikasa-golden",
+  "corpus_sha256": "b8de6c0d3821718aa46c64508d82f6d44963937dce4f96a233fa611b62de4804",
+  "created": "2026-09-11",
+  "items": [
+    {
+      "id": "q001",
+      "kind": "answerable",
+      "question": "线性回归假设目标与特征之间是什么关系？最常用的损失函数是什么？",
+      "difficulty": "easy",
+      "gold_chunk_ids": [
+        6
+      ],
+      "notes": "线性关系 y=w·x+b；MSE=预测与真实之差的平方的平均；训练目标是最小化损失。",
+      "reason": null
+    },
+    {
+      "id": "q002",
+      "kind": "answerable",
+      "question": "特征矩阵 X 列满秩时，线性回归存在什么形式的解？叫什么名字？",
+      "difficulty": "easy",
+      "gold_chunk_ids": [
+        6
+      ],
+      "notes": "正规方程 w=(XᵀX)⁻¹Xᵀy；闭式解无需迭代；代价是求逆 O(n·d²)、XᵀX 可能不可逆。",
+      "reason": null
+    },
+    {
+      "id": "q003",
+      "kind": "answerable",
+      "question": "梯度下降里学习率设置过大或过小分别会怎样？",
+      "difficulty": "easy",
+      "gold_chunk_ids": [
+        7
+      ],
+      "notes": "学习率控制每次更新步长；太大震荡/发散，太小收敛缓慢——需要适中或调度。",
+      "reason": null
+    },
+    {
+      "id": "q004",
+      "kind": "answerable",
+      "question": "逻辑回归如何把线性输出转成概率？决策边界长什么样？",
+      "difficulty": "easy",
+      "gold_chunk_ids": [
+        8
+      ],
+      "notes": "sigmoid 把 z 压缩到 (0,1) 视为正类概率；σ≥0.5 判正类；边界在原空间仍为（超）直线。",
+      "reason": null
+    },
+    {
+      "id": "q005",
+      "kind": "answerable",
+      "question": "为什么逻辑回归不用均方误差而改用交叉熵损失？",
+      "difficulty": "easy",
+      "gold_chunk_ids": [
+        9
+      ],
+      "notes": "MSE 在分类上损失非凸、优化困难；交叉熵最小化等价于让模型分布逼近真实分布。",
+      "reason": null
+    },
+    {
+      "id": "q006",
+      "kind": "answerable",
+      "question": "什么是过拟合？它和欠拟合的区别是什么？",
+      "difficulty": "easy",
+      "gold_chunk_ids": [
+        11
+      ],
+      "notes": "过拟合=训练好测试差，容量超过数据信息量、把噪声当规律；欠拟合=模型太简单连训练集都学不好。",
+      "reason": null
+    },
+    {
+      "id": "q007",
+      "kind": "answerable",
+      "question": "L2 正则化为什么也叫权重衰减？它鼓励什么样的权重？",
+      "difficulty": "easy",
+      "gold_chunk_ids": [
+        12
+      ],
+      "notes": "L2=λ‖w‖²，梯度 −2λw 每步把权重向零收缩；鼓励小而分散的权重、假设空间变平滑。",
+      "reason": null
+    },
+    {
+      "id": "q008",
+      "kind": "answerable",
+      "question": "Dropout 在训练和测试时的行为有什么不同？为什么测试时要除 p？",
+      "difficulty": "easy",
+      "gold_chunk_ids": [
+        12
+      ],
+      "notes": "训练随机置零造子网络集合；测试全用但不丢弃；inverted dropout 训练期除以 p 保期望一致。",
+      "reason": null
+    },
+    {
+      "id": "q009",
+      "kind": "answerable",
+      "question": "随机森林与普通 Bagging 的关键区别是什么？",
+      "difficulty": "easy",
+      "gold_chunk_ids": [
+        15
+      ],
+      "notes": "树分裂只从随机特征子集选切分点；作用=降树间相关性、强化方差削减。",
+      "reason": null
+    },
+    {
+      "id": "q010",
+      "kind": "answerable",
+      "question": "KNN 为什么对特征尺度极其敏感？使用前要做什么？",
+      "difficulty": "easy",
+      "gold_chunk_ids": [
+        18
+      ],
+      "notes": "大尺度特征主导欧氏距离计算；必须标准化/归一化后再算距离。",
+      "reason": null
+    },
+    {
+      "id": "q011",
+      "kind": "answerable",
+      "question": "为什么神经网络里的激活函数必须是非线性的？",
+      "difficulty": "easy",
+      "gold_chunk_ids": [
+        21
+      ],
+      "notes": "线性复合仍线性→深网络退化等价单层线性；ReLU/sigmoid/tanh 提供非线性。",
+      "reason": null
+    },
+    {
+      "id": "q012",
+      "kind": "answerable",
+      "question": "卷积层相比全连接层的两大设计特性是什么？",
+      "difficulty": "easy",
+      "gold_chunk_ids": [
+        26
+      ],
+      "notes": "局部连接+权值共享；编码了图像特征平移不变性的先验；参数量与图尺寸无关。",
+      "reason": null
+    },
+    {
+      "id": "q013",
+      "kind": "answerable",
+      "question": "缩放点积注意力为什么要除以根号 dk？",
+      "difficulty": "easy",
+      "gold_chunk_ids": [
+        30
+      ],
+      "notes": "除 √dₖ 防点积方差随维度过大；避免 softmax 饱和区梯度消失。",
+      "reason": null
+    },
+    {
+      "id": "q014",
+      "kind": "answerable",
+      "question": "one-hot 表示词有哪些问题？分布式词向量解决了什么？",
+      "difficulty": "easy",
+      "gold_chunk_ids": [
+        32
+      ],
+      "notes": "one-hot=维度灾难+词向量正交无语义关系；词嵌入低维稠密且语义相近距离近，类比关系进向量几何。",
+      "reason": null
+    },
+    {
+      "id": "q015",
+      "kind": "answerable",
+      "question": "RAG 相比微调（fine-tuning）有什么优势？",
+      "difficulty": "easy",
+      "gold_chunk_ids": [
+        38
+      ],
+      "notes": "资料可随时增删、无需训练、成本低——私域问答主流方案。",
+      "reason": null
+    },
+    {
+      "id": "q016",
+      "kind": "answerable",
+      "question": "严谨实验里训练集、验证集、测试集分别做什么用？",
+      "difficulty": "easy",
+      "gold_chunk_ids": [
+        40
+      ],
+      "notes": "训练集学参数；验证集调超参/早停；测试集只在全部决定后评一次，防乐观偏差。",
+      "reason": null
+    },
+    {
+      "id": "q017",
+      "kind": "answerable",
+      "question": "批量梯度下降和小批量随机梯度下降各有什么特点？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        7
+      ],
+      "notes": "批量=全样本慢但梯度准；小批量=每小批估一次梯度，稳定性与速度折中。",
+      "reason": null
+    },
+    {
+      "id": "q018",
+      "kind": "answerable",
+      "question": "为什么特征尺度差异大时梯度下降收敛慢？怎么缓解？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        7
+      ],
+      "notes": "尺度不齐→等高线狭长椭圆→之字形震荡慢；对策=特征标准化。",
+      "reason": null
+    },
+    {
+      "id": "q019",
+      "kind": "answerable",
+      "question": "判断模型开始过拟合的常规信号是什么？这个信号为什么可靠？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        11
+      ],
+      "notes": "训练损失降但验证损失回升=过拟合信号；验证集独立于训练集故信号可靠。",
+      "reason": null
+    },
+    {
+      "id": "q020",
+      "kind": "answerable",
+      "question": "L1 与 L2 正则化作用有什么不同？L1 为什么能做特征选择？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        12
+      ],
+      "notes": "L1 梯度恒 ±λ 把不重要权重压零→稀疏解→特征选择；L2 把权重向零收缩→小权重平滑解。",
+      "reason": null
+    },
+    {
+      "id": "q021",
+      "kind": "answerable",
+      "question": "除了正则化项，数据层面和训练流程上还有哪些防过拟合手段？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        13
+      ],
+      "notes": "更多数据/数据增强扩样本；早停=验证集不再改善即停，等效限制容量、成本最低；常多手段组合。",
+      "reason": null
+    },
+    {
+      "id": "q022",
+      "kind": "answerable",
+      "question": "决策树分裂时衡量\"不纯度下降\"的三种准则分别对应哪些经典算法？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        14
+      ],
+      "notes": "ID3 用信息增益（熵）；C4.5 用信息增益率；CART 用基尼指数。",
+      "reason": null
+    },
+    {
+      "id": "q023",
+      "kind": "answerable",
+      "question": "Bagging 与 Boosting 分别主要降低模型的哪一类误差？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        15
+      ],
+      "notes": "Bagging（随机森林）降方差：并行+投票平均；Boosting（GBDT/XGBoost）串行学残差：降偏差。",
+      "reason": null
+    },
+    {
+      "id": "q024",
+      "kind": "answerable",
+      "question": "SVM 软间隔里的惩罚系数 C 起什么作用？C 太大或太小各有什么后果？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        16
+      ],
+      "notes": "C 在间隔与误分类间权衡；C 大不容忍误分→易过拟合；C 小边界宽松。",
+      "reason": null
+    },
+    {
+      "id": "q025",
+      "kind": "answerable",
+      "question": "SVM 为什么是\"稀疏\"的——最终解只由哪些样本决定？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        16
+      ],
+      "notes": "解只由间隔边界上的支持向量决定；对远离边界的样本不敏感。",
+      "reason": null
+    },
+    {
+      "id": "q026",
+      "kind": "answerable",
+      "question": "KNN 中 K 取太大或太小分别有什么问题？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        18
+      ],
+      "notes": "K 小→过拟合噪声敏感；K 大→边界过平滑混类；K 是唯一主要超参数。",
+      "reason": null
+    },
+    {
+      "id": "q027",
+      "kind": "answerable",
+      "question": "K-means 对初始化敏感，工程上怎么缓解？K 值怎么选？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        19
+      ],
+      "notes": "K-means++ 让初始中心分散 / 多次随机初始化取最优；肘部法则=SSE-K 曲线拐点选 K。",
+      "reason": null
+    },
+    {
+      "id": "q028",
+      "kind": "answerable",
+      "question": "自注意力相对 RNN 在处理序列时最大的结构优势是什么？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        30
+      ],
+      "notes": "每位置一步直达全序列任意位置、一步建模全局依赖——相对 RNN 逐时刻递推的最大优势。",
+      "reason": null
+    },
+    {
+      "id": "q029",
+      "kind": "answerable",
+      "question": "Transformer 为什么需要位置编码？有哪些实现变体？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        31
+      ],
+      "notes": "自注意力不感知顺序故需位置编码；原论文正余弦、后有可学习位置编码与 RoPE 变体。",
+      "reason": null
+    },
+    {
+      "id": "q030",
+      "kind": "answerable",
+      "question": "Word2Vec 的 CBOW 与 Skip-gram 两种训练目标分别是什么？负采样解决什么问题？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        32
+      ],
+      "notes": "CBOW 上下文预测中心词 / Skip-gram 反向；负采样以正+若干负样本二分类代替全词典 softmax 降计算。",
+      "reason": null
+    },
+    {
+      "id": "q031",
+      "kind": "answerable",
+      "question": "PPL 作为语言模型指标有什么已知局限？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        33
+      ],
+      "notes": "跨语料不可直接比；PPL 降不代表生成质量升；仍是训练主监控指标。",
+      "reason": null
+    },
+    {
+      "id": "q032",
+      "kind": "answerable",
+      "question": "上下文学习里用 few-shot 示例要注意什么？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        36
+      ],
+      "notes": "示例占上下文窗口；示例的选择与顺序都影响效果。",
+      "reason": null
+    },
+    {
+      "id": "q033",
+      "kind": "answerable",
+      "question": "混合检索（BM25+向量）为什么通常优于单路检索？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        38
+      ],
+      "notes": "BM25 精确匹配术语、dense 语义相似；RRF 融合常优于任意单路。",
+      "reason": null
+    },
+    {
+      "id": "q034",
+      "kind": "answerable",
+      "question": "做消融实验时为什么要强调控制变量？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        41
+      ],
+      "notes": "一次只切换一个组件；同时改多处→指标变化无法归因。",
+      "reason": null
+    },
+    {
+      "id": "q035",
+      "kind": "answerable",
+      "question": "偏差-方差分解说了什么？正则化在其中的作用是什么？",
+      "difficulty": "medium",
+      "gold_chunk_ids": [
+        44
+      ],
+      "notes": "总误差=偏差²+方差+噪声；正则化在偏差与方差之间权衡。",
+      "reason": null
+    },
+    {
+      "id": "q036",
+      "kind": "answerable",
+      "question": "正规方程有哪些局限？特征维度高或 XᵀX 不可逆时工程上怎么办？",
+      "difficulty": "hard",
+      "gold_chunk_ids": [
+        6,
+        7
+      ],
+      "notes": "正规方程局限=O(n·d²) 求逆、XᵀX 可能不可逆；对策=梯度下降（+标准化），收敛到全局最优。",
+      "reason": null
+    },
+    {
+      "id": "q037",
+      "kind": "answerable",
+      "question": "逻辑回归的决策边界为什么是线性的？它如何推广到多分类？",
+      "difficulty": "hard",
+      "gold_chunk_ids": [
+        8,
+        10
+      ],
+      "notes": "σ 单调→阈值在 z 空间等价线性超平面；softmax 把 logits 变分布，是 sigmoid 多类推广。",
+      "reason": null
+    },
+    {
+      "id": "q038",
+      "kind": "answerable",
+      "question": "从\"过拟合的本质\"出发解释：为什么噪声会被模型当成规律？怎么用容量视角看待正则化与数据增强？",
+      "difficulty": "hard",
+      "gold_chunk_ids": [
+        11
+      ],
+      "notes": "容量超数据信息量→噪声当规律；正则化（容量惩罚）/数据增强（加信息量）从两端修正。",
+      "reason": null
+    },
+    {
+      "id": "q039",
+      "kind": "answerable",
+      "question": "反向传播相比数值差分求梯度快在哪？现代深度学习框架如何实现它？",
+      "difficulty": "hard",
+      "gold_chunk_ids": [
+        22
+      ],
+      "notes": "数值差分每参数一次、代价高不精确；BP 一次前向+一次反向得全部梯度；框架=计算图+自动微分。",
+      "reason": null
+    },
+    {
+      "id": "q040",
+      "kind": "answerable",
+      "question": "RNN 的\"长期依赖难题\"在数学上是怎么产生的？LSTM 用什么结构绕过它？",
+      "difficulty": "hard",
+      "gold_chunk_ids": [
+        29
+      ],
+      "notes": "梯度回传每步乘 U 的 Jacobian，奇异值<1 指数衰减/大于 1 爆炸；LSTM 以细胞状态传送带+三门的近恒等通路保长距离信息。",
+      "reason": null
+    },
+    {
+      "id": "q041",
+      "kind": "answerable",
+      "question": "为什么 Transformer 最终取代了 RNN 成为大模型主流架构？",
+      "difficulty": "hard",
+      "gold_chunk_ids": [
+        29,
+        30,
+        31
+      ],
+      "notes": "串行难并行+长序列遗忘风险；自注意力一步全局依赖；全序列可并行训练快。",
+      "reason": null
+    },
+    {
+      "id": "q042",
+      "kind": "answerable",
+      "question": "为什么大模型主流选择 decoder-only 架构而不是 BERT 式编码器？",
+      "difficulty": "hard",
+      "gold_chunk_ids": [
+        34
+      ],
+      "notes": "BERT 双向预训练擅长理解但生成不友好；decoder-only 统一理解+生成、因果注意力适配自回归。",
+      "reason": null
+    },
+    {
+      "id": "q043",
+      "kind": "answerable",
+      "question": "RLHF 对齐的三段式流程是什么？为什么说模型\"知道\"不等于\"做到\"？",
+      "difficulty": "hard",
+      "gold_chunk_ids": [
+        35
+      ],
+      "notes": "SFT→奖励模型→PPO 三步；能力分层=预训练定基础、对齐塑遵循与价值观；评测看真实任务表现。",
+      "reason": null
+    },
+    {
+      "id": "q044",
+      "kind": "answerable",
+      "question": "RAG 流水线里分块质量为什么直接影响召回？块太大和块太小各有什么坏处？",
+      "difficulty": "hard",
+      "gold_chunk_ids": [
+        38
+      ],
+      "notes": "块太大噪声多、块太小上下文割裂；按标题结构切分+重叠窗口缓解边界切断。",
+      "reason": null
+    },
+    {
+      "id": "q045",
+      "kind": "answerable",
+      "question": "评测一个 RAG 系统时为什么要\"分层看指标\"？各层分别看什么？",
+      "difficulty": "hard",
+      "gold_chunk_ids": [
+        39
+      ],
+      "notes": "分层=检索层 recall@k 看真相关是否召回、生成层看引用精确率与拒答准确率；有据能答、无据能拒，两者都要测。",
+      "reason": null
+    },
+    {
+      "id": "q046",
+      "kind": "answerable",
+      "question": "语料建议的论文阅读方法是怎样的？读完一篇要追问什么问题？",
+      "difficulty": "hard",
+      "gold_chunk_ids": [
+        50
+      ],
+      "notes": "四段式笔记=动机-方法-实验-局限；追问=方法放进自己 RAG 项目消融实验怎么设计。",
+      "reason": null
+    },
+    {
+      "id": "q047",
+      "kind": "answerable",
+      "question": "语料里\"项目要能扛住追问\"具体指什么标准？",
+      "difficulty": "hard",
+      "gold_chunk_ids": [
+        3
+      ],
+      "notes": "每个设计决策能说出取舍；每张评测表来自真实实验——可复现可归因。",
+      "reason": null
+    },
+    {
+      "id": "q048",
+      "kind": "unanswerable",
+      "question": "杭州明天会下雨吗？",
+      "difficulty": null,
+      "gold_chunk_ids": [],
+      "notes": "天气信息语料全无，属时间敏感的开放信息，必须拒答。",
+      "reason": "unrelated"
+    },
+    {
+      "id": "q049",
+      "kind": "unanswerable",
+      "question": "在家做一杯拿铁咖啡的正确步骤是什么？",
+      "difficulty": null,
+      "gold_chunk_ids": [],
+      "notes": "咖啡制作与学习资料无关，任何\"给出步骤\"的回答都来自模型自身知识。",
+      "reason": "unrelated"
+    },
+    {
+      "id": "q050",
+      "kind": "unanswerable",
+      "question": "推荐一本适合复习间隙看的侦探小说。",
+      "difficulty": null,
+      "gold_chunk_ids": [],
+      "notes": "语料不含任何文学作品信息，推荐即幻觉。",
+      "reason": "unrelated"
+    },
+    {
+      "id": "q051",
+      "kind": "unanswerable",
+      "question": "从北京坐高铁到上海需要多长时间？",
+      "difficulty": null,
+      "gold_chunk_ids": [],
+      "notes": "交通时长是外部事实数据，语料无此信息。",
+      "reason": "unrelated"
+    },
+    {
+      "id": "q052",
+      "kind": "unanswerable",
+      "question": "最近有什么适合写代码时听的歌单推荐吗？",
+      "difficulty": null,
+      "gold_chunk_ids": [],
+      "notes": "音乐推荐超出知识库范围且依赖时效信息。",
+      "reason": "unrelated"
+    },
+    {
+      "id": "q053",
+      "kind": "unanswerable",
+      "question": "8GB 显存的显卡能跑多大的大模型？",
+      "difficulty": null,
+      "gold_chunk_ids": [],
+      "notes": "硬件规格与显存推理配置语料未覆盖，属设备经验问题。",
+      "reason": "unrelated"
+    },
+    {
+      "id": "q054",
+      "kind": "unanswerable",
+      "question": "训练一个模型通常要循环几个 epoch 才够？",
+      "difficulty": null,
+      "gold_chunk_ids": [],
+      "notes": "语料只讲训练算法原理，没有训练轮数的经验值，具体 epoch 取决于任务规模。",
+      "reason": "insufficient"
+    },
+    {
+      "id": "q055",
+      "kind": "unanswerable",
+      "question": "给高斯核选 γ 一般有哪些经验做法？",
+      "difficulty": null,
+      "gold_chunk_ids": [],
+      "notes": "语料只给出 RBF 核公式，没有超参数调优经验，硬答即编造。",
+      "reason": "insufficient"
+    },
+    {
+      "id": "q056",
+      "kind": "unanswerable",
+      "question": "RAG 论文在开放域问答基准上具体提升了多少个百分点？",
+      "difficulty": null,
+      "gold_chunk_ids": [],
+      "notes": "语料只说\"显著提升事实准确性\"，未给出任何数值结果。",
+      "reason": "insufficient"
+    },
+    {
+      "id": "q057",
+      "kind": "unanswerable",
+      "question": "把 KNN 用在文本分类上效果通常怎样？",
+      "difficulty": null,
+      "gold_chunk_ids": [],
+      "notes": "语料仅提及文本高维稀疏用余弦相似度更合适，未讨论 KNN 文本分类的整体表现。",
+      "reason": "insufficient"
+    },
+    {
+      "id": "q058",
+      "kind": "unanswerable",
+      "question": "语料对\"大模型什么时候会涌现\"给出过明确的条件吗？",
+      "difficulty": null,
+      "gold_chunk_ids": [],
+      "notes": "语料只说更大的模型会出现涌现能力，未定义涌现的条件与阈值——提问的\"明确条件\"资料没有。",
+      "reason": "insufficient"
+    },
+    {
+      "id": "q059",
+      "kind": "unanswerable",
+      "question": "Attention Is All You Need 这篇论文一共有几位作者？",
+      "difficulty": null,
+      "gold_chunk_ids": [],
+      "notes": "语料提到论文与贡献，但作者人数属于模型可能\"记得\"的外部知识，资料中没有，必须拒答。",
+      "reason": "hallucination_bait"
+    },
+    {
+      "id": "q060",
+      "kind": "unanswerable",
+      "question": "Transformer 的每一层参数量大概是多少？",
+      "difficulty": null,
+      "gold_chunk_ids": [],
+      "notes": "语料讲了结构与机制，没有任何参数量数字；模型凭常识能编出数字，正是幻觉高发题。",
+      "reason": "hallucination_bait"
+    },
+    {
+      "id": "q061",
+      "kind": "unanswerable",
+      "question": "ResNet-50 的结构里一共用了多少次池化操作？",
+      "difficulty": null,
+      "gold_chunk_ids": [],
+      "notes": "语料只介绍残差连接思想与经典网络演进，ResNet-50 具体结构数字资料没有。",
+      "reason": "hallucination_bait"
+    },
+    {
+      "id": "q062",
+      "kind": "unanswerable",
+      "question": "当前公认最强的开源大模型叫什么？",
+      "difficulty": null,
+      "gold_chunk_ids": [],
+      "notes": "时效性事实（最强模型随发布变化），语料不可能覆盖，答\"某个模型\"即幻觉+过期信息。",
+      "reason": "hallucination_bait"
+    },
+    {
+      "id": "q063",
+      "kind": "unanswerable",
+      "question": "Attention 机制最早是被提出用来解决什么任务的？",
+      "difficulty": null,
+      "gold_chunk_ids": [],
+      "notes": "语料只讲注意力的计算与在 Transformer 中的作用，不涉及机制的历史溯源。",
+      "reason": "hallucination_bait"
+    }
+  ]
+}

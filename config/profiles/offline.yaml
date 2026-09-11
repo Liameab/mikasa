@@ -1,0 +1,43 @@
+# ============================================================
+# offline profile —— 零密钥离线模式（CI / 教学演示 / 断网兜底）
+#   LLM      : MockLLM（内置模拟，用于演示检索与引用解析流程）
+#   Embedding: 关闭（dense_enabled=false），仅 BM25 路
+#   Reranker : 关闭
+#   Judge    : 关闭（检索层指标 recall@k/MRR/nDCG 仍可完整评测）
+# 用途：无任何 API key 时验证全链路、跑确定性单元/集成测试；
+#       CI 双平台即以此 profile 运行。
+# ============================================================
+
+profile: offline
+
+chunking:
+  size: 400
+  overlap: 50
+  title_prefix: true
+
+retrieval:
+  bm25_top_k: 20
+  dense_top_k: 20
+  dense_enabled: false
+  # 融合窗口 10：与 api/local 同构（api 档真实验收实证 @10 比 @8 全）
+  fusion_top_k: 10
+  fusion_k: 60
+
+reranker:
+  backend: none
+
+llm:
+  backend: mock                 # MockLLM：无需密钥、确定性输出
+  model: mock-zh-1
+  temperature: 0.0
+  max_tokens: 1024
+
+embedding:
+  backend: none
+
+judge:
+  enabled: false
+
+web:
+  host: 127.0.0.1
+  port: 8000

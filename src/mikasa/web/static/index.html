@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<!-- ============================================================================
+     Mikasa —— 问答页
+     结构：左侧会话栏（新建/历史）+ 右侧对话区（消息流 + 底部提问条）。
+     JS 入口：/static/js/qa.js（ES Module）；样式全站共用 style.css。
+     ============================================================================ -->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>问答 · Mikasa</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" href="data:,">
+</head>
+<body>
+
+  <!-- 顶栏：品牌 + 三页导航 + 服务状态（initTopbar 填实况） -->
+  <header class="topbar">
+    <a class="brand" href="/">Mikasa<small>RAG 问答</small></a>
+    <nav class="main">
+      <a href="/" data-page="qa">问答</a>
+      <a href="/documents" data-page="documents">知识库</a>
+      <a href="/eval" data-page="eval">评测</a>
+    </nav>
+    <div class="health-pill"><span class="muted small">正在连接服务…</span></div>
+    <button id="btn-settings" class="icon-btn" type="button" title="聊天设置" aria-label="聊天设置">⚙</button>
+  </header>
+
+  <!-- 聊天设置面板（昵称/字号/对话框背景；本地保存，见 js/settings.js） -->
+  <div id="settings-panel" class="settings-panel hidden" role="dialog" aria-label="聊天设置">
+    <div class="s-head">
+      <span>聊天设置</span>
+      <button id="s-close" class="icon-btn" type="button" title="关闭">✕</button>
+    </div>
+    <div class="s-body">
+      <div class="s-group">聊天外观</div>
+      <label class="s-row">
+        <span class="s-name">我的昵称</span>
+        <input id="s-nick" type="text" maxlength="20" placeholder="我" autocomplete="off">
+      </label>
+      <span class="s-hint">聊天里“我”的标识；将来账号功能上线后自动沿用此昵称</span>
+
+      <label class="s-row">
+        <span class="s-name">消息字号</span>
+        <input id="s-font" type="range" min="12" max="20" step="0.5" aria-label="消息字号">
+        <span id="s-font-val" class="s-val">14.5</span>
+      </label>
+
+      <div class="s-row">
+        <span class="s-name">聊天空背景</span>
+        <span id="s-swatches" class="s-swatches"></span>
+      </div>
+      <span class="s-hint">颜色与图片只铺在右侧对话区（消息背后），不遮文字</span>
+
+      <div class="s-row">
+        <span class="s-name">背景图片</span>
+        <span class="s-imgrow">
+          <button id="s-bgimg-btn" class="btn ghost" type="button">选择图片…</button>
+          <button id="s-bgimg-clear" class="btn ghost" type="button">移除图片</button>
+        </span>
+      </div>
+      <img id="s-bgimg-preview" class="s-preview hidden" alt="背景图预览">
+      <input id="s-bgimg" type="file" accept="image/*" class="hidden">
+      <span class="s-hint">图片压缩后只存在本机浏览器，不会上传服务器</span>
+    </div>
+  </div>
+
+  <main class="qa-layout">
+
+    <!-- 左侧：会话树（文件夹可嵌套，会话归文件夹管理；交互见 js/qa-tree.js） -->
+    <aside class="card session-pane">
+      <h2>对话历史</h2>
+      <div class="side-actions">
+        <button id="new-session" class="btn primary grow" type="button">＋ 新会话</button>
+        <button id="new-folder" class="btn ghost" type="button" title="新建文件夹（可嵌套）">＋ 文件夹</button>
+      </div>
+      <div id="session-list" class="session-list"></div>
+    </aside>
+
+    <!-- 右侧：消息流 + 提问条 -->
+    <section class="card chat-pane">
+      <div id="messages" class="msg-scroll">
+        <div class="empty" id="welcome">
+          Mikasa支持两种问答模式，底部随时切换：<br>
+          <b>知识库</b> —— 只基于你的资料作答，回答带 <span class="cite">[1]</span> 引用标记，可点击核对原文出处；<br>
+          <b>自由问答</b> —— 直接使用接入的大模型回答任意话题（不检索资料、不带引用）。
+        </div>
+      </div>
+      <div class="composer">
+        <div class="mode-bar" role="group" aria-label="问答模式">
+          <button id="mode-kb" class="btn mode-btn active" type="button" aria-pressed="true">知识库</button>
+          <button id="mode-free" class="btn mode-btn" type="button" aria-pressed="false">自由问答</button>
+        </div>
+        <div class="composer-row">
+          <textarea id="question" rows="1" placeholder="输入你的问题（Enter 发送，Shift+Enter 换行）…"></textarea>
+          <div class="composer-actions">
+            <button id="send" class="btn primary" type="button">发送</button>
+            <span class="hint">Enter ↵ 发送</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <div id="toast"></div>
+  <script type="module" src="/static/js/qa.js"></script>
+</body>
+</html>

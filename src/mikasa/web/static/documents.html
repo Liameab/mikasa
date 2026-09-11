@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<!-- ============================================================================
+     Mikasa —— 知识库页（语料库树形管理，v3）
+     布局：左侧文件夹树（文件夹可嵌套、文档行可拖拽归夹/改名/删除，顶部
+     查找框实时过滤）+ 右侧上传区与选中文档详情。
+     上传 md/txt/pdf/docx（拖拽或选择）→ 入库分块嵌入 → 出现在树根级，
+     拖入文件夹即可归档。
+     JS 入口：/static/js/documents.js（树模块：/static/js/kb-tree.js）
+     ============================================================================ -->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>知识库 · Mikasa</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" href="data:,">
+</head>
+<body>
+
+  <header class="topbar">
+    <a class="brand" href="/">Mikasa<small>RAG 问答</small></a>
+    <nav class="main">
+      <a href="/" data-page="qa">问答</a>
+      <a href="/documents" data-page="documents">知识库</a>
+      <a href="/eval" data-page="eval">评测</a>
+    </nav>
+    <div class="health-pill"><span class="muted small">正在连接服务…</span></div>
+  </header>
+
+  <!-- 布局类沿用问答页（.qa-layout / .session-pane / .session-list 与树的
+       全部行类）：样式在 style.css 里是组件级通用类，直接复用不复制 -->
+  <main class="qa-layout">
+
+    <!-- 左侧：语料文件夹树（文件夹/文档行管理交互见 js/kb-tree.js） -->
+    <aside class="card session-pane">
+      <h2>语料库</h2>
+      <input id="kb-search" class="kb-search" type="search"
+             placeholder="查找文档 / 文件夹…" autocomplete="off" aria-label="查找">
+      <div class="side-actions">
+        <button id="new-kb-folder" class="btn ghost grow" type="button"
+                title="新建文件夹（可嵌套）">＋ 新建文件夹</button>
+      </div>
+      <div id="kb-tree" class="session-list"></div>
+    </aside>
+
+    <!-- 右侧：未选中文档=上传+引导；选中=阅读区（2026-09-10 起右栏直接读
+         正文，不再弹浮层——用户实测反馈"详情卡只有几个字、太丑"） -->
+    <div class="kb-main">
+
+      <!-- 上传区（未选中时） -->
+      <section class="card" id="intro-card">
+        <h2>上传资料（入库后即可被问答检索）</h2>
+        <div id="dropzone" class="dropzone" tabindex="0">
+          <strong>点击选择或拖入文件</strong>
+          <div class="limit">支持 Markdown（.md/.markdown）、纯文本（.txt）、PDF（.pdf）、Word（.docx）；单文件 ≤ 500 MB；重复内容自动跳过；新上传的文件出现在左侧树根级，拖进文件夹即可归档</div>
+          <input id="file-input" type="file" hidden accept=".md,.markdown,.txt,.pdf,.docx">
+        </div>
+        <div id="upload-note" class="muted small" style="margin-top:8px"></div>
+      </section>
+
+      <!-- 语料总览（未选中时）：计数 + 空态引导 -->
+      <section class="card grow" id="list-card">
+        <h2>语料文档 <span id="doc-count" class="pill">0 篇</span></h2>
+        <div id="doc-detail"></div>
+      </section>
+
+      <!-- 阅读区（选中时）：reader.js 内嵌渲染，元数据在底部状态栏 -->
+      <section class="card grow hidden" id="reading-card">
+        <div id="reader-host"></div>
+      </section>
+
+    </div>
+
+  </main>
+
+  <div id="toast"></div>
+  <script type="module" src="/static/js/documents.js"></script>
+</body>
+</html>

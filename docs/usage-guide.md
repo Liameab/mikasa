@@ -1,0 +1,164 @@
+# Usage Guide
+
+> A complete guide that takes you from zero to productive use: the three pages, the paper
+> research workflow, detailed AI Q&A usage, corpus management, settings and data privacy.
+> Companion piece to docs/ideas-and-backlog.md (the idea ledger).
+
+---
+
+## 1. What Mikasa Is
+
+A local-first personal document RAG workspace:
+
+- **Knowledge-base Q&A (kb)**: upload your material (md/txt/pdf/docx) first, then ask questions — answers **quote chunks of the original corpus** (`[n]` markers; click one to highlight the source), and when retrieval finds nothing the system refuses explicitly (an anti-hallucination feature, not a matching failure);
+- **Free-form Q&A (free)**: no knowledge-base lookup, goes straight to the model for a detailed answer — good for "follow-up questions the material doesn't cover";
+- **All data stays on this machine**: SQLite (data/mikasa.db) + uploaded copies (data/uploads) + indexes, with no third-party cloud in the path; the offline profile works with the network disconnected.
+
+The typical loop (a user scenario): you hit an unfamiliar concept while working through problems → kb gives you a precise, citation-traced answer from your notes → free expands on the underlying principles and related ideas → you write the new understanding back into your notes and ingest them. Knowledge accumulates; that is the loop.
+
+---
+
+## 2. Quick Start
+
+**Double-click `Mikasa.bat`** (or the "Mikasa" desktop shortcut) → it brings up Ollama (if it isn't already running) plus the service → the browser opens http://127.0.0.1:8787/ automatically. To stop it, close the minimized "Mikasa service" window in the taskbar.
+
+Manual start (developers):
+```bash
+.venv\Scripts\mikasa.exe serve --profile local --port 8787
+```
+Three profiles: `api` (DeepSeek generation + SiliconFlow embeddings/reranking, best quality, needs keys in .env) / `local` (Ollama qwen3:8b + fastembed, free and offline) / `offline` (MockLLM, zero-key demos and evaluation; the free-chat toggle is greyed out). Default data directory = `data/` at the repository root.
+
+---
+
+## 3. Page Tour
+
+Three pages in the top bar: **Chat** (home) / **Library** / **Evaluation**; the status pill in the top right shows the current model and the live connection state.
+
+| Page | Left | Right |
+|---|---|---|
+| Chat | Session tree | Chat area (with the free-chat toggle) |
+| Library | Corpus folder tree + search box | Upload area + details of the selected document |
+| Evaluation | — | Golden-set evaluation runs + past reports |
+
+---
+
+## 4. Knowledge-Base Q&A (Including the Paper Research Workflow)
+
+**The mode switch** sits above the input box: `KB` / `Free chat` (locked while an answer is streaming; the toggle state belongs to the individual message).
+
+### 4.1 Researching a Paper or Looking Up Material in Five Steps
+1. Switch to the **Library** page and drag in or browse to your papers/notes (md/.txt/pdf/docx, max 500 MB per file; duplicate content is skipped automatically; re-uploading an updated file under the same name replaces it in place, keeping both its title and its folder placement);
+2. Optionally **create folders to organize** the tree on the left (drag a document row into a folder, or use the ⋯ at the end of a row → Move to…);
+3. Go back to the **Chat** page and confirm the mode is KB;
+4. Ask a question — preferably one **the corpus can actually answer** (paraphrases land just as reliably: recall@10 = 1.000 in the acceptance run):
+   - ✅ "Why does L2 regularization prevent overfitting?", "Compare the update rules of Adam and SGD", "Why is dk square-rooted in the attention mechanism?"
+   - ⚠️ Material that genuinely isn't there triggers a **refusal with an explanation** — that is the anti-hallucination design (see 4.3 for follow-ups);
+5. The answer body carries `[n]` citation markers — **clicking one locates and highlights the matching source chunk in the message area**, so every claim can be traced back; points with insufficient support are called out explicitly;
+6. **When English-language sources are hit, the answer automatically appends an "original vs. translation" section** (api/local profiles, `answer.bilingual`) — each cited English chunk is listed as a pair: `[n] original` + `[n] Chinese translation`, and the `[n]` markers inside those blocks are clickable too. Chinese questions work exactly as before, just with an extra bilingual section; the offline/mock profile makes no extra calls and produces no such block.
+7. **A live timer runs while you wait, and a per-stage breakdown appears once the answer lands**: after you ask, the line above the message ticks up as `Retrieving from the knowledge base… 12.3s`, then becomes `Took 33.1s (generate 25.3s · translate query 4.2s · …)` when it finishes — local qwen3 often needs tens of seconds per turn, and this tells you whether it is thinking or stuck. The breakdown is replayed along with past sessions (the total "took" time is not, since that needs the wall clock of the original turn).
+8. **Clicking a `[n]` marker opens the reader panel on the right, positioned at that chunk** (since 2026-09-10) — the cited passage is highlighted in amber, with its position and surrounding context readable above and below. The reader has two tabs:
+
+   - **Text**: the continuous body text reassembled from the ingested chunks; you can jump to and highlight passages. Note that markdown `#` heading lines and code fences are not visible here (they never entered the chunks), so subheadings are re-laid out from `heading_path`;
+   - **Page** (PDF only, since 2026-09-11): renders the PDF **exactly as it is** into page images and **highlights the chunk you asked about by its coordinates** — **use this when you want the real layout with highlights drawn on it**. Tables, figures, and formulas are all there, untouched. You can page forward and back and jump to a page; to select text or use Ctrl+F, click "↗ Original file" in the top right (the browser's built-in viewer, opened in a new tab). For md/txt this tab is called **Original file**: it shows the text as imported; for docx it offers a download link.
+
+   **The page-number box at the top works in both views, but it jumps differently**: in **Original file** it turns to that page of the PDF; in **Text** it **scrolls to that page's body text and highlights the chunk** (reference sections and the like are stripped during parsing, and a page with no body text says so explicitly). The upper bound is the **original file's** real page count, not the number of pages left after parsing.
+
+   **The same reader panel appears in two forms**:
+
+   | Where | Form | How to open | How to close |
+   |---|---|---|---|
+   | Chat page | Floating panel on the right | Click a `[n]` marker | ✕ / `Esc` / click outside the panel |
+   | **Library page** | **Embedded in the right column** | Click any document row on the left | ✕ to collapse (back to the upload view) |
+
+   After you select a document on the Library page, the right column *is* the **document text itself** (no longer a handful of metadata fields), with a persistent footer line showing `location · type · chunks · characters · status`. The upload area only holds that space when nothing is selected — select something and the space goes to the text.
+
+   **Reader font size**: `A-` / `A+` in the header scale only the reader's body text; the choice is stored locally and remembered next time. **Every citation card has an "↗ Open original file" button** — if you never guessed that the markers were clickable, this is the explicit entry point.
+
+### 4.2 Follow-Up Techniques
+- Chain follow-ups within one turn (the context stays coherent): "What about vanishing gradients?", "What if we switch to L1?";
+- Push for depth with compare / example / boundary questions: "Give me an example", "When does it not apply?";
+- Locating things in a long document is what the citation markers are for — there is no need to paste the whole thing into your question.
+
+### 4.3 When the Knowledge Base Can't Answer
+- Switch to **free chat** and ask the same question there (it unfolds the principles and gives examples);
+- **Write the new understanding into your notes and upload them again** (re-uploading the same file updates it in place) → the KB can answer from then on — knowledge accumulates; that is the loop closing.
+
+---
+
+## 5. Free-Form Q&A in Detail
+
+- No upload, no retrieval, no refusal. The answer style is tuned: **conclusion first → supporting argument → one or two concrete examples → common mistakes and likely test points for study-oriented questions**; length scales with complexity (a few lines when simple, 200–500 characters when moderate, unconstrained when complex but never padded) — capped at 4096 tokens on the `api` profile and 2048 on `local`.
+- **Rich answer rendering**: tables (horizontally scrollable), code blocks (their own dark region with one-click copy in the top right), headings, lists, block quotes, and horizontal rules are all rendered as blocks, as tidy as the Doubao/DeepSeek clients.
+- Suggested ways to ask (treat the model as a sparring partner):
+  - Extend: "Why doesn't the Transformer use a recurrent structure?" (a deep follow-up beyond your notes)
+  - Correct / discriminate: "L2 and Dropout both guard against overfitting — what's the difference, and which do I tune first?"
+  - Self-test: "Give me 3 short-answer questions on this chapter, no answers yet" … "I've answered; grade me"
+  - Summarize: "Turn my questions above into a knowledge framework"
+- When an answer is worth keeping → copy the key points into your notes → upload them to the knowledge base (see 4.3).
+
+---
+
+## 6. Library Page · Managing the Corpus Folder Tree
+
+**Search box**: live filtering at the top — matches folder names and document titles, auto-expanding the branches that match; shows a placeholder hint when nothing matches; ✕ clears it and restores the whole tree in one click.
+
+**Folders** (freely nestable, the same shape as the session tree):
+- Create: the `＋ New folder` button (at the root) or a folder's ⋯ menu → New subfolder;
+- Clicking a row expands/collapses it (arrow ▸/▾);
+- ⋯ menu: expand/collapse / new subfolder / **rename** (inline input; Enter commits, Esc cancels) / **move to…** (opens a path picker, with the folder itself and its descendants greyed out to prevent cycles) / delete (**empty folders only**: a folder containing subfolders or documents returns 409 with a count — a container never takes its documents down with it, so move them out first, then delete).
+
+**Document rows**:
+- Click = select → the details card on the right (path / type / chunk count / character count / ingest time / ingest status);
+- **Drag** = drop onto a folder row to move it in (collapsed folders expand automatically), drop onto a document row to move it into that document's folder, drop on empty space to move it back to the root; the source row goes semi-transparent and the target row is outlined in green;
+- ⋯ menu: rename / move to… / delete (deleting opens an **in-app confirmation dialog** — not a native browser popup; it states plainly that "the chunks and the in-library copy are cleared together, and this cannot be undone", and confirms with a red button. `Esc` or a click outside cancels, so nothing is deleted by accident. Session deletion works the same way).
+
+**Semantics worth remembering**: renaming changes only the display name inside the library (the file in uploads is untouched); deleting a document removes its retrieval chunks and its uploaded copy together; re-uploading identical content is skipped, while re-uploading the same file with new content updates it (organizational placement preserved); and the full rebuild after switching embedding models (`reindex`) likewise preserves your organization.
+
+---
+
+## 7. Session Management (Left Side of the Chat Page)
+
+- `＋ New session` / `＋ Folder` (nestable);
+- Sessions are titled automatically by **distilling the first question** (≤16 characters), and can be renamed via ⋯ → Rename (a manual name is never overwritten by the auto title; once you clear it, the auto title takes over again);
+- Drag a session row into a folder / ⋯ → Move to… (path picker, cycle prevention greyed out); deleting a session cascades to its messages;
+- Finding old sessions: folder organization plus memorable titles (session tree visuals: folders carry a green ring, sessions inside folders an amber ring, plain root-level conversations no decoration).
+
+---
+
+## 8. Chat Settings (⚙ in the Top Right of the Chat Page)
+
+Everything is **persisted locally** (browser localStorage; it applies only to this browser on this machine):
+- **My nickname**: re-signs past message bubbles instantly (a local display-layer feature, and the stand-in until accounts exist);
+- **Message font size**: slider, 12–20;
+- **Chat background color**: 6 presets + a custom color picker;
+- **Background image**: pick a local image → it is compressed automatically (JPEG, long edge 1600) and used as the chat background; removable at any time. The background applies only to the message area.
+
+---
+
+## 9. Evaluation Page
+
+"Golden-set evaluation" uses the built-in question set (golden set, derived from sample-corpus) to verify retrieval and anti-hallucination metrics: recall@k / MRR / refusal rate / out-of-range and invalid citations / false refusals. Click Run (a single task slot) → the past-reports area expands to show per-question details and a metrics summary. A real run consumes actual LLM calls (roughly 4–5 minutes per round on `api`, 25–35 minutes on `local`) — for a fast, deterministic offline demo use `--profile offline`.
+
+---
+
+## 10. Data and Privacy
+
+- **Everything is local**: data/mikasa.db (SQLite) + data/uploads (ingested copies) + data/indexes (index files) + data/logs; settings live in browser localStorage.
+- **Backup** = copy the whole `data/` directory (safest with the service stopped first); the database schema upgrades automatically (the v1→v2→v3 migration path has been rehearsed on a real database), so keep whole-directory backups to allow rollback.
+- API keys live only in .env (api profile), never in the database and never uploaded; the GitHub repository contains neither data/ nor .env.
+- For known boundaries and the failure archive, see docs/known-issues.md and docs/limitations-and-failures.md.
+
+---
+
+## 11. Troubleshooting Quick Reference
+
+| Symptom | Cause / Fix |
+|---|---|
+| The top bar is stuck on "connecting to the service…" | The service isn't running: double-click Mikasa.bat, or start it manually with `mikasa serve --profile local --port 8787` |
+| Chat shows a red "LLM call failed (qwen3:8b…)" | Ollama isn't running (Mikasa.bat starts it automatically; manually, run `ollama.exe serve`); on the api profile it means a missing key or a network problem |
+| Upload reports "unsupported file type" / "size limit" | Extension whitelist (md/txt/pdf/docx) / max 500 MB per file |
+| Deleting a folder returns 409 with a count | The folder contains subfolders or documents; move them out first (see §6) |
+| The KB answers "that isn't in these materials…" | The anti-hallucination refusal feature, not a bug; paraphrase hit rates are verified by evaluation (see §4.1) |
+| The free-chat button is greyed out | A limitation of the offline (zero-key demo) profile; available on api/local |
+| Session titles don't match what you expected | Auto-distilled to ≤16 characters; rename to lock in your own (see §7) |
+| You want different default answer quality | Start with a different profile (api is strongest / local is free); for the model integration design see the idea ledger §5.C |

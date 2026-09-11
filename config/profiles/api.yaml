@@ -1,0 +1,69 @@
+# ============================================================
+# api profile —— 默认模式：云端 API（推荐日常使用）
+#   LLM      : DeepSeek deepseek-chat（需 DEEPSEEK_API_KEY）
+#   Embedding: SiliconFlow BAAI/bge-m3（免费，需 SILICONFLOW_API_KEY）
+#   Reranker : SiliconFlow BAAI/bge-reranker-v2-m3（免费）
+#   Judge    : SiliconFlow Qwen（与生成端不同厂商，抵消自偏好）
+# 密钥写入仓库根目录 .env（勿提交），见 .env.example
+# ============================================================
+
+profile: api
+
+chunking:
+  size: 400
+  overlap: 50
+  title_prefix: true
+
+retrieval:
+  bm25_top_k: 20
+  dense_top_k: 20
+  dense_enabled: true
+  # 融合窗口 10：评测阶段A（黄金集实拍）证明 47 题 recall@10=1.000 而
+  # @8 会漏 hard 综合题的第二金块（q036/q037 实测），10 是数据定出来的值
+  fusion_top_k: 10
+  fusion_k: 60
+  crosslingual: true  # 中文问英文库：查询自动翻译作第二路（2026-09-10）
+
+reranker:
+  backend: api
+  model: BAAI/bge-reranker-v2-m3
+  base_url: https://api.siliconflow.cn/v1
+  api_key_env: SILICONFLOW_API_KEY
+  # 重排后注入生成器的片段数：3 → 5（63 题真实验收中 8 道有据误拒
+  # 与"多块佐证不足"相关，放宽后模型可见素材更全）
+  # → 8（2026-09-11，用户反馈"给的内容太少、会漏掉其他细节"）。注意：改动
+  #   会平移既有评测基线（旧基线按 top_n=5 跑的），跨基线比较要留意。
+  top_n: 8
+
+llm:
+  backend: api
+  base_url: https://api.deepseek.com
+  api_key_env: DEEPSEEK_API_KEY
+  model: deepseek-chat
+  temperature: 0.1
+  # 2026-09-09 由 1024 放开：free 问答要求详实作答（提示词同改）；
+  # DeepSeek 输出速度快，4096 token 上限足够撑长文展开
+  max_tokens: 4096
+
+embedding:
+  backend: api
+  base_url: https://api.siliconflow.cn/v1
+  api_key_env: SILICONFLOW_API_KEY
+  model: BAAI/bge-m3
+  query_prefix: ""
+
+judge:
+  enabled: true
+  backend: api
+  base_url: https://api.siliconflow.cn/v1
+  api_key_env: SILICONFLOW_API_KEY
+  model: Qwen/Qwen2.5-72B-Instruct
+  temperature: 0.0
+  template_version: "2026-09-01"
+
+web:
+  host: 127.0.0.1
+  port: 8000
+
+answer:
+  bilingual: true  # 命中英文块时回答末尾附"原文+中文翻译"对照（#8，2026-09-10）

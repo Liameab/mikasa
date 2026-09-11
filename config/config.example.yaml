@@ -1,0 +1,78 @@
+# ============================================================
+# Mikasa — 示例配置（全字段注释版）
+# 日常使用无需手写本文件：mikasa init 会基于所选 profile 生成
+# 配置文件。此处仅作字段说明手册。
+# 字符串中支持 ${ENV_VAR} 与 ${ENV_VAR:-默认值} 环境变量展开。
+# ============================================================
+
+profile: api                    # 当前生效的 profile：api | local | offline
+
+# ---- 数据与路径（均可被命令行/环境变量覆盖）----
+# data_dir 默认：仓库根目录下 data/（可设为绝对路径）
+# data_dir: ./data
+
+# ---- 分块参数（ingest 阶段）----
+chunking:
+  size: 400                     # 目标块大小（字符）
+  overlap: 50                   # 相邻块重叠（字符），默认 12.5%
+  title_prefix: true            # 是否把标题路径前置拼入块文本（检索增益，可消融）
+
+# ---- 检索参数（ask / chat 阶段）----
+retrieval:
+  bm25_top_k: 20                # BM25 路召回数
+  dense_top_k: 20               # 向量路召回数（dense_enabled=false 时忽略）
+  dense_enabled: true           # 是否启用向量路（offline 下关闭）
+  fusion_top_k: 8               # RRF 融合后进入生成器的块数
+  fusion_k: 60                  # RRF 常数 k（经典值 60）
+
+# ---- 重排器（rerank 阶段，三档：api / local / none）----
+reranker:
+  backend: api                  # api：SiliconFlow bge-reranker-v2-m3（免费）
+                                # local：fastembed TextCrossEncoder（CPU/GPU）
+                                # none：关闭重排（基线）
+  model: BAAI/bge-reranker-v2-m3
+  base_url: https://api.siliconflow.cn/v1
+  api_key_env: SILICONFLOW_API_KEY
+  top_n: 3                      # 精排后取前 N 块注入提示词
+
+# ---- 大模型（生成端）----
+llm:
+  backend: api                  # api：OpenAI 兼容 API（DeepSeek/Qwen/任意兼容服务）
+                                # local：Ollama（OpenAI 兼容端点）
+                                # mock：内置模拟模型（离线演示/CI/测试）
+  base_url: https://api.deepseek.com
+  api_key_env: DEEPSEEK_API_KEY
+  model: deepseek-chat          # 模型名全部走配置，代码零硬编码
+  temperature: 0.1              # 生成端低温，保稳定
+  max_tokens: 1024
+
+# ---- 词向量（稠密检索路）----
+embedding:
+  backend: api                  # api：SiliconFlow BAAI/bge-m3（免费，1024 维）
+                                # local：fastembed BAAI/bge-small-zh-v1.5（CPU，512 维）
+                                # none：不生成向量（dense_enabled 须为 false）
+  base_url: https://api.siliconflow.cn/v1
+  api_key_env: SILICONFLOW_API_KEY
+  model: BAAI/bge-m3
+  query_prefix: ""              # 本地 bge 模型建议检索指令前缀，如
+                                # "为这个句子生成表示以用于检索相关文章："
+
+# ---- 评测裁判（judge，生成层指标用）----
+judge:
+  enabled: true                 # offline 下自动跳过 judge 指标
+  backend: api                  # 建议与生成端不同厂商，抵消自偏好偏差
+  base_url: https://api.siliconflow.cn/v1
+  api_key_env: SILICONFLOW_API_KEY
+  model: Qwen/Qwen2.5-72B-Instruct
+  temperature: 0.0              # 裁判必须温度 0，保证可复现
+  template_version: "2026-09-01"  # 裁判模板版本号，格式漂移时随评测报告记录
+
+# ---- 回答呈现（ask / chat 输出层）----
+answer:
+  bilingual: false              # 命中英文语料块时回答末尾附"原文+中文翻译"对照
+                                # （#8）：翻译需真实 LLM，offline/mock 档保持关闭
+
+# ---- Web 服务 ----
+web:
+  host: 127.0.0.1
+  port: 8000

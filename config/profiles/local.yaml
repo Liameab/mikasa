@@ -1,0 +1,69 @@
+# ============================================================
+# local profile —— 纯本地推理（免费、断网可用）
+#   需要：Ollama（https://ollama.com）+ 模型：
+#     ollama pull qwen3:8b
+#   以及本地嵌入模型（首次运行自动从 HF 下载 bge-small-zh-v1.5，
+#   下载需联网一次；之后全离线）。安装依赖：
+#     pip install -e ".[local]"
+#   4060 8G 可流畅运行 qwen3:8b；若想更快可换 qwen3:4b（改 model 字段）
+# ============================================================
+
+profile: local
+
+chunking:
+  size: 400
+  overlap: 50
+  title_prefix: true
+
+retrieval:
+  bm25_top_k: 20
+  dense_top_k: 20
+  dense_enabled: true
+  # 融合窗口 14（2026-09-11 由 10 放宽，用户反馈"给的内容太少、漏细节"）。
+  # 本地档没有重排器，融合窗口就是最终注入数——放宽的直接收益是模型看到的
+  # 素材更多。前提是 Ollama 的上下文窗口够：Mikasa.bat 已设
+  # OLLAMA_CONTEXT_LENGTH=16384（运行时默认只有 2048，此前每次提问都在被
+  # 静默截断，且通常从开头丢、连系统提示词都可能没进去）。
+  # 历史口径：api 档 63 题实拍 @8 漏 hard 综合题第二金块，@10 时 recall@10=1.000。
+  fusion_top_k: 14
+  fusion_k: 60
+  crosslingual: true  # 中文问英文库：查询自动翻译作第二路（2026-09-10）
+
+reranker:
+  backend: none                 # 本地重排：改 local 并安装 fastembed 后可用
+
+llm:
+  backend: local
+  base_url: ${OLLAMA_BASE_URL:-http://localhost:11434/v1}
+  api_key_env: ""
+  model: qwen3:8b
+  temperature: 0.1
+  # 2026-09-09 由 1024 放开：free 问答要求详实作答（提示词同改）；
+  # 上限只封顶不催长，qwen3:8b 中文约 1.5 字/token，2048 ≈ 3000 字封顶
+  max_tokens: 2048
+
+embedding:
+  backend: local                # fastembed + onnxruntime（CPU 即可）
+  model: BAAI/bge-small-zh-v1.5
+  query_prefix: "为这个句子生成表示以用于检索相关文章："
+  api_key_env: ""
+
+judge:
+  enabled: false                # 本地评测暂不做 judge 指标（成本高、慢），
+                                # 检索层指标（recall@k/MRR/nDCG）仍完整可用
+  backend: local
+  # base_url / api_key_env 必须与 llm 段对齐：JudgeConfig 的 base_url 缺省是
+  # None，缺了这行一旦把 enabled 打开，每题都会以 ConfigError 失败
+  # （2026-09-11 排查发现，原先只有 api 档配了）
+  base_url: ${OLLAMA_BASE_URL:-http://localhost:11434/v1}
+  api_key_env: ""
+  model: qwen3:8b
+  temperature: 0.0
+  template_version: "2026-09-01"
+
+web:
+  host: 127.0.0.1
+  port: 8000
+
+answer:
+  bilingual: true  # 命中英文块时回答末尾附"原文+中文翻译"对照（#8，2026-09-10）
