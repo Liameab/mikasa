@@ -38,6 +38,8 @@ hiddenimports = [
     "pymupdf",  # PDF 解析（延迟导入）
     "docx",  # python-docx（延迟导入）
     "multipart",  # python-multipart：上传端点运行时依赖
+    "webview",  # 独立窗口套壳（系统 WebView2 渲染，双击不再是浏览器标签页）
+    "webview.platforms.edgechromium",
 ]
 
 a = Analysis(  # noqa: F821 - PyInstaller 注入
