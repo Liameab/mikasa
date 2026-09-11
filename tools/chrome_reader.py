@@ -229,39 +229,76 @@ async def run(args):
               const label = document.querySelector('#reader-inline .rd-page-label');
               const open = document.querySelector('#reader-inline .rd-page-open');
               return {
-                tab2: document.querySelector('#rd-tab-file').textContent,
+                tabs: ['rd-tab-text', 'rd-tab-page', 'rd-tab-file'].map((id) => {
+                  const b = document.getElementById(id);
+                  if (!b) return id + ':missing';
+                  const vis = b.classList.contains('hidden') ? 'hidden' : 'shown';
+                  return b.textContent + ':' + vis;
+                }),
                 label: label ? label.textContent : '',
                 openHref: open ? open.getAttribute('href') : '',
-                fonts: [...document.querySelectorAll('#reader-inline .rd-font-btn')]
-                  .map(b => b.textContent),
+                zoomControls: ['rd-zoom-out', 'rd-zoom-in', 'rd-zoom-reset'].every(
+                  (id) => !!document.getElementById(id)),
+                labels: [...document.querySelectorAll('#reader-inline .rd-font-btn')]
+                  .map((b) => b.textContent),
               };
             })()""")
-            if pdf_state["tab2"] != "页面":
-                bad.append(f"PDF 第二标签应为'页面'：{pdf_state['tab2']!r}")
+            # PDF 有三个标签：文本（隐藏）/ 页面（当前）/ 原文件。
+            # 旧断言读的是 `#rd-tab-file` 并期望"页面"——那是"原文件"标签还没恢复
+            # 时的 UI，留到今天只会永远红（2026-09-11 排查踩到）。
+            if pdf_state["tabs"] != ["文本:hidden", "页面:shown", "原文件:shown"]:
+                bad.append(f"PDF 标签可见性不对：{pdf_state['tabs']!r}")
             if "/" not in pdf_state["label"]:
                 bad.append(f"页面标签缺少页数：{pdf_state['label']!r}")
-            if pdf_state["openHref"] is None or "/file" not in pdf_state["openHref"]:
-                bad.append(f"页面视图缺少「↗ 原文件」链接：{pdf_state['openHref']!r}")
-            if pdf_state["fonts"] != ["A-", "A+"]:
-                bad.append(f"字号按钮不对：{pdf_state['fonts']!r}")
+            # 页面视图的控件已从"字号钮"改为"缩放"（2026-09-11：页面图是位图，
+            # 字号对它无效），这里的断言跟着改——留旧选择器会让工具永远红。
+            if not pdf_state["zoomControls"]:
+                bad.append("页面视图缺少缩放控件（缩小/放大/原始大小）")
+            if pdf_state["labels"]:
+                bad.append(f"缩放控件不该再有字号钮：{pdf_state['labels']!r}")
 
             # ---- 3) 切回 md 文档，再切"原文件"标签：md 原文含 # 标题行 ----
-            await cdp.evaluate(
+            # 注意：**不能**用 `#rd-tab-file` 文案判断"有没有切回 md"——PDF 的第二
+            # 个标签文案同样是「原文件」，切失败也照样通过，于是错误被推迟到几步之后
+            # 才以一个莫名其妙的超时爆出来（2026-09-11 排查踩到）。改为断言阅读器
+            # 标题变成 md 的标题。
+            clicked = await cdp.evaluate(
                 "(() => { const rows=[...document.querySelectorAll('#kb-tree .doc-item')];"
                 " const row = rows.find(r => r.textContent.includes('L2 正则化笔记'));"
-                " if (row) row.click(); })()"
+                " if (!row) return false; row.click(); return true; })()"
             )
+            if not clicked:
+                bad.append("语料树里找不到 md 文档行，无法切回（后续断言全不可信）")
             await wait_until(
                 cdp,
-                "document.querySelector('#rd-tab-file')?.textContent === '原文件'",
-                "切回 md 后第二标签恢复为原文件",
+                "document.querySelector('#reader-inline .rd-title')?.textContent"
+                " === 'L2 正则化笔记'",
+                "阅读器标题切回 md 文档",
             )
             await cdp.evaluate("document.querySelector('#rd-tab-file').click()")
-            await wait_until(
-                cdp,
-                "!!document.querySelector('#reader-inline .rd-raw')",
-                "原文件视图渲染完成",
-            )
+            try:
+                await wait_until(
+                    cdp,
+                    "!!document.querySelector('#reader-inline .rd-raw')",
+                    "原文件视图渲染完成",
+                    timeout=10.0,
+                )
+            except RuntimeError:
+                log(
+                    "原文件视图现场："
+                    + str(
+                        await cdp.evaluate(
+                            "(() => {"
+                            " const o = document.querySelector('#reader-inline .rd-orig');"
+                            " const ti = document.querySelector('#reader-inline .rd-title');"
+                            " return JSON.stringify({ title: ti && ti.textContent,"
+                            " built: o && o.dataset.built,"
+                            " inner: ((o && o.innerHTML) || '').slice(0, 120) });"
+                            " })()"
+                        )
+                    )
+                )
+                raise
             raw = await cdp.evaluate("document.querySelector('#reader-inline .rd-raw').textContent")
             if "# L2 正则化笔记" not in raw:
                 bad.append("原文件视图应显示含标题行的 md 原文")
