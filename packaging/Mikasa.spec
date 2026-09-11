@@ -40,9 +40,6 @@ hiddenimports = [
     "multipart",  # python-multipart：上传端点运行时依赖
 ]
 
-# 需要连数据文件一起收的包（jieba 的 5MB 词典、fastembed 的元数据等）
-datas_packages = ["jieba"]
-
 a = Analysis(  # noqa: F821 - PyInstaller 注入
     [str(SPEC_DIR / "entry.py")],
     pathex=[str(ROOT / "src")],
@@ -56,15 +53,12 @@ a = Analysis(  # noqa: F821 - PyInstaller 注入
     noarchive=False,
 )
 
-# jieba 的词典走 pkg_resources 读取，必须把包内数据一起收进来，
-# 否则分词器会**静默降级**成 bigram（程序照跑、检索质量下滑，最难查的一类）
-for pkg in datas_packages:
-    try:
-        from PyInstaller.utils.hooks import collect_data_files
-
-        a.datas += collect_data_files(pkg)
-    except Exception:  # noqa: BLE001 - 包缺失时不必阻断打包（有 doctor 兜底检查）
-        pass
+# jieba 的词典走 pkg_resources 读取，必须把包内数据一起收进来，否则分词器会
+# **静默降级**成 bigram（程序照跑、检索质量下滑，最难查的一类）。
+# 不在这里手动 `a.datas +=`：Analysis 之后的 a.datas 已是规范化格式（三元组），
+# 追加 collect_data_files 的二元组结果会撞 "not enough values to unpack"
+# （2026-09-11 首次打包实测）。pyinstaller-hooks-contrib 自带 hook-jieba，
+# 会在 Analysis 阶段自动收集——doctor 的"分词器 == jieba"检查是最后一道保险。
 
 pyz = PYZ(a.pure)  # noqa: F821
 
