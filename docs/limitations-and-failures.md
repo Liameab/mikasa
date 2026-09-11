@@ -221,3 +221,64 @@ answered everything correctly after setting `OLLAMA_CONTEXT_LENGTH=16384`. This 
 half of the root cause behind "retrieval doesn't give the model enough" — injecting 10 chunks
 (~3500 characters) was already over the window. Mikasa.bat now hardcodes that environment
 variable.
+
+### The windowed build never wrote a log file: the fix landed on the CLI entry point, which double-click never goes through (packaging/entry.py)
+
+The packaged build is compiled with `console=False` (no black window on double-click), so a failed
+startup only shows one message box: "detailed log at `%LOCALAPPDATA%\Mikasa\logs\`" — which makes
+that file the user's **only** diagnostic. On review it had never been written to: the whole repo
+passed `log_file=` to `setup_logging` in exactly one place, `cli.main()`, while the double-click path
+is `entry.py: main() → _serve_forever()`, which imports only `mikasa.web.app` and **never goes
+through cli.main()**. The no-argument `setup_logging()` triggered by the first `get_logger()` inside
+the package attaches a console handler only, and in a console-less build that is the same as
+dropping records into the void. Measured evidence: `_CONFIGURED=True` with a handler list of just
+`['RichHandler']`. The fix consolidates "where logs live" into one definition,
+`utils.logging.default_log_file()`, shared by both entry points, and the message box now shows a
+**real, copyable** path (it used to be a literal `%LOCALAPPDATA%` the user could neither click nor
+locate). The regression test `tests/unit/packaging/test_entry.py` loads entry.py by path and asserts
+a FileHandler is genuinely attached and genuinely receives writes. **Lesson: fixing one entry point
+is not fixing them all — the packaged form has its own entry point (double-click ≠ the `mikasa`
+command), so the patch belongs on what both paths share.** Bug of this kind is invisible until
+packaged: 431 tests could pass in source form and it would still ship broken.
+
+### Text cannot be selected or copied in the desktop window (packaging/entry.py, reported by the user 2026-09-11)
+
+The report: "text can no longer be selected and copied in the page." The root cause is not our code:
+pywebview's `create_window(text_select=...)` **defaults to False**, and in that state it injects
+`body { user-select: none; cursor: default }` into the page (see `webview/js/customize.js`:
+`var disableText = '%(text_select)s' === 'False'`), leaving **every character in the window
+unselectable**. For a document-QA app that is crippling — answers, quoted source text, and evaluation
+reports all need to be copyable. The fix is `create_window(..., text_select=True)`, with a regression
+test that injects a fake webview module and asserts the kwarg. **Lesson: a shell library's defaults
+are chosen for a generic window, not for this application — when wrapping one, walk through every
+default that changes user-visible behaviour.** The same JS block revealed `zoomable=False` (the
+default), which `preventDefault`s Ctrl+wheel even though this app never binds that gesture
+(recorded, not changed), while `easy_drag=True` **only applies to frameless windows**
+(`platform == 'edgechromium' and easy_drag and frameless`), so a framed window is unaffected.
+
+### Text cannot be selected in continuous scroll: a deliberate trade-off the user overturned, and a virtualization trap (reader.js)
+
+The page view is a bitmap, so selection depends on a transparent text layer. That layer used to be
+built **only in single-page mode**, with an explicit comment: "continuous mode with hundreds of pages
+means tens of thousands of spans and the DOM cannot take it (switch to single page if you want to
+copy text)." After the user tested it on 2026-09-11 and asked for selection in continuous scroll too,
+the only way forward was virtualization.
+
+**The trap: the first version used an IntersectionObserver ("materialize whatever enters the
+viewport"), and acceptance measured 15 of 24 pages materialized.** Root cause: page images are
+`loading="lazy"`, so before an image loads its node is ~0 high and hundreds of pages fall inside the
+viewport test at once (including the ±1200px margin) — meaning every page's text layer is requested
+simultaneously, which is exactly the thing we set out to avoid; a 301-page paper would degrade into
+"301 requests and hundreds of thousands of spans at startup". Switching to a **page-number** window
+(current page ±2, synced at page boundaries) pins it at 5 layers with no dependence on image
+loading. **Lesson: when the geometric quantity you are judging by is itself produced by
+lazily-loaded content, stop judging by geometry — find an equivalent that does not depend on load
+state** (here, page-index distance).
+
+Two method notes that came with it: (1) an acceptance script must use a **real mouse drag** (CDP
+`Input.dispatchMouseEvent`) and then read `getSelection()` — constructing a range through the
+Selection API bypasses `user-select: none` and yields a **false pass**, precisely for the failure the
+user was hitting, which lives in CSS; (2) an empty library pops the first-run onboarding panel, which
+**covers the whole page**, so acceptance must wait for it to appear and dismiss it (it races: it is
+attached only after `/api/health` returns, later than "page ready"; a plain `if` misses it and every
+subsequent drag lands on the panel — the measurement in fact selected the panel's own text).

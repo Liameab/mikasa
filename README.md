@@ -58,7 +58,7 @@ pip install -e ".[dev]"
 mikasa doctor --profile offline
 
 # 3) Ingest a corpus (directory or single file; md / txt / pdf / docx)
-mikasa ingest sample-corpus
+mikasa ingest sample-corpus --profile offline
 
 # 4) Ask a question (offline demo uses the built-in MockLLM)
 mikasa ask --profile offline "What is backpropagation?" --show-sources
@@ -101,6 +101,10 @@ All configuration lives in `config/profiles/*.yaml` with a fully commented field
 
 ```bash
 mikasa serve                      # api profile (real models)
+# WARNING: --host 0.0.0.0 exposes the service to your whole network.
+# There is no authentication: anyone on that network can read every
+# document you ingested, delete them, upload files, and run evaluations
+# (which spends your API credits). Only use it on a network you trust.
 mikasa serve --profile offline    # zero-key demo
 # Options: --host 0.0.0.0 (LAN access) / --port 9000 / --reload (dev)
 ```

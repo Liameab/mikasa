@@ -191,3 +191,53 @@ qwen3:8b 声明 40960，但 Ollama 运行时默认 `num_ctx=2048`——6000+ tok
 可能从未进过模型。暗号测试：长占位文本中间夹问开头暗号，修前空回复、
 设 `OLLAMA_CONTEXT_LENGTH=16384` 后全对。这也是"检索给的内容太少"的一大半
 根因——注入 10 块 ≈3500 字符早就超窗。Mikasa.bat 已固化该环境变量。
+
+### 窗口形态的日志永远是空的：补丁修在 CLI 入口，而双击不经过它（packaging/entry.py）
+
+打包版以 `console=False` 构建（双击不弹黑窗口），启动失败时只弹一句"详细日志见
+`%LOCALAPPDATA%\Mikasa\logs\`"——文件日志因此是用户**唯一**的排障依据。复查时发现
+那个文件从未被写过：`setup_logging(log_file=...)` 全仓只有 `cli.main()` 一处传参，
+而双击路径是 `entry.py: main() → _serve_forever()`，它只 import `mikasa.web.app`，
+**根本不经过 cli.main()**；包内首次 `get_logger()` 触发的无参 `setup_logging()`
+只挂控制台 handler，在无控制台的构建里等于扔进黑洞。实测证据：`_CONFIGURED=True`
+而 handler 列表只有 `['RichHandler']`。修法 = 把"日志落在哪"收敛到
+`utils.logging.default_log_file()` 一处定义、两个入口共用，弹窗同时改成给**真实
+可复制**的路径（原来那行是字面量，用户点不开也找不到）。回归测试
+`tests/unit/packaging/test_entry.py` 按路径加载 entry.py，断言 FileHandler 真挂上、
+真能写入。**教训：修好一个入口不等于修好所有入口——打包形态有自己的入口
+（双击 ≠ `mikasa` 命令），补丁要落在两条路径的公共点上**；且这类 bug 只在打包后
+显形，源码形态 431 个测试全绿也拦不住它。
+
+### 桌面窗口里选不中、复制不了文字（packaging/entry.py，2026-09-11 用户实测）
+
+用户反馈"在页面中无法进行选取和复制"。根因不在我们的代码：pywebview 的
+`create_window(text_select=...)` **默认就是 False**，此时它会在页面里注入一段
+`body { user-select: none; cursor: default }`（见 `webview/js/customize.js`：
+`var disableText = '%(text_select)s' === 'False'`），**整个窗口的文字都选不中**。
+对一个"论文问答"应用是硬伤——答案、引用原文、评测报告全都要能拷走。修法 =
+`create_window(..., text_select=True)`，回归测试用假 webview 模块断言这个 kwarg。
+**教训：套壳库的默认值是按"最小惊喜"给普通窗口定的，不是按本应用定的——
+上壳时要逐个过一遍会改变用户可见行为的默认值**。同一段 JS 里还发现
+`zoomable=False`（默认）会 `preventDefault` 掉 Ctrl+滚轮，而本应用自己并不用这个
+手势（已记录，未改）；`easy_drag=True` 则**只在无边框窗口生效**
+（`platform == 'edgechromium' and easy_drag and frameless`），有边框窗口不受影响。
+
+### 连续滚动选不中字：一次"故意的取舍"被用户推翻，以及虚拟化踩的坑（reader.js）
+
+页面视图是位图，选中要靠透明文字层。文字层原本**只在单页模式铺**，注释写得很清楚：
+"连续模式几百页会有几万个 span，DOM 撑不住（要选字复制就切单页）"。用户 2026-09-11
+实测后要求连续滚动也能选——那就不能全铺，只能虚拟化。
+
+**踩的坑：第一版用 IntersectionObserver（"进了视口就铺"），验收实测 24 页里铺了 15 页。**
+根因：页图是 `loading="lazy"` 的，图没加载完时页节点高度≈0，几百页会**同时**落进视口
+判定（含上下 1200px 余量）→ 一次性把所有页的文字层都请求回来，正是要避免的那件事；
+301 页的论文会当场退化成"开局 301 个请求 + 十几万 span"。改成按**页号**取窗口
+（当前页 ±2 页，过页边界时同步一次）后恒为 5 层，与图片加载程度无关。**教训：当判据
+依赖的几何量又取决于懒加载内容时，别用几何量做判据——换一个与加载状态无关的等价物**
+（这里是"页号距离"）。
+
+配套记录两条方法：① 验收脚本必须用**真实鼠标拖拽**（CDP `Input.dispatchMouseEvent`）
+再读 `getSelection()`——直接拿 Selection API 造选区能绕过 `user-select: none`，那样测
+出来是**假通过**（用户选不中的故障恰好在 CSS 上）；② 空库会弹首启引导面板且**盖住整页**，
+验收要先等它出现再关掉（它有竞态：等 `/api/health` 回来才挂上，晚于"页面就绪"；
+只 `if` 一下会漏掉，后面所有拖拽都落在面板上——实测选中的是面板文案）。

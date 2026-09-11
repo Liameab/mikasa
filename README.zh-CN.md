@@ -56,7 +56,7 @@ pip install -e ".[dev]"
 mikasa doctor --profile offline
 
 # 3) 导入语料（目录或单个文件，支持 md / txt / pdf / docx；重复导入自动跳过/替换）
-mikasa ingest sample-corpus
+mikasa ingest sample-corpus --profile offline
 
 # 4) 提问（离线体验：--profile offline，内置 MockLLM）
 mikasa ask --profile offline "什么是反向传播？" --show-sources
@@ -100,6 +100,9 @@ mikasa ask --profile local "L2 正则化如何防止过拟合？" --show-sources
 
 ```bash
 mikasa serve                 # 默认 api profile（真实模型）
+# 警告：--host 0.0.0.0 会把服务暴露给整个局域网，且没有登录鉴权——
+# 同网段任何人都能读走你导入的全部文档、删除文档、上传文件、
+# 跑评测（消耗你的 API 额度）。只在你信任的网络里这么用。
 mikasa serve --profile offline   # 零密钥离线演示
 # 常用选项：--host 0.0.0.0 局域网访问 / --port 9000 / --reload 开发热重载
 ```
