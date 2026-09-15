@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
@@ -91,6 +92,41 @@ class ApiEmbedding:
         return self.embed_documents([full])[0]
 
 
+# HuggingFace 国内只读镜像：huggingface.co 在国内常直连不上（实测 ConnectTimeout），
+# 而"首次使用要下 ~100MB 向量模型"发生在**上传文档**的请求里——下载失败会让
+# 入库整条链路挂掉，用户看到的是一句看不懂的网络异常（2026-09-15 用户实测）。
+_HF_MIRROR = "https://hf-mirror.com"
+
+
+def _switch_hf_to_mirror() -> bool:
+    """把 HuggingFace 端点切到国内镜像（切换成功返回 True）。
+
+    huggingface_hub 的 ENDPOINT 在 **import 时**从 HF_ENDPOINT 读定，之后各
+    模块都通过 `constants.ENDPOINT` 取用——所以既要设环境变量，也要改这个
+    常量本身，只设环境变量对已经 import 过的进程无效。
+    HF_HUB_DISABLE_XET=1 是镜像的硬要求（镜像对 Xet 传输回 401，见 M4 备忘）。
+    """
+    try:
+        from huggingface_hub import constants
+    except ImportError:  # 没有 huggingface_hub 就无从切换（fastembed 会带上它）
+        return False
+    os.environ["HF_ENDPOINT"] = _HF_MIRROR
+    os.environ["HF_HUB_DISABLE_XET"] = "1"
+    constants.ENDPOINT = _HF_MIRROR
+    return True
+
+
+def _download_hint(model: str, exc: Exception) -> ProviderError:
+    """首次下载失败 → 能照做的中文说明（而不是裸 httpx traceback 冒到前端）。"""
+    return ProviderError(
+        f"本地向量模型（{model}）首次使用需要联网下载（约 100MB），本次下载失败："
+        f"{type(exc).__name__}: {exc}\n"
+        "  请检查网络后重试（重试时程序会先直连、失败自动改用 hf-mirror.com 镜像）。"
+        "若始终连不上，可手动设环境变量 HF_ENDPOINT=https://hf-mirror.com 与 "
+        "HF_HUB_DISABLE_XET=1 后重启。"
+    )
+
+
 class LocalFastEmbed:
     """fastembed 本地实现（CPU/GPU 均可，首次运行自动下载模型，之后离线）。
 
@@ -112,7 +148,16 @@ class LocalFastEmbed:
                 '本地嵌入需要 fastembed：pip install -e ".[local]"'
                 "（首次运行会自动下载 bge-small-zh-v1.5，需联网一次）"
             ) from exc
-        self._backend = TextEmbedding(self.model)
+        try:
+            self._backend = TextEmbedding(self.model)
+        except Exception as exc:  # 首次下载失败（网络）：换国内镜像再试一次
+            if not _switch_hf_to_mirror():
+                raise _download_hint(self.model, exc) from exc
+            logger.warning("向量模型下载失败（%s），改用镜像 %s 重试", exc, _HF_MIRROR)
+            try:
+                self._backend = TextEmbedding(self.model)
+            except Exception as mirror_exc:
+                raise _download_hint(self.model, mirror_exc) from mirror_exc
         return self._backend
 
     @property

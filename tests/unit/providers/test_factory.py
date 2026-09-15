@@ -7,6 +7,7 @@ fastembed 未安装时报 ConfigError 并给出安装指引。
 
 from __future__ import annotations
 
+import os
 import sys
 import types
 
@@ -134,6 +135,69 @@ def test_local_fastembed_missing_dependency_raises(api_settings, monkeypatch):
     monkeypatch.setitem(sys.modules, "fastembed", None)
     embedding = LocalFastEmbed(api_settings.embedding)
     with pytest.raises(ConfigError, match="fastembed"):
+        embedding.embed_documents(["测试"])
+
+
+def test_local_fastembed_retries_with_mirror_on_download_failure(local_settings, monkeypatch):
+    """首次下载失败 → 自动切国内镜像重试一次（成功即照常返回后端）。
+
+    不联网：把 fastembed.TextEmbedding 换成"第一次抛、第二次成功"的替身，
+    断言第二次调用时端点已切到镜像（环境变量与 huggingface_hub 常量双写——
+    后者在 import 时就定值，只设环境变量对已运行的进程无效）。
+    背景：模型下载发生在上传文档的请求里，直连超时会让"入库"整条挂掉。
+    """
+    import fastembed
+    import numpy as np
+    from huggingface_hub import constants as hf_constants
+
+    monkeypatch.setenv("HF_ENDPOINT", "https://huggingface.co")  # 注册还原点
+    monkeypatch.setenv("HF_HUB_DISABLE_XET", "0")
+    monkeypatch.setattr(hf_constants, "ENDPOINT", "https://huggingface.co")
+
+    seen: list[dict] = []
+
+    class _FakeTextEmbedding:
+        def __init__(self, model: str) -> None:
+            seen.append(
+                {
+                    "model": model,
+                    "endpoint": hf_constants.ENDPOINT,
+                    "env": os.environ.get("HF_ENDPOINT"),
+                }
+            )
+            if len(seen) == 1:
+                raise RuntimeError("ConnectTimeout: 模拟直连 huggingface.co 失败")
+
+        def embed(self, texts):
+            return iter([np.zeros(4, dtype=np.float32) for _ in texts])
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", _FakeTextEmbedding)
+    embedding = LocalFastEmbed(local_settings.embedding)
+    out = embedding.embed_documents(["测试"])
+
+    assert out.shape == (1, 4)
+    assert len(seen) == 2  # 直连一次 + 镜像重试一次
+    assert seen[0]["endpoint"] == "https://huggingface.co"
+    assert seen[1]["endpoint"] == "https://hf-mirror.com"
+    assert seen[1]["env"] == "https://hf-mirror.com"
+    assert os.environ["HF_HUB_DISABLE_XET"] == "1"  # 镜像的硬要求
+
+
+def test_local_fastembed_download_failure_gives_actionable_error(local_settings, monkeypatch):
+    """两次都失败 → ProviderError 中文指引（而不是裸 httpx traceback 冒到前端）。"""
+    import fastembed
+    from huggingface_hub import constants as hf_constants
+
+    monkeypatch.setenv("HF_ENDPOINT", "https://huggingface.co")
+    monkeypatch.setattr(hf_constants, "ENDPOINT", "https://huggingface.co")
+
+    class _AlwaysFail:
+        def __init__(self, model: str) -> None:
+            raise RuntimeError("ConnectTimeout: 连接尝试失败")
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", _AlwaysFail)
+    embedding = LocalFastEmbed(local_settings.embedding)
+    with pytest.raises(ProviderError, match="首次使用需要联网下载"):
         embedding.embed_documents(["测试"])
 
 
