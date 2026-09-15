@@ -106,8 +106,10 @@ Mikasa 的问答默认跑**本机模型**，所以要先把 Ollama 装好，否�
 
 模型从哪来
 ----------
-默认用本机 Ollama 的本地模型（免费、离线）。想换云端模型：把 .env 放到
-%LOCALAPPDATA%\\Mikasa\\ 下，填上 DeepSeek 等 API 密钥即可。
+默认用本机 Ollama 的本地模型（免费、离线）。想换云端模型：打开 Mikasa，
+点右上角 ⚙ →「模型」→ 选一个来源（DeepSeek / SiliconFlow / 自定义）→
+粘贴 API 密钥 → 「保存并生效」，立即切换、不用重启也不用改任何文件。
+（密钥只存本机 %LOCALAPPDATA%\\Mikasa\\.env，不会上传。）
 
 出错了怎么办
 ------------

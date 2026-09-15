@@ -681,6 +681,57 @@ table.list td.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 #s-nick:focus { outline: none; border-color: var(--focus); }
 #s-font { flex: 1; accent-color: var(--green); }
+
+/* ---------- 设置面板「模型」段（2026-09-15，ADR-0018） ---------- */
+
+/* 输入框沿用 #s-nick 的样式语言（本文件没有通用 input 选择器：
+   按 ID 收窄，避免波及树内改名输入框、上传控件等既有元素） */
+#s-base-url,
+#s-model,
+#s-api-key {
+  flex: 1;
+  min-width: 0; /* flex 子项默认 min-width:auto 会把输入框撑破面板 */
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 5px 9px;
+  font: inherit;
+  font-size: 13.5px;
+}
+#s-base-url:focus,
+#s-model:focus,
+#s-api-key:focus { outline: none; border-color: var(--focus); }
+#s-base-url:disabled,
+#s-model:disabled,
+#s-api-key:disabled { opacity: 0.55; }
+
+/* 来源预设芯片：选中 = 绿系实心（复用分段控件的语言） */
+.s-chips { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+.s-chip {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.s-chip:hover { color: var(--text); border-color: var(--muted); }
+.s-chip.on {
+  background: rgba(63, 185, 80, 0.16);
+  border-color: var(--green);
+  color: var(--green);
+  font-weight: 600;
+}
+.s-chip:disabled { opacity: 0.45; cursor: default; }
+
+/* 连接测试结果：一格里同时容纳成功/失败/进行中三种语气 */
+.s-test-result { font-size: 12px; color: var(--muted); flex: 1; min-width: 0; }
+.s-test-result.ok { color: var(--green); }
+.s-test-result.error { color: var(--red); }
 #s-font-val { width: 34px; text-align: right; font-size: 12px; color: var(--muted); }
 .s-swatches { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .s-sw {

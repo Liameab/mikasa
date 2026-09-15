@@ -214,3 +214,11 @@ DB 层 `file_path` 脱敏，杜绝路径探针。
 三形态共享：同一份配置（profile 切换）、同一份 SQLite、同一份评测
 口径——offline 场次跑全流程零密钥（mock/none），正是 CI 与演示的
 默认形态。
+
+**配置查找顺序**：显式 `--config` → `config/config.yaml`（源码模式先看当前
+目录再看仓库根）→ `config/profiles/<profile>.yaml`。在 profile 文件之上，还会
+深合并一层用户可写覆盖层 `<数据目录>/config.yaml`（Web 设置面板写入，
+ADR-0018）——基底由 `--config`/`config.yaml` 提供时它不生效，且其中的
+`profile:` 键一律忽略。密钥不进以上任何文件：面板把密钥写进
+`<数据目录>/.env`；查找链（`MIKASA_ENV_FILE` → 数据目录 → 资源根 → exe 同级）
+上**所有存在的 .env 都会加载**，同名键先加载者胜。

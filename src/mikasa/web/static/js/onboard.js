@@ -38,8 +38,9 @@ const STEPS = [
 
 /** 模型来源说明：回答质量取决于用户接哪个模型，第一次就该讲清楚。 */
 const MODEL_HINT =
-  "回答由你本机的模型生成：装了 Ollama 就用本地模型（免费、离线）；" +
-  "也可以把 DeepSeek 等 API 密钥填进 .env 换成云端模型。设置面板里能改。";
+  "回答由你接的模型生成：装了 Ollama 就用本机模型（免费、离线）；" +
+  "也可以点右上角 ⚙ 在「模型」里接入 DeepSeek、SiliconFlow 等云端 API——" +
+  "密钥粘贴进面板、只存本机，不用手写任何配置文件。";
 
 function buildPanel(onClose) {
   const steps = STEPS.map((s) =>

@@ -41,6 +41,9 @@
 | ADR-0013 | free Q&A bypass: decoupled from kb/eval, mode not persisted | Accepted |
 | ADR-0014 | Landing the local profile: keyless placeholder + local reranking/judge disabled + embedding-dimension discipline | Accepted |
 | ADR-0015 | Session management upgrade: folder tree + three-path title lock + suggest fallback semantics | Accepted |
+| ADR-0016 | Reader view: backend seam removal + original-file allowlist + the boundary of exposing body text | Accepted |
+| ADR-0017 | Merging the "Page" view + page-number alignment + the Ollama context window | Accepted |
+| ADR-0018 | Configuring the LLM from the web settings panel: user config overlay + live re-apply | Accepted |
 
 ---
 
@@ -802,3 +805,72 @@ view + font size + explicit button), `common.js`/`qa.js` (citation-card button),
 (OLLAMA_CONTEXT_LENGTH), `config/profiles/{local,api}.yaml` (fusion_top_k/top_n); tests
 `tests/unit/ingest/test_pagelocate.py`, `test_loaders.py` (the two page-number regressions),
 `tests/unit/web/test_documents_api.py`; E2E `tools/chrome_reader.py` (PDF page-view assertions).
+
+## ADR-0018 Configuring the LLM from the web settings panel
+
+- Status: Accepted | Post-M5 hardening (2026-09-15, user request)
+- Related: ADR-0001 (profiles), ADR-0002 (secrets via environment variables only),
+  ADR-0014 (embedding-dimension discipline), ADR-0017 (the Ollama context window)
+
+**Problem**: the onboarding panel promised "you can also change this in the settings panel",
+but the panel only ever had appearance settings — pointing the app at a different model or
+provider meant hand-editing `.env`, and in the packaged build even that file sits in the
+read-only unpack directory. The user asked for a CC Switch–style panel: pick a provider, paste
+a key, test the connection, done.
+
+**Decision**:
+
+1. **Persistence is a user-writable overlay, not a rewritten profile.** The panel writes
+   `user_data_root()/config.yaml` (source mode: `data/config.yaml`; packaged:
+   `%LOCALAPPDATA%\Mikasa\config.yaml` — the packaged `resource_root()` is read-only). It is
+   deep-merged **only when the base config is a profile file**; an explicit `--config` or a
+   `config/config.yaml` keeps its full-replacement semantics (tools and the migration drill
+   rely on that). The overlay's `profile:` key is ignored outright: the profile decides the
+   embedding/retrieval set, and letting the panel flip it would pair a profile's embedding
+   config with another profile's index (ADR-0014).
+2. **The panel only writes the `llm:` section.** Embedding changes alter vector dimensions and
+   require a full re-index, so they stay a CLI decision; reranker and judge still follow the
+   profile. The panel writes only the fields it owns (not temperature/max_tokens/timeout), so
+   future profile tuning is not frozen by an old snapshot.
+3. **Keys go to `user_data_root()/.env`** (python-dotenv `set_key`, `quote_mode="always"`,
+   created with a UTF-8 header when missing), never into the overlay. Reads resolve the key
+   through `api_key_env` at request time, exactly as ADR-0002 prescribes. `GET
+   /api/settings/model` returns `has_api_key` and never the key; the connection probe passes a
+   throwaway `MIKASA_SETTINGS_TEST_KEY` environment variable that is removed in a `finally`.
+   Clearing a key removes the line and pops it from the process environment — and only the one
+   variable the request names (the api profile shares `SILICONFLOW_API_KEY` between embedding,
+   reranker and judge; clearing it by accident would silently break retrieval).
+4. **Saving re-applies live.** Write files → set the process environment for that one key
+   (`load_dotenv` does not override existing variables) → `load_settings()` again → swap
+   `services.settings` **before** calling `rebuild_ask()` (it rebuilds from `self.settings`) →
+   swap `app.state.settings`, which `/api/health` reads. An `_APPLY_LOCK` serialises saves;
+   in-flight questions keep their old objects and finish normally; the new `AskService` starts
+   with a cold index cache (acceptable for a rare, explicit action).
+5. **Every existing `.env` in the chain is loaded.** The old loader stopped at the first file
+   that existed. With the panel writing keys into the data-dir `.env`, that would have masked
+   the other keys in the repo-root `.env` (in the api profile that silently breaks embeddings,
+   reranker and judge). Files now load in chain order; for duplicate keys the first file wins,
+   which is the same precedence as before.
+6. **The connection probe never touches live state**: a one-off client with `max_retries=0`
+   (3 retries would turn a 20 s timeout into a 60 s wait), `max_tokens=8`, always HTTP 200 with
+   `{ok, latency_ms, error?}` — "unreachable" is a probe result, not a server error, and the UI
+   renders it as one pill.
+
+**Rejected options**: dumping the full effective settings into the overlay as a snapshot — it
+would freeze `${VAR}` expansion into literals, mask every future profile-default change
+behind a stale copy, and one wrong `profile:` key would trigger a full re-index. Writing into
+the bundle's `resource_root()` — impossible in the packaged build (read-only). Letting the
+panel switch profiles — same re-index hazard as above.
+
+**Limitations**: the overlay applies to every profile, including `offline` (a deliberate user
+action; the "zero calls" promise of that profile ends the moment a model is configured). When
+the configuration comes from `--config`/`config.yaml`, the panel is read-only (the endpoint
+answers 400 with the file path). Judge and reranker are not configurable from the panel yet.
+
+**Code**: `config/settings.py` (overlay load/merge, `user_config_path`, `user_env_path`,
+`write_llm_overlay`, `write_api_key`, `clear_api_key`, chain-wide `.env` loading),
+`providers/ollama.py` (moved out of the CLI), `providers/llm.py` (`max_retries`),
+`web/routers/settings.py` (new), `web/schemas.py`, `web/static/js/model-settings.js` (new),
+`static/index.html`, `css/style.css`, `static/js/settings.js`, `static/js/onboard.js`; tests
+`tests/unit/config/test_user_config.py`, `tests/unit/web/test_settings_api.py`,
+`tests/conftest.py` (global `MIKASA_DATA_DIR` isolation); E2E `tools/chrome_model_settings.py`.

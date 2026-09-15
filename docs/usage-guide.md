@@ -125,9 +125,33 @@ Three pages in the top bar: **Chat** (home) / **Library** / **Evaluation**; the 
 
 ---
 
-## 8. Chat Settings (⚙ in the Top Right of the Chat Page)
+## 8. Settings (⚙ in the Top Right of the Chat Page)
 
-Everything is **persisted locally** (browser localStorage; it applies only to this browser on this machine):
+The panel has two groups with different homes: **Model** is stored server-side (in the data
+directory), **Chat appearance** lives in the browser (localStorage, this browser only).
+
+### 8.1 Model — pick a provider, paste a key, done
+
+- **Source presets**: Ollama (local, free, keyless), DeepSeek (official API),
+  SiliconFlow (has free models — the cheapest way to try a cloud model), or Custom (any
+  OpenAI-compatible endpoint: a `/v1` URL + model name + key).
+- **Connection test**: sends one tiny request and reports "connected · 123ms" or the real
+  error — it never changes your saved configuration.
+- **Save and apply**: takes effect immediately, no restart (the answer pill in the top bar
+  picks up the new model within ~20 s; open questions finish on the old model).
+- **Where it is stored**: `%LOCALAPPDATA%\Mikasa\config.yaml` (the model choice) and
+  `%LOCALAPPDATA%\Mikasa\.env` (the key, plain text, this machine only) — or `data/…` when you
+  run from source. The key is never sent back to the browser and never leaves your machine
+  except to the provider you configured.
+- **To change the key later**: type a new one and save; to delete it, clear the field and save.
+- **Scope**: this only changes the answering model. The retrieval embedding model still comes
+  from the startup profile (changing it requires re-indexing the whole corpus, so it stays a
+  CLI decision: `mikasa ingest --reindex`).
+- If the configuration came from an explicit `--config` or a `config.yaml`, the panel is
+  read-only and tells you which file to edit instead.
+
+### 8.2 Chat appearance (local to this browser)
+
 - **My nickname**: re-signs past message bubbles instantly (a local display-layer feature, and the stand-in until accounts exist);
 - **Message font size**: slider, 12–20;
 - **Chat background color**: 6 presets + a custom color picker;
@@ -143,9 +167,9 @@ Everything is **persisted locally** (browser localStorage; it applies only to th
 
 ## 10. Data and Privacy
 
-- **Everything is local**: data/mikasa.db (SQLite) + data/uploads (ingested copies) + data/indexes (index files) + data/logs; settings live in browser localStorage.
+- **Everything is local**: data/mikasa.db (SQLite) + data/uploads (ingested copies) + data/indexes (index files) + data/logs; model configuration lives in `config.yaml` and `.env` inside the data directory (written by the settings panel); chat appearance lives in browser localStorage.
 - **Backup** = copy the whole `data/` directory (safest with the service stopped first); the database schema upgrades automatically (the v1→v2→v3 migration path has been rehearsed on a real database), so keep whole-directory backups to allow rollback.
-- API keys live only in .env (api profile), never in the database and never uploaded; the GitHub repository contains neither data/ nor .env.
+- API keys live only in `.env` (the data directory's `.env` when set from the panel; the repo-root `.env` in the api profile), never in the database and never uploaded; the key is never echoed back to the browser (the API answers with a yes/no flag only). The GitHub repository contains neither data/ nor .env.
 - For known boundaries and the failure archive, see docs/known-issues.md and docs/limitations-and-failures.md.
 
 ---
@@ -161,4 +185,6 @@ Everything is **persisted locally** (browser localStorage; it applies only to th
 | The KB answers "that isn't in these materials…" | The anti-hallucination refusal feature, not a bug; paraphrase hit rates are verified by evaluation (see §4.1) |
 | The free-chat button is greyed out | A limitation of the offline (zero-key demo) profile; available on api/local |
 | Session titles don't match what you expected | Auto-distilled to ≤16 characters; rename to lock in your own (see §7) |
-| You want different default answer quality | Start with a different profile (api is strongest / local is free); for the model integration design see the idea ledger §5.C |
+| You want a different answering model | Open ⚙ → **Model** in the top right, pick a source, paste the key, Save (see §8.1) — no restart, no `.env` editing |
+| The ⚙ panel's model fields are greyed out | The service was started with `--config`/`config.yaml`; the panel reports the file to edit instead |
+| You want different retrieval quality | Start with a different profile (api is strongest / local is free); changing the embedding model means re-indexing (`mikasa ingest --reindex`) |

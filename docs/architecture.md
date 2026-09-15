@@ -266,3 +266,12 @@ correctness; real quality comes from actually running stage C on api/local.
 All three profiles share one configuration (switched by profile), one SQLite
 database, and one evaluation methodology — an offline session runs the entire flow
 with zero API keys (mock/none), which is exactly the default form for CI and demos.
+
+**Configuration lookup order**: an explicit `--config` → `config/config.yaml` (working
+directory first, source mode only, then the repo root) → `config/profiles/<profile>.yaml`.
+On top of the profile file, a user-writable overlay `<data dir>/config.yaml` (written by the
+web settings panel, ADR-0018) is deep-merged — it never applies when `--config`/`config.yaml`
+supplied the base, and its `profile:` key is ignored. Secrets never live in any of these: the
+panel writes the key to `<data dir>/.env`, and every `.env` in the lookup chain
+(`MIKASA_ENV_FILE` → data dir → resource root → next to the exe) is loaded, with the first
+file winning for duplicate names.

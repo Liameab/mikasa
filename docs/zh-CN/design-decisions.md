@@ -34,6 +34,9 @@
 | ADR-0013 | free 自由问答旁路：与 kb/评测解耦，mode 不落库 | Accepted |
 | ADR-0014 | local profile 落地：免密钥占位 + 本地重排/裁判暂关 + 维度迁移纪律 | Accepted |
 | ADR-0015 | 会话管理升级：文件夹树 + 标题三路径锁 + suggest 降级语义 | Accepted |
+| ADR-0016 | 阅读视图：去接缝在后端 + 原文件白名单 + 正文开口的边界 | Accepted |
+| ADR-0017 | 合并「页面」视图 + 页码对齐 + Ollama 上下文窗口 | Accepted |
+| ADR-0018 | 设置面板配置模型：用户配置覆盖层 + 免重启热生效 | Accepted |
 
 ---
 
@@ -636,3 +639,65 @@ E2E `tools/chrome_reader.py`。
 `tests/unit/ingest/test_pagelocate.py`、`test_loaders.py`（两处页码回归）、
 `tests/unit/web/test_documents_api.py`；E2E `tools/chrome_reader.py`（PDF
 页面视图断言）。
+
+## ADR-0018 设置面板配置模型：用户配置覆盖层 + 免重启热生效
+
+- 状态：Accepted ｜ M5 后完善（2026-09-15，用户提出）
+- 关联：ADR-0001（三档 profile）、ADR-0002（密钥只经环境变量）、
+  ADR-0014（嵌入维度纪律）、ADR-0017（Ollama 上下文窗口）
+
+**背景**：首启引导写着"设置面板里能改"，但设置面板一直只有外观项——想让
+应用换模型/换供应商只能手改 `.env`，而打包版连 `.env` 都在只读解包目录里。
+用户要求做成 CC Switch 那种形态：选来源、贴密钥、测连通，保存即生效。
+
+**决策**：
+
+1. **持久化落在"用户可写的覆盖层"，不重写 profile**：面板写
+   `user_data_root()/config.yaml`（源码模式 `data/config.yaml`；打包
+   `%LOCALAPPDATA%\Mikasa\config.yaml`——打包后 `resource_root()` 只读）。
+   它**只在基底是 profile 文件时**深合并；显式 `--config` 与
+   `config/config.yaml` 保持"完整替换"语义（迁移演练与 E2E 工具都依赖它）。
+   覆盖层里的 `profile:` 键一律忽略：档位决定 embedding/检索整套，允许面板
+   改档会让新档的 embedding 与旧档的索引对不上（ADR-0014）。
+2. **面板只写 `llm:` 段**：改嵌入模型会变向量维度、必须全量重索引，仍归 CLI
+   决策；reranker/judge 也随档位。且只写面板自己拥有的字段（temperature/
+   max_tokens/timeout 不写），避免把档位调优过的数字用旧快照固化。
+3. **密钥写 `user_data_root()/.env`**（python-dotenv `set_key`，
+   `quote_mode="always"`，缺文件时先建 UTF-8 头注释），覆盖层里永不出现密钥；
+   读取仍按 ADR-0002 经 `api_key_env` 在请求时刻解析。`GET /api/settings/model`
+   只回 `has_api_key`、永不回值；测试连接把密钥临时放进
+   `MIKASA_SETTINGS_TEST_KEY` 环境变量并在 `finally` 摘除。清除密钥 = 删行 +
+   从进程环境弹出，**且只动本次提交那一个变量**（api 档的
+   `SILICONFLOW_API_KEY` 被 embedding/reranker/judge 共用，误清会静默打挂检索）。
+4. **保存即热生效**：写文件 → 直接写进程环境（`load_dotenv` 不覆盖已存在变量）
+   → 重新 `load_settings()` → **先**换 `services.settings` 再 `rebuild_ask()`
+   （它用 `self.settings` 重建）→ 换 `app.state.settings`（`/api/health` 的取数口）。
+   `_APPLY_LOCK` 串行化保存；在途问答持旧对象照常完成；新 AskService 索引缓存
+   冷启动（低频显式动作，可接受）。
+5. **`.env` 查找链改为全部加载**：旧实现"命中第一个存在的文件就停"。面板把
+   密钥写进数据目录 `.env` 后，仓库根 `.env` 里的其它密钥会被静默屏蔽
+   （api 档下 embedding/reranker/judge 全挂）。现在按链序全部加载，同名键
+   先加载者胜——与旧语义（链序在前者优先）一致。
+6. **测试连接不碰任何生效状态**：一次性客户端 `max_retries=0`
+   （否则 20s 超时会拖成 3×20s）、`max_tokens=8`，恒回 200 +
+   `{ok, latency_ms, error?}`——"连不上"是探测结果而非服务端错误，前端一个
+   pill 直接渲染。
+
+**被否方案**：把完整生效配置快照进覆盖层——会把 `${VAR}` 展开固化成字面量、
+把将来的 profile 默认值调整永久压在旧快照下，且写错 `profile:` 一个键就触发
+全量重索引；写随包 `resource_root()`——打包版只读，写不进去；面板切档位——
+同上重索引风险。
+
+**局限**：覆盖层对全部档位生效（含 offline；用户显式换模型即自担该档
+"零调用"承诺失效）。配置来自 `--config`/`config.yaml` 时面板只读（端点回
+400 并给出文件路径）。judge/reranker 暂不在面板内开放。
+
+**代码**：`config/settings.py`（覆盖层加载合并、`user_config_path`、
+`user_env_path`、`write_llm_overlay`、`write_api_key`、`clear_api_key`、
+`.env` 全链加载）、`providers/ollama.py`（自 CLI 迁出）、`providers/llm.py`
+（`max_retries`）、`web/routers/settings.py`（新）、`web/schemas.py`、
+`web/static/js/model-settings.js`（新）、`static/index.html`、
+`css/style.css`、`static/js/settings.js`、`static/js/onboard.js`；测试
+`tests/unit/config/test_user_config.py`、`tests/unit/web/test_settings_api.py`、
+`tests/conftest.py`（全局 `MIKASA_DATA_DIR` 隔离）；E2E
+`tools/chrome_model_settings.py`。

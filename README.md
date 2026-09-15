@@ -8,7 +8,7 @@ fusion), Chinese-aware structural chunking, citation tracing, and a three-stage 
 pipeline — all hand-written, **no RAG framework**. The code is transparent and the evaluation numbers
 are reproducible.
 
-**Status**: 430 tests passing, ruff + mypy clean. Actively developed; M5 (public release) in progress.
+**Status**: 495 tests passing, ruff + mypy clean. Actively developed; M5 (public release) in progress.
 
 ## Highlights
 
@@ -33,6 +33,10 @@ are reproducible.
   no bundler).
 - **Session tree** — arbitrarily nested folders for conversations, with auto-generated titles from
   the first question (manual renames are never overwritten).
+- **Model settings in the UI** — pick a provider (local Ollama / DeepSeek / SiliconFlow / any
+  OpenAI-compatible endpoint), paste a key, test the connection, save: the LLM switches
+  immediately, no restart and no `.env` editing. Keys stay in the local data directory and are
+  never sent back to the browser.
 
 ## Documentation
 

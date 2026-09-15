@@ -1,6 +1,8 @@
 /* =========================================================================
    聊天设置（问答页右上齿轮）：昵称 / 消息字号 / 对话框背景色 / 背景图。
 
+   面板另含「模型」段（服务端配置，见 js/model-settings.js 的分工说明）。
+
    全部存 localStorage（mikasa.ui.*）——本机浏览器级偏好，不上服务器；
    昵称字段为将来账号体系预留：账号上线后由用户表带入，读同一取值口
    nickname()（qa.js 气泡署名处唯一调用点，将来替换成账号数据即可）。
@@ -13,6 +15,7 @@
    ========================================================================= */
 
 import { $, el, toast } from "./common.js";
+import { initModelSettings, refreshModelSettings } from "./model-settings.js";
 
 const KEY = {
   nick: "mikasa.ui.nick",
@@ -162,6 +165,7 @@ function openPanel(open) {
     $("#s-nick").value = nickname();
     $("#s-font").value = localStorage.getItem(KEY.font) || "14.5";
     $("#s-font-val").textContent = $("#s-font").value;
+    void refreshModelSettings(); // 「模型」段：从服务端拉当前配置回填
   }
 }
 
@@ -171,6 +175,7 @@ function openPanel(open) {
  */
 export function initSettings() {
   buildSwatches();
+  initModelSettings(); // 「模型」段（服务端配置，见 js/model-settings.js）
   $("#s-font-val").textContent = $("#s-font").value = localStorage.getItem(KEY.font) || "14.5";
 
   $("#btn-settings").addEventListener("click", () => openPanel($("#settings-panel").classList.contains("hidden")));
