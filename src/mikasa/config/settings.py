@@ -287,6 +287,126 @@ def _secret_from_env(env_name: str | None) -> str | None:
     return os.environ.get(env_name) or None
 
 
+# ---------------------------------------------------------------------------
+# 用户配置覆盖层与密钥写回（Web 设置面板的落盘目标，见 ADR-0018）
+# ---------------------------------------------------------------------------
+
+# 覆盖层头注释：给任何打开这个文件的人（包括未来的我）交代它是谁写的
+_OVERLAY_HEADER = (
+    "# Mikasa 用户配置覆盖层（Web 设置面板自动生成，也可手工编辑）\n"
+    "# 只覆盖 profile 文件里同名的字段；API 密钥不在这里，在数据目录的 .env。\n"
+)
+
+# .env 头注释：说明这个文件的性质（本机、明文、不入库）
+_ENV_HEADER = (
+    "# Mikasa 本地密钥文件（Web 设置面板写入，也可手工编辑）\n"
+    "# 明文只存本机，不入库、不上传；密钥按 ADR-0002 只经环境变量注入。\n"
+    "# 同名变量若已在系统里 export 过，系统的那份优先（python-dotenv 默认不覆盖）。\n"
+)
+
+
+def user_config_path() -> Path:
+    """用户配置覆盖层的路径（设置面板「保存」的写入目标）。
+
+    放在数据目录而不是随包资源根：打包后 resource_root() 是只读解包目录，
+    用户既找不到也改不了；user_data_root() 才是他可写的家
+    （%LOCALAPPDATA%\\Mikasa）。开发时 = 仓库 data/ 下，与 .env 的查找链
+    共用同一套"数据根"心智模型。
+    """
+    return user_data_root() / "config.yaml"
+
+
+def user_env_path() -> Path:
+    """密钥 .env 的写入目标：读取链的第一候选。
+
+    MIKASA_ENV_FILE 显式指定时写它（读取链也以它为先，读写永远一致）；
+    否则写数据目录下的 .env。这里刻意**不返回"第一个已存在的文件"**——
+    打包后第一个存在的可能是随包只读资源里的 .env，写它会直接失败。
+    """
+    explicit = os.environ.get("MIKASA_ENV_FILE")
+    if explicit:
+        return Path(explicit).expanduser()
+    return user_data_root() / ".env"
+
+
+def write_llm_overlay(fields: dict[str, Any]) -> Path:
+    """把 llm 段写进用户配置覆盖层（tmp + 原子替换，杜绝写一半的坏文件）。
+
+    只写传入的字段：覆盖层是 _deep_merge 叠加在 profile 之上的，没写的键
+    继续取 profile 的值。面板 v1 只开放 llm 段——embedding/reranker/judge
+    仍随档位（换 embedding 模型会因向量维度不同要求全量重索引，ADR-0014）。
+    """
+    path = user_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = yaml.safe_dump({"llm": fields}, allow_unicode=True, sort_keys=False)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(_OVERLAY_HEADER + body, encoding="utf-8")
+    os.replace(tmp, path)  # 同目录原子替换：读到的永远是完整 YAML
+    return path
+
+
+def write_api_key(env_name: str, value: str) -> Path:
+    """把密钥写进 .env（新建时带头注释；已存在则就地更新该键）。
+
+    用 python-dotenv 的 set_key 负责转义与保留其它行——手写字符串拼接
+    迟早会在含引号/井号/空格的密钥上翻车。set_key 遇到文件不存在的行为
+    跨版本不一致（旧版本直接抛错），所以先显式建好带注释的空文件。
+    """
+    try:
+        from dotenv import set_key
+    except ImportError as exc:  # 读取链早已依赖它，这里只是兜底
+        raise ConfigError("python-dotenv 未安装：无法保存密钥，请先安装依赖") from exc
+    path = user_env_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.is_file():
+        path.write_text(_ENV_HEADER, encoding="utf-8")
+    set_key(str(path), env_name, value, quote_mode="always")
+    return path
+
+
+def clear_api_key(env_name: str) -> Path:
+    """从 .env 里删除某个密钥行（清空密钥 = 删行，而不是留空值）。
+
+    留 `KEY=` 空值行与"未配置"在下游判空逻辑里表现不一致；直接删行语义
+    最干净。文件不存在时静默返回——"清除一个本来就没有的东西"不是错误。
+    """
+    path = user_env_path()
+    if not path.is_file():
+        return path
+    try:
+        from dotenv import unset_key
+    except ImportError as exc:
+        raise ConfigError("python-dotenv 未安装：无法清除密钥，请先安装依赖") from exc
+    unset_key(str(path), env_name, quote_mode="always")
+    return path
+
+
+def _load_user_overlay() -> dict[str, Any]:
+    """读用户覆盖层（不存在返回空 dict）。
+
+    只在**基底是 profile 文件**时参与合并（调用方判断）：--config 与
+    config.yaml 是"完整替换"语义（README、E2E 工具、迁移演练都依赖它），
+    再叠一层的话，显式指定的配置就不再是显式配置了。
+    覆盖层里的 `profile:` 键一律忽略——档位决定 embedding/检索整套，
+    允许面板改档会让新档的 embedding 与旧档建的索引对不上（ADR-0014），
+    档位选择权只留给 --profile / config.yaml。
+    """
+    path = user_config_path()
+    if not path.is_file():
+        return {}
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise ConfigError(f"用户配置读取失败（{path}）：{exc}") from exc
+    if raw is None:  # 空文件（比如只有头注释）
+        return {}
+    if not isinstance(raw, dict):
+        raise ConfigError(f"用户配置必须是键值结构（{path}）")
+    raw.pop("profile", None)
+    expanded: dict[str, Any] = expand_env_vars(raw)
+    return expanded
+
+
 def _config_lookup(profile: str, config_path: Path | None) -> tuple[Path, str, str | None]:
     """返回 (配置文件路径, 生效 profile, 配置内声明路径)。
 
@@ -325,7 +445,7 @@ def _declared_profile(path: Path) -> str | None:
     return declared if isinstance(declared, str) else None
 
 
-def _format_validation_error(exc: ValidationError) -> str:
+def format_validation_error(exc: ValidationError) -> str:
     """pydantic 校验错误 → 一行可读文本（最多列 5 条，防刷屏）。"""
     parts: list[str] = []
     for err in exc.errors()[:5]:
@@ -358,6 +478,10 @@ def load_settings(
     raw = expand_env_vars(raw)
 
     merged = _deep_merge(_default_section_dict(), raw)
+    if declared_path is None:
+        # 基底是 profile 文件 → 叠加用户覆盖层（设置面板写的那份）；
+        # --config / config.yaml 走"完整替换"，不叠（见 _load_user_overlay）
+        merged = _deep_merge(merged, _load_user_overlay())
     merged["profile"] = active_profile
     if declared_path is not None:
         merged["config_path"] = declared_path
@@ -367,7 +491,7 @@ def load_settings(
     except ValidationError as exc:
         # pydantic 的报错面向开发者（英文 + loc/type 结构），CLI/Web 只接得住
         # ZhiwenError —— 不翻译就变成裸 traceback 或 500（2026-09-11 修复）
-        raise ConfigError(f"配置项非法（{path}）：{_format_validation_error(exc)}") from exc
+        raise ConfigError(f"配置项非法（{path}）：{format_validation_error(exc)}") from exc
     if data_dir is not None:
         settings = settings.model_copy(update={"data_dir": data_dir})
     if isinstance(settings.chunking, ChunkingConfig):
@@ -409,10 +533,21 @@ def _dotenv_candidates() -> list[Path]:
 
 
 def load_dotenv_file() -> None:
-    """按查找链载入 `.env`（python-dotenv；文件不存在就跳过下一个）。
+    """按查找链载入**所有存在**的 `.env`（python-dotenv；不存在的跳过）。
 
     密钥按设计只经环境变量注入，.env 提供"复制 .env.example 即用"的本地体验。
     不覆盖进程里已显式 export 的同名变量（load_dotenv 默认 override=False）。
+
+    **不再"命中第一个就停"**（2026-09-15 修）：设置面板把新密钥写进数据目录
+    的 .env 后，开发模式（数据根 = 仓库 data/）下仓库根 .env 里的**其它**密钥
+    会被静默屏蔽——api 档的 embedding/reranker/judge 密钥都在同一份 .env 里，
+    一屏蔽就是整条检索链报"未配置 API 密钥"。按链序全部加载则各文件的键
+    自然合流；同名键由先加载者胜出（override=False 时后加载不覆盖），
+    与旧语义（链序在前者优先）一致。
+
+    保存后热刷新不走这里：设置端点直接写 os.environ（写入/清除它自己管的那
+    一个键）。若在这里用 override=True 重载，链序靠后的文件反而会压过靠前的，
+    优先级就反了。
     CLI 入口（cli.main）与 Web reload 工厂（web.app.serve_app_factory）
     都调它——两条服务路径的密钥装载行为必须一致。
     """
@@ -427,4 +562,3 @@ def load_dotenv_file() -> None:
     for path in _dotenv_candidates():
         if path.is_file():
             load_dotenv(path)
-            return

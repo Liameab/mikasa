@@ -16,6 +16,19 @@ if str(SRC) not in sys.path:
 from mikasa.config.settings import load_settings  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _isolate_user_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """全局隔离用户数据根：所有测试的用户级读写都落在 tmp。
+
+    load_settings 会合并"用户配置覆盖层"（user_data_root()/config.yaml，
+    Web 设置面板的写入目标）——开发机上这个文件一旦真实存在，就会给全库
+    测试注入意外的 llm 覆盖（模型名/端点全变），且污染源不在测试目录里，
+    排查时极难联想到。统一把 MIKASA_DATA_DIR 指到 tmp，测试世界与现实
+    世界隔离（user_data_root() 及其派生的一切随之落到 tmp）。
+    """
+    monkeypatch.setenv("MIKASA_DATA_DIR", str(tmp_path / "userdata"))
+
+
 @pytest.fixture()
 def offline_settings(tmp_path: Path):
     """offline profile + 隔离数据目录（不污染仓库 data/）。"""

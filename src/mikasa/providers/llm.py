@@ -75,9 +75,12 @@ class OpenAICompatLLM:
     （配置层放行会让 api 忘填密钥也被静默放行，见 ADR-0014）。
     """
 
-    def __init__(self, config: LLMConfig) -> None:
+    def __init__(self, config: LLMConfig, *, max_retries: int = 3) -> None:
+        """max_retries 默认 3（正式问答链路的既有行为）；设置面板的"测试连接"
+        传 0——它配 20s 超时，本意是一次硬上限，3 次重试会拖成 60s 的等待。"""
         self._config = config
         self.model = config.model
+        self._max_retries = max_retries
         self._client: Any = None  # openai.OpenAI，惰性构造
 
     def _get_client(self) -> Any:
@@ -103,7 +106,7 @@ class OpenAICompatLLM:
             base_url=self._config.base_url,
             api_key=api_key,
             timeout=self._config.timeout_seconds,
-            max_retries=3,
+            max_retries=self._max_retries,
         )
         return self._client
 

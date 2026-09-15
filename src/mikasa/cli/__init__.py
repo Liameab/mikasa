@@ -33,6 +33,10 @@ from mikasa.config.settings import (
 )
 from mikasa.errors import ConfigError, EvalError, ZhiwenError
 from mikasa.ingest.service import IngestService, IngestSummary
+from mikasa.providers.ollama import fetch_ollama_tags as _fetch_ollama_tags
+from mikasa.providers.ollama import (
+    ollama_api_root as _ollama_api_root,  # noqa: F401 - 兼容别名（单测按旧名引用）
+)
 from mikasa.utils.logging import default_log_file, get_logger, setup_logging
 
 app = typer.Typer(
@@ -104,44 +108,9 @@ def init(
 # doctor 本地探测函数（模块级：单测可 monkeypatch；doctor 从不真连外部服务）
 # ---------------------------------------------------------------------------
 
-
-def _ollama_api_root(base_url: str) -> str:
-    """OpenAI 兼容 base_url（…/v1）→ Ollama 原生 API 根（…/api）。
-
-    单测关注点：/v1 去除、容忍尾斜杠、非 /v1 结尾直接追加。
-    """
-    root = base_url.rstrip("/")
-    if root.endswith("/v1"):
-        root = root[:-3]
-    return f"{root}/api"
-
-
-def _fetch_ollama_tags(base_url: str) -> list[str]:
-    """GET {根}/api/tags → 本机已拉取模型名列表。
-
-    失败抛 RuntimeError：文案带可执行下一步——Windows 下 Ollama 若只绑定
-    IPv6 回环（localhost→::1 连不上），给 OLLAMA_BASE_URL 逃生口指引
-    （http://127.0.0.1:11434/v1）。3s 超时：本地服务探测不等网络。
-    """
-    import json
-    import urllib.error
-    import urllib.request
-
-    url = f"{_ollama_api_root(base_url)}/tags"
-    try:
-        with urllib.request.urlopen(url, timeout=3) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.URLError as exc:
-        # 连接拒绝/域名解析失败等（HTTPError 是 URLError 子类，一并覆盖）
-        raise RuntimeError(
-            f"Ollama 服务不可达（{url}）：{exc.reason}。\n"
-            "  请先启动 Ollama（退出系统托盘图标后重启应用）再试；若 Windows 下\n"
-            "  localhost 连不上（服务仅绑 IPv6 回环），可设环境变量\n"
-            "  OLLAMA_BASE_URL=http://127.0.0.1:11434/v1 后重跑"
-        ) from exc
-    except Exception as exc:  # noqa: BLE001 - 读超时/HTTP/JSON 解析等统一翻译为可执行文案
-        raise RuntimeError(f"Ollama 服务响应异常（{url}）：{exc}") from exc
-    return [str(model["name"]) for model in data.get("models", [])]
+# `_fetch_ollama_tags` / `_ollama_api_root` 已迁 providers/ollama.py（顶部 import，
+# 以 `as` 保留原名）：Web 设置面板也要列本机模型，被 web 依赖的代码不能住在
+# cli 里。doctor 调用与单测的 monkeypatch.setattr(cli, ...) 行为不变。
 
 
 def _check_fastembed_import() -> None:

@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from mikasa.pipeline.ask import AnswerMode
@@ -73,6 +75,39 @@ class TitleSuggestIn(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     apply: bool = Field(default=True, description="true=提炼并落库（手动命名锁除外）")
+
+
+class ModelSettingsIn(BaseModel):
+    """模型配置保存请求体（PUT /api/settings/model，见 ADR-0018）。
+
+    api_key 三段语义：**None = 本次不动密钥**；空串 = 清除；非空 = 写入。
+    前端"密钥框没被碰过"就不发该字段——GET 从不回传密钥，输入框平时是空的，
+    若把空值当"清除"处理，一次普通的改模型名就会顺手删掉已存密钥。
+    backend 只开放 api/local：mock 是 offline 体验档的形态，属于 profile 的事。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    backend: Literal["api", "local"] = Field(description="api=OpenAI 兼容云端；local=本机 Ollama")
+    base_url: str = Field(default="", max_length=500, description="OpenAI 兼容端点（含 /v1）")
+    model: str = Field(default="", max_length=200, description="模型名")
+    api_key_env: str = Field(default="", max_length=100, description="密钥所在环境变量名")
+    api_key: str | None = Field(default=None, max_length=500, description="None=不改/空串=清除")
+
+
+class ModelTestIn(BaseModel):
+    """测试连接请求体（POST /api/settings/model/test）。
+
+    api_key 缺省 = 用 api_key_env 指向的已存密钥（都没给则该后端视为无密钥）。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    backend: Literal["api", "local"] = "api"
+    base_url: str = Field(default="", max_length=500)
+    model: str = Field(default="", max_length=200)
+    api_key_env: str = Field(default="", max_length=100)
+    api_key: str | None = Field(default=None, max_length=500, description="缺省=用已存密钥")
 
 
 class DocumentPatchIn(BaseModel):
