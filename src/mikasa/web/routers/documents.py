@@ -501,6 +501,23 @@ def upload_document(
             digest.update(block)
             out.write(block)
     file_sha = digest.hexdigest()
+    return ingest_web_file(tmp_path, safe_name, file_sha, services, settings)
+
+
+def ingest_web_file(
+    tmp_path: Path,
+    safe_name: str,
+    file_sha: str,
+    services: AppServices,
+    settings: Settings,
+) -> JSONResponse:
+    """web-tmp 文件 → 入库 → 201/200/409 响应（上传与论文导入共用同一尾链）。
+
+    论文导入端点（papers.py）下载完 PDF 后走这里，产出与上传**逐字节同形**
+    的响应：前端树刷新/toast 判定零改动。入口契约：tmp_path 是 web-tmp 下
+    本次操作独占子目录里的文件，safe_name 是净化后的文件名（ingest 以其
+    basename 决定 uploads 副本名与标题）。
+    """
     try:
         # 入库失败（空文档/解析错误）→ 业务 400，文案即 exc 消息
         status, added_chunks, added_chars = services.ingest.ingest_one(tmp_path)
