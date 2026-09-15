@@ -127,6 +127,23 @@ def _download_hint(model: str, exc: Exception) -> ProviderError:
     )
 
 
+def _configure_cache_dir() -> None:
+    """把 fastembed 的模型缓存放进数据目录（默认在系统临时目录）。
+
+    默认位置 `%TEMP%/fastembed_cache` 会被磁盘清理/存储感知清掉，清掉后
+    下一次入库又要重下 100MB 模型——网络一抖就又是"入不进去"（2026-09-15
+    用户实测的坑）。放进数据目录后模型与库同生共死，整目录备份一并带走。
+    显式设过 FASTEMBED_CACHE_PATH 就不动（把自管缓存的自由留给高级用户）。
+    """
+    if os.environ.get("FASTEMBED_CACHE_PATH"):
+        return
+    from mikasa.config.settings import user_data_root
+
+    cache = user_data_root() / "models" / "fastembed"
+    cache.mkdir(parents=True, exist_ok=True)
+    os.environ["FASTEMBED_CACHE_PATH"] = str(cache)
+
+
 class LocalFastEmbed:
     """fastembed 本地实现（CPU/GPU 均可，首次运行自动下载模型，之后离线）。
 
@@ -149,6 +166,7 @@ class LocalFastEmbed:
                 "（首次运行会自动下载 bge-small-zh-v1.5，需联网一次）"
             ) from exc
         try:
+            _configure_cache_dir()  # 缓存落数据目录（构造时才读取，能在这里设）
             self._backend = TextEmbedding(self.model)
         except Exception as exc:  # 首次下载失败（网络）：换国内镜像再试一次
             if not _switch_hf_to_mirror():

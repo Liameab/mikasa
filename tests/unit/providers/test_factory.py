@@ -183,6 +183,38 @@ def test_local_fastembed_retries_with_mirror_on_download_failure(local_settings,
     assert os.environ["HF_HUB_DISABLE_XET"] == "1"  # 镜像的硬要求
 
 
+def test_local_fastembed_cache_lives_in_data_dir(local_settings, monkeypatch):
+    """模型缓存落数据目录（不放系统 Temp：Temp 会被清理，清了就得重下）。
+
+    显式设过 FASTEMBED_CACHE_PATH 时尊重用户选择（不覆盖）。
+    """
+    import fastembed
+    import numpy as np
+
+    import mikasa.config.settings as settings_module
+
+    class _Fake:
+        def __init__(self, model: str) -> None:
+            pass
+
+        def embed(self, texts):
+            return iter([np.zeros(4, dtype=np.float32) for _ in texts])
+
+    monkeypatch.setattr(fastembed, "TextEmbedding", _Fake)
+    monkeypatch.setenv("FASTEMBED_CACHE_PATH", "")  # 注册还原点（空值 = 当未设）
+
+    LocalFastEmbed(local_settings.embedding).embed_documents(["测试"])
+    expected = settings_module.user_data_root() / "models" / "fastembed"
+    assert os.environ["FASTEMBED_CACHE_PATH"] == str(expected)
+    assert expected.is_dir()
+
+    # 用户自管缓存时不覆盖
+    custom = str(settings_module.user_data_root() / "my-cache")
+    monkeypatch.setenv("FASTEMBED_CACHE_PATH", custom)
+    LocalFastEmbed(local_settings.embedding).embed_documents(["测试"])
+    assert os.environ["FASTEMBED_CACHE_PATH"] == custom
+
+
 def test_local_fastembed_download_failure_gives_actionable_error(local_settings, monkeypatch):
     """两次都失败 → ProviderError 中文指引（而不是裸 httpx traceback 冒到前端）。"""
     import fastembed
