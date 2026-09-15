@@ -13,12 +13,19 @@ WebView2（Windows 11 内置）渲染同一套界面——微信桌面版、VS C
      绑不上端口就静默退出 = "点了没反应"。这里顺延找空位。
   2. **无控制台**：exe 以 console=False 构建（像正经软件，不弹黑窗口），
      报错时用户什么都看不到——用系统弹窗兜底，日志同时落盘。
+     **注意双击时 `sys.stdout`/`sys.stderr` 是 None**（无 std 句柄），
+     任何 `print`/`isatty()` 都会抛 AttributeError；uvicorn 的默认日志
+     formatter 第一句就是 `sys.stdout.isatty()`，服务器线程直接夭折、
+     端口从未监听（2026-09-15 双击 100% 复现的"服务启动超时"根因；
+     命令行/重定向启动有句柄所以全绿——这就是它一直没被测出来的原因）。
+     对策见 `_ensure_std_streams` 与 `_serve_forever` 的 log_config=None。
   3. **WebView2 缺失**：极少数精简版系统没有；此时降级用 Edge/Chrome 的
      --app 模式开一个无地址栏窗口，最坏情况才退回默认浏览器。
 """
 
 from __future__ import annotations
 
+import os
 import shutil
 import socket
 import subprocess
@@ -79,6 +86,25 @@ def _pick_port(preferred: int = DEFAULT_PORT) -> tuple[int, bool]:
 
 
 _LOG_FILE: Path | None = None
+_SERVER_ERROR: list[str] = []  # 服务线程的异常原文（启动失败弹窗的真实原因段）
+
+
+def _ensure_std_streams() -> None:
+    """双击（无控制台）时给 sys.stdout/sys.stderr 补上空设备。
+
+    console=False 的构建被双击时没有任何 std 句柄，CPython 会把
+    sys.stdout/sys.stderr 置为 **None**——而带终端或重定向启动时它们是
+    正常对象。这不是学术问题：uvicorn 默认日志 formatter 的第一句就是
+    `self.use_colors = sys.stdout.isatty()`，None.isatty() 抛 AttributeError，
+    服务器线程当场死掉、端口从未监听，用户 25 秒后看到"服务启动超时"弹窗
+    （2026-09-15 实测：双击 100% 复现、命令行 100% 正常）。
+
+    挂 devnull 而不是 StringIO：窗口形态下这些输出本来就没人看，
+    devnull 不占内存、无限长也不怕。对象被 sys 引用持有，不会被回收。
+    """
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name) is None:
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))  # noqa: SIM115
 
 
 def _log_hint() -> str:
@@ -145,26 +171,67 @@ def _alert(message: str) -> None:
         pass
 
 
+def _failure_detail() -> str:
+    """启动失败弹窗的"真实原因"段：有服务线程异常就贴出来，没有则空串。
+
+    只取末尾几行：弹窗里没人读整段 traceback，最下面几行（异常类型 + 消息）
+    才是能行动的信息；完整堆栈在同一条写入的日志文件里。
+
+    存在意义：旧版弹窗写的是一句**猜测**（"常见原因：Ollama 未启动"），
+    与真实原因毫无关系，把用户和排障都带偏过（2026-09-15 用户实际按它
+    反复折腾 Ollama；真因是 sys.stdout=None 把 uvicorn 炸在构造期）。
+    猜测不如把原话端出来。
+    """
+    if not _SERVER_ERROR:
+        return ""
+    lines = [ln for ln in _SERVER_ERROR[-1].strip().splitlines() if ln.strip()]
+    return "服务线程报错：\n" + "\n".join(lines[-6:]) + "\n\n"
+
+
 def _serve_forever(port: int) -> None:
     """在后台线程里跑 FastAPI 服务（窗口关闭时进程退出，无需优雅停机）。
 
     用 `uvicorn.Server` 而不是 `uvicorn.run`：后者会装信号处理器，非主线程
     安装会抛 ValueError。
+
+    异常捕获不是装饰：这个线程死在主线程视野之外——不落日志、不弹窗，
+    用户只看到"服务启动超时"（而真正的原因无从查起，日志还是空的）。
+    捕获后把堆栈写进日志文件并留给弹窗展示，见 `_failure_detail`。
     """
     import uvicorn
 
     from mikasa.config.settings import load_dotenv_file, load_settings
     from mikasa.web.app import create_app
 
-    load_dotenv_file()
-    settings = load_settings("local")
-    config = uvicorn.Config(
-        create_app(settings),
-        host="127.0.0.1",
-        port=port,
-        log_level="warning",  # 窗口形态没有终端，日志走文件（setup_logging 已落盘）
-    )
-    uvicorn.Server(config).run()
+    try:
+        load_dotenv_file()
+        settings = load_settings("local")
+        config = uvicorn.Config(
+            create_app(settings),
+            host="127.0.0.1",
+            port=port,
+            log_level="warning",  # 窗口形态没有终端，日志走文件（setup_logging 已落盘）
+            # **必须显式关掉 uvicorn 自带的日志配置（dictConfig）**，两个原因：
+            # 1. 它的默认 formatter 第一句就是 `sys.stdout.isatty()`——双击时
+            #    sys.stdout 是 None，直接 AttributeError 把服务器线程炸死
+            #    （2026-09-15 双击 100% 复现的根因，见模块头第 2 条）；
+            # 2. 它会把 _attach_uvicorn_file_log 刚挂的文件 handler 整组换掉，
+            #    启动阶段的致命错误（端口被占等）又变回无处可看。
+            # log_config=None = "别动日志配置、用现成的"：保留自挂的文件
+            # handler，输出级别由 _attach_uvicorn_file_log 决定。
+            log_config=None,
+        )
+        uvicorn.Server(config).run()
+    except BaseException:
+        import logging
+        import traceback
+
+        trace = traceback.format_exc()
+        _SERVER_ERROR.append(trace)
+        # 写进用户日志（此时 setup_logging 已挂好文件 handler）：这是
+        # "日志永远 0 字节"的终结——启动期崩溃从此有据可查
+        logging.getLogger("mikasa").error("服务线程启动失败：\n%s", trace)
+        raise
 
 
 def _wait_ready(port: int, timeout: float = 25.0) -> bool:
@@ -258,6 +325,9 @@ def _run_cli() -> None:
 
 
 def main() -> None:
+    # 必须最先执行：双击（无控制台）时 sys.stdout/stderr 是 None，
+    # 后面任何库一碰就抛（uvicorn 的日志 formatter 就是这么把服务器炸死的）
+    _ensure_std_streams()
     if sys.argv[1:]:
         _run_cli()
         return
@@ -277,11 +347,9 @@ def main() -> None:
 
     threading.Thread(target=_serve_forever, args=(port,), daemon=True).start()
     if not _wait_ready(port):
-        _alert(
-            "服务启动超时。\n\n"
-            "常见原因：本机 Ollama 未启动（本地模型档需要它）。\n"
-            f"详细日志见：{_log_hint()}"
-        )
+        # 不再写"常见原因：Ollama 未启动"这类猜测——它与真实原因无关，
+        # 且启动链路根本不依赖 Ollama（2026-09-15 的教训）。有异常就端原话。
+        _alert(f"服务启动超时（25 秒内未能就绪）。\n\n{_failure_detail()}详细日志见：{_log_hint()}")
         raise SystemExit(1)
     try:
         _open_window(f"http://127.0.0.1:{port}/")
