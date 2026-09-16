@@ -110,6 +110,45 @@ class ModelTestIn(BaseModel):
     api_key: str | None = Field(default=None, max_length=500, description="缺省=用已存密钥")
 
 
+class PaperSearchIn(BaseModel):
+    """在线论文检索请求体（POST /api/papers/search，见 ADR-0019）。
+
+    offset/limit 是"全局交错窗口"（arxiv 占偶数位、openalex 占奇数位），
+    服务层换算成各源自己的 start/count；source=all 时两源合并。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    q: str = Field(min_length=1, max_length=200, description="检索词（中文或英文）")
+    source: Literal["all", "arxiv", "openalex"] = Field(default="all", description="检索来源")
+    offset: int = Field(default=0, ge=0, le=100000, description="结果偏移（分页）")
+    limit: int = Field(default=20, ge=1, le=50, description="每页条数")
+
+
+class PaperImportIn(BaseModel):
+    """论文导入请求体（POST /api/papers/import）。
+
+    source+id 而非 PDF 链接：PDF 地址由服务端按 id 反查来源 API 解析，
+    客户端不能塞任意 URL（SSRF 防线在入口就闭合，见 papers/download.py）。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    source: Literal["arxiv", "openalex"] = Field(description="来源（id 必属单一来源）")
+    id: str = Field(min_length=1, max_length=64, description="论文编号（arXiv id / OpenAlex W-id）")
+
+
+class PaperKeyIn(BaseModel):
+    """OpenAlex API 密钥保存请求体（PUT /api/papers/settings）。
+
+    三段语义同 ModelSettingsIn：None=不动；空串=清除；非空=写入。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    api_key: str | None = Field(default=None, max_length=500, description="None=不改/空串=清除")
+
+
 class DocumentPatchIn(BaseModel):
     """文档改名/移夹（PATCH /api/documents/{id}，两字段可任意单发）。
 

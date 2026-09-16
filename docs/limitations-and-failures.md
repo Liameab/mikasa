@@ -137,6 +137,29 @@ Python version (3.13 ships ≥3.40); the migration tests cover pure in-memory an
 databases, so no cross-version differences need guarding. The rehearsal record for the first real
 migration (v1→v2) is in the ADR-0004 revision section.
 
+### Online paper search: coverage and paging boundaries (M7, ADR-0019)
+
+- **Coverage is lopsided by design of the upstreams, not by choice**: arXiv carries CS/physics
+  preprints (fully open access) and OpenAlex carries DOI'd journal metadata — Chinese
+  science/engineering journals included, CSSCI/social-science Chinese journals ≈ 0. CNKI/Wanfang/
+  VIP exclusive full text is unreachable (paywall, no public API); the panel and the docs say
+  "CNKI-like experience, not CNKI's data" in as many words, and a paper without open-access full
+  text offers a DOI landing-page jump instead of an import;
+- **Paging is forward-only**: the interleaved window advances by the number of results received
+  (arXiv takes the even global positions, OpenAlex the odd ones), so there is no "jump to page N"
+  and no reliable total; each page costs one upstream request per source;
+- **arXiv's politeness throttle (~1 request/3 s) is felt by the user**: a single search can be two
+  upstream calls, and back-to-back searches wait out the interval — a deliberate trade against
+  getting the public API to rate-limit us;
+- **OpenAlex abstracts are lossy**: they are reconstructed from an inverted index, so punctuation
+  and capitalisation are gone (an upstream storage decision, not ours);
+- **Import means download**: there is no in-app preview of a paper that has not been imported, the
+  downloader enforces a 50 MB cap, and a paper whose hosting server rejects the request simply
+  cannot be imported (502 with the upstream reason);
+- **The API key is a quota knob, not a requirement**: anonymous OpenAlex access only has a small
+  trial quota, so heavy use wants the free key in the panel; the service still works without one
+  until the quota runs out (the error message says what to do).
+
 ## 4. Real Bug Cases from Development (Fixed, Archived)
 
 > Each entry is a retrospective on why testing missed it at the time, not a trophy case. Archival

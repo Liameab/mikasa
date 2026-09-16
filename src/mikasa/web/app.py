@@ -26,6 +26,7 @@ from mikasa.errors import ProviderError, ZhiwenError, strip_paths
 from mikasa.utils.logging import get_logger
 from mikasa.web.limits import BodySizeLimit, body_limit_bytes
 from mikasa.web.routers import documents, eval, health, qa, sessions
+from mikasa.web.routers.papers import router as papers_router
 from mikasa.web.routers.settings import router as settings_router
 from mikasa.web.services import AppServices
 
@@ -78,6 +79,7 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(eval.router)
     app.include_router(sessions.router)
     app.include_router(settings_router)
+    app.include_router(papers_router)
 
     # ---- 异常 → 统一错误 JSON（路由内不散落 try/except） ----
     @app.exception_handler(ClientDisconnect)

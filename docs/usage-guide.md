@@ -114,6 +114,14 @@ Three pages in the top bar: **Chat** (home) / **Library** / **Evaluation**; the 
 
 **Semantics worth remembering**: renaming changes only the display name inside the library (the file in uploads is untouched); deleting a document removes its retrieval chunks and its uploaded copy together; re-uploading identical content is skipped, while re-uploading the same file with new content updates it (organizational placement preserved); and the full rebuild after switching embedding models (`reindex`) likewise preserves your organization.
 
+**Online paper search** (the panel between the upload area and the document list) searches two free sources — arXiv (preprints, all open access) and OpenAlex (journal metadata, including Chinese journals) — and imports what it finds straight into your corpus:
+
+- Type a query in Chinese or English ("大语言模型 检索增强", "retrieval augmented generation") and search; **全部来源 / arXiv / OpenAlex** chips narrow it to one source.
+- Each result shows title (click = the paper's landing page), authors, year, journal/conference, and a source badge. **摘要** expands the abstract, **打开** opens the landing page, **导入** downloads the PDF and ingests it — the document then appears at the root of the corpus tree, ready to be asked about. Import the same paper twice and the second one is skipped by content hash.
+- Papers without an open-access full text cannot be imported (their button is disabled) — use 打开 to reach the publisher page. This is also why the panel is honest about coverage: **CNKI-like experience, not CNKI's data** — CNKI/Wanfang/VIP exclusive full text is paywalled and has no public API, so Chinese social-science coverage is near zero, while DOI-carrying Chinese science/engineering journals are covered.
+- If one source is temporarily unreachable, the results from the other still come back with a "部分来源暂时不可用" note on top; only both failing at once is an error.
+- **密钥** (top right of the panel) stores an optional [OpenAlex API key](https://openalex.org) — free registration, 100k credits/day, and anonymous access only gets a small trial quota. The key is saved to the data directory's `.env` and takes effect immediately; the panel never displays the saved value, only whether one exists (clear it by emptying the box and saving).
+
 ---
 
 ## 7. Session Management (Left Side of the Chat Page)

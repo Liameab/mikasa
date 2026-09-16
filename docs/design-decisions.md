@@ -874,3 +874,88 @@ answers 400 with the file path). Judge and reranker are not configurable from th
 `static/index.html`, `css/style.css`, `static/js/settings.js`, `static/js/onboard.js`; tests
 `tests/unit/config/test_user_config.py`, `tests/unit/web/test_settings_api.py`,
 `tests/conftest.py` (global `MIKASA_DATA_DIR` isolation); E2E `tools/chrome_model_settings.py`.
+
+## ADR-0019 Online paper search: two free sources, interleaved pagination, a defended downloader
+
+- Status: Accepted | M7 (2026-09-15/16, user request: "search related papers in the knowledge base, like CNKI")
+- Related: ADR-0002 (secrets live in the environment), ADR-0016 (reader view, original-file allowlist),
+  ADR-0018 (the settings panel's key discipline this panel copies)
+
+**Problem**: the user wanted CNKI-style literature search inside the knowledge base — find papers
+beyond the ones already uploaded, pull them in, and ask questions about them right away. The
+honest constraint, established by a feasibility probe on 2026-09-11: CNKI/Wanfang/VIP hold their
+full text behind paywalls with no public API and active anti-scraping; scraping them is a legal
+problem, not an engineering one. **The target is a CNKI-like experience, not CNKI's data** — and
+the UI says so.
+
+**Decision**:
+
+1. **Two sources with public APIs, both free: arXiv (Atom XML) and OpenAlex (works JSON).**
+   arXiv carries CS/physics preprints, all open access; its API needs https (the http port was
+   blocked on this machine in testing) and sits behind a ~1 request/3 s politeness limit, honoured
+   by a module-level throttle that sleeps only *after* a successful call. OpenAlex covers
+   DOI-carrying core journals including Chinese ones (a Chinese query like "水库坝" returns
+   thousands of hits) but has required a free API key since 2026-02 (100k credits/day; a list
+   query costs 10) and stores abstracts as inverted indices, reconstructed without punctuation or
+   case. Both return wildly different field shapes, normalised into one `PaperResult`.
+2. **Interleaved pagination instead of score merging.** The two sources' relevance scores are not
+   commensurable, so a merged ordering would be a fiction. Global positions are assigned by
+   parity — even to arXiv, odd to OpenAlex — so every page shows both sources and Chinese results
+   (OpenAlex) can never be permanently buried under English ones (arXiv). `has_more` replaces
+   `total`: arXiv's relevance count drifts and OpenAlex's `meta.count` is an approximation, so
+   "did we fill the page" is the only honest paging signal.
+3. **Per-source degradation.** One source raising puts a Chinese message into an `errors` map and
+   the response still returns 200 with the other source's results; only both failing together is
+   worth a 502. The frontend renders the map as a "部分来源暂时不可用" line above the results.
+4. **Import never trusts the client.** The request carries `{source, id}` — not a title, not a PDF
+   URL. The server re-fetches the metadata from the source API and derives the PDF URL from its
+   own record; ids are regex-validated twice (schema parse + before entering a URL), which closes
+   the SSRF line at the entry point rather than at the socket. A paper with no open-access full
+   text is a 409 carrying a landing-page (DOI) hint, not a failure.
+5. **A defended downloader** (`papers/download.py`): https only to hosts that resolve to public
+   addresses; http only to loopback (the E2E fake-source escape hatch — loopback cannot reach the
+   intranet, so the SSRF guarantee is unchanged); every redirect hop re-validated, max 3;
+   `Content-Type: application/pdf` plus a `%PDF-` magic-byte sniff; a 50 MB hard cap; half-written
+   files deleted on every failure path. Accepted residual: validation and the actual connection do
+   two independent DNS lookups, so a theoretical DNS-rebinding window remains; closing it means
+   writing our own connection layer, which is not worth it for a local personal app.
+6. **Import reuses the upload tail.** The ingest tail of the upload endpoint was extracted into
+   `documents.ingest_web_file`, so an import returns a **byte-identical** 201/200/409 response —
+   the tree refresh, the toasts and the duplicate handling are the same code path, not a copy.
+   The filename is `title[:80] (source id).pdf`: ingest's same-name-replacement semantics would
+   let two identically titled papers clobber each other, and the id suffix keeps them apart, while
+   genuinely identical bytes still dedupe by sha256 (200, "已跳过重复导入"). The title is
+   truncated *before* the suffix is appended, because `sanitize_filename` keeps the head and cuts
+   the tail.
+7. **The OpenAlex key lives in the panel, with ADR-0018's three-state semantics** (`null` =
+   leave alone, `""` = clear, value = write) and its discipline: written to the data-dir `.env`
+   plus the process environment for hot effect, `GET` answering a boolean and never the value.
+   The key row is collapsed by default — the key is optional (anonymous access has a small trial
+   quota) and should not compete with the search box for attention.
+8. **The panel lives on the knowledge base page** (`js/papers.js`), because that is where imported
+   documents land and where the corpus tree gives immediate feedback. The settings panel only
+   exists on the QA page, so the key row is the panel's own. Result rows render title/authors/
+   year/source with an expandable abstract; the import button is disabled up front for papers
+   without open access, so the 409 is a safety net rather than the UX.
+
+**Rejected options**: scraping CNKI/Wanfang/VIP (paywall + anti-bot + no API = legal problem, and
+the docs say so); Semantic Scholar as a third source (it works, but rate-limits at 429 — not worth
+a third parser right now); CORE/ChinaXiv as Chinese OA supplements (kept in the backlog);
+accepting a PDF URL from the client (that is the SSRF hole the design closes); a separate "papers"
+page (the knowledge base is where documents live — import must land where the user already is);
+merging both sources by score (see 2); letting the client send the title for the filename (the
+server would be writing a name the user could have forged).
+
+**Limitations**: CSSCI/social-science Chinese coverage is ≈ 0, and CNKI-exclusive full text is not
+reachable — the UI and the docs say so plainly and offer a DOI jump instead. arXiv's 3 s throttle
+makes back-to-back searches feel slow (one search can be two upstream calls). No "jump to page N":
+the interleaved window advances by results received, so paging is forward-only. The abstract
+reconstructed from OpenAlex loses punctuation and case. Import = download: there is no in-app
+preview for a paper that has not been imported, and the 50 MB cap rejects oversized PDFs.
+
+**Code**: `papers/sources.py` (the `PaperResult` model and `PaperSource` protocol), `papers/arxiv.py`,
+`papers/openalex.py`, `papers/download.py`, `papers/service.py` (interleaving + degradation),
+`papers/errors.py`; `web/routers/papers.py` (new), `web/schemas.py`, `web/routers/documents.py`
+(`ingest_web_file` extraction), `web/static/js/papers.js` (new), `static/documents.html`,
+`static/js/documents.js`, `css/style.css`; tests `tests/unit/papers/` (sources, service, download)
+and `tests/unit/web/test_papers_api.py`; E2E `tools/chrome_papers.py`.

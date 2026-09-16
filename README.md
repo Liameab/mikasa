@@ -119,7 +119,9 @@ Open http://127.0.0.1:8000/ — three pages:
   mode switch (KB mode is strict RAG with citations and refusals; free-chat mode talks to the model
   directly without retrieval or citations).
 - **Library** — upload and delete documents in the browser; a folder tree organizes the corpus;
-  newly ingested documents are searchable immediately.
+  newly ingested documents are searchable immediately. An **online paper search** panel queries
+  arXiv and OpenAlex and imports an open-access PDF straight into the corpus (import, then ask
+  about it right away) — a CNKI-like experience, not CNKI's data: paywalled full text stays out.
 - **Evaluation** — run the golden-set evaluation in the background, poll progress, and read the
   generated report.
 

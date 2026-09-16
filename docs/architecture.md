@@ -38,7 +38,7 @@ than three scripts bolted together.
 | --- | --- | --- |
 | Entry | `cli/` `web/` `__main__.py` | typer + rich commands; FastAPI + vanilla frontend |
 | Application | `pipeline/` | ask orchestration: retrieve → inject → generate → validate |
-| Domain services | `ingest/` `index/` `eval/` | ingest, index, evaluation (the pluggable algorithm zone) |
+| Domain services | `ingest/` `index/` `eval/` `papers/` | ingest, index, evaluation, online paper search (the pluggable algorithm zone) |
 | Providers | `providers/` | LLM / embedding / reranker: Protocol + implementations (ADR-0003) |
 | Storage | `storage/` | SQLite connection/repositories + meta.json snapshot |
 | Foundation | `config/` `models/` `utils/` `errors.py` | configuration, pydantic models, text/logging |
@@ -75,6 +75,11 @@ discussing in a technical review):
   database; `mikasa ingest --reindex` provides a full rebuild path (after a
   rebuild, chunk ids shift, so golden-set fingerprints will mismatch explicitly —
   that is a feature; see the lesson in evaluation.md §2).
+
+The web upload endpoint and the online-paper import endpoint share one ingest
+tail (`documents.ingest_web_file`): both hand it a file inside an exclusive
+`web-tmp` subdirectory plus its sha256, and both get back the same byte-identical
+201/200/409 response (ADR-0019).
 
 ## 4. Chunking strategy
 
@@ -233,6 +238,15 @@ Four layers of upload safety (`web/routers/documents.py`): sanitize_filename
 (Chinese characters preserved) → extension allowlist, 415 → `read(max+1)`
 over-limit, 413 → temp file unlinked in a finally block; at the DB layer
 `file_path` is redacted, closing off path probes.
+
+**Online paper search** (M7, ADR-0019) sits in `papers/`: a two-source search
+service (arXiv Atom + OpenAlex JSON, normalised into one `PaperResult`),
+parity-interleaved pagination with per-source degradation, and a defended PDF
+downloader (public-address check per redirect hop, PDF sniffing, 50 MB cap).
+`web/routers/papers.py` exposes four endpoints — `POST /api/papers/search`,
+`POST /api/papers/import`, `GET/PUT /api/papers/settings` — and the import path
+re-derives the PDF URL from the source API rather than trusting the client, so
+the only user input that reaches a URL is a regex-validated `{source, id}` pair.
 
 ## 9. Eval orchestration (one implementation for CLI and web)
 

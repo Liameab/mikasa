@@ -701,3 +701,71 @@ E2E `tools/chrome_reader.py`。
 `tests/unit/config/test_user_config.py`、`tests/unit/web/test_settings_api.py`、
 `tests/conftest.py`（全局 `MIKASA_DATA_DIR` 隔离）；E2E
 `tools/chrome_model_settings.py`。
+
+## ADR-0019 在线找论文：双免费源 + 交错分页 + 有防线的下载器
+
+- 状态：Accepted ｜ M7（2026-09-15/16，用户提出"在知识库里能搜到别的论文，像知网那样"）
+- 关联：ADR-0002（密钥只经环境变量）、ADR-0016（阅读视图与原文件白名单）、
+  ADR-0018（本面板沿用的密钥纪律）
+
+**背景**：用户想在知识库里做知网式检索——搜到自己没上传的论文，导进来立刻能提问。
+2026-09-11 的勘验结论是硬约束：知网/万方/维普的全文在付费墙后，无公开 API、有反爬，
+硬爬是法律问题而非工程问题。**目标是"知网式体验"，不是"知网的数据"**——界面与文档
+如实这么写。
+
+**决策**：
+
+1. **两个有公开 API 的免费源：arXiv（Atom XML）+ OpenAlex（works JSON）**。arXiv
+   覆盖 CS/物理预印本、全部开放获取，但必须 https（实测 http 80 端口被墙）、官方
+   限速约 1 请求/3 秒——模块级节流只对**成功**请求补睡。OpenAlex 覆盖带 DOI 的
+   国内理工核心期刊（"水库坝"这种中文词直接命中几万条），但 2026-02 起必须免费
+   API key（每日 10 万积分，列表查询一次 10 分），且摘要存倒排索引、重建后无标点
+   无大小写。两者字段形状完全不同，归一成一份 `PaperResult`。
+2. **交错分页取代按分数合并**：两源的相关性分数不可比，合并排序是编出来的。全局
+   位置按奇偶分配——偶数给 arXiv、奇数给 OpenAlex——保证每页两源都出镜，中文结果
+   （OpenAlex 路）不会永远沉在英文结果（arXiv 路）后面。`has_more` 取代 `total`：
+   arXiv 的相关性计数会漂、OpenAlex 的 `meta.count` 是近似值，"这把取满了没有"
+   才是诚实的翻页信号。
+3. **逐源降级**：单源抛错只把中文消息塞进 `errors` 字典，响应照常 200 并带上另一源
+   的结果；两源全灭才值得 502。前端把该字典渲染成结果上方的"部分来源暂时不可用"。
+4. **导入端点不信客户端**：请求体只带 `{source, id}`——不带标题、不带 PDF 链接。
+   服务端按 id 反查来源 API 取元数据、从自己的记录里推 PDF 地址；id 双重正则校验
+   （schema 解析 + 拼接 URL 前），SSRF 防线在入口就闭合而不是在 socket 上。没有
+   开放获取全文 = 409 + 落地页（DOI）跳转提示，而不是失败。
+5. **有防线的下载器**（`papers/download.py`）：https 只放行解析到公网地址的主机；
+   http 只放行回环（E2E 假源逃生门——回环打不到内网，SSRF 保证不削弱）；重定向
+   逐跳复验、上限 3 跳；`Content-Type: application/pdf` + `%PDF-` 魔数嗅探；50 MB
+   硬上限；每条失败路径都删半成品。已接受残差：校验与实际连接是两次独立 DNS，
+   理论上的 DNS-rebinding 窗口仍在——闭合它要自建连接层，对本地个人应用不值。
+6. **导入复用上传尾链**：把上传端点的入库尾段抽成 `documents.ingest_web_file`，
+   导入因此返回**逐字节同形**的 201/200/409——树刷新、toast、去重是同一条代码路径
+   而不是副本。文件名 `标题[:80] (来源 id).pdf`：ingest 是"同名替换"语义，两篇同名
+   论文会互相踩掉，id 后缀保它们互不相干；真·同内容仍走 sha256 去重（200，
+   "已跳过重复导入"）。标题先截断再拼后缀——`sanitize_filename` 保头截尾。
+7. **OpenAlex 密钥放在面板里**，沿用 ADR-0018 的三段语义（`null`=不动、`""`=清除、
+   非空=写入）与纪律：写数据目录 `.env` + 同步进程环境（热生效），GET 只回布尔、
+   永不回值。密钥行默认折叠——密钥是可选项（匿名有少量试用额度），不该跟搜索框
+   抢注意力。
+8. **面板落在知识库页**（`js/papers.js`）：导入的文档落在这里，左侧语料树能立刻
+   给出反馈。设置面板只在问答页，所以密钥行由面板自带。结果行渲染标题/作者/年份/
+   来源 + 可展开摘要；无开放获取的那条**提前禁用**导入按钮，让 409 退化成安全网
+   而不是交互本身。
+
+**被否方案**：爬知网/万方/维普（付费墙 + 反爬 + 无 API = 法律问题，文档里也这么写）；
+把 Semantic Scholar 当第三源（能用，但 429 限流，暂时不值第三个解析器）；
+CORE/ChinaXiv 作中文 OA 补充（留在 backlog）；允许客户端直接给 PDF 链接（那正是本设计
+要关掉的 SSRF 口子）；单开一个"论文"页（文档住在知识库，导入必须落在用户已经在的地方）；
+两源按分数合并（见 2）；文件名用客户端传的标题（服务端会写下用户能伪造的名字）。
+
+**局限**：CSSCI/社科中文覆盖 ≈ 0，知网独家全文拿不到——界面与文档如实说明并给 DOI
+跳转。arXiv 的 3 秒节流让连续检索偏慢（一次检索可能是两次上游调用）。没有"跳到第 N 页"：
+交错窗口按已收到条数前进，只能向后翻。OpenAlex 重建的摘要没有标点与大小写。导入即下载：
+未导入的论文没有应用内预览，超 50 MB 的 PDF 一律拒收。
+
+**代码**：`papers/sources.py`（`PaperResult` 与 `PaperSource` 协议）、`papers/arxiv.py`、
+`papers/openalex.py`、`papers/download.py`、`papers/service.py`（交错 + 降级）、
+`papers/errors.py`；`web/routers/papers.py`（新）、`web/schemas.py`、
+`web/routers/documents.py`（`ingest_web_file` 抽取）、`web/static/js/papers.js`（新）、
+`static/documents.html`、`static/js/documents.js`、`css/style.css`；测试
+`tests/unit/papers/`（sources/service/download 三份）与 `tests/unit/web/test_papers_api.py`；
+E2E `tools/chrome_papers.py`。

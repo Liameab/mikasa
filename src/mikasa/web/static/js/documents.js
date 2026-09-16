@@ -14,6 +14,7 @@
 
 import { $, el, initTopbar, toast } from "./common.js";
 import { clearDocSelection, initCorpusTree, refreshCorpusTree } from "./kb-tree.js";
+import { initPapersPanel } from "./papers.js"; // 在线找论文（M7）
 import { initReader, openDocument, updateLocation } from "./reader.js"; // 阅读器（两页共用）
 import { initOnboard } from "./onboard.js"; // 首启引导（空库时弹一次）
 
@@ -73,6 +74,7 @@ dropzone.addEventListener("drop", (ev) => {
 /* ---------------- 选中 → 右栏直接读正文（2026-09-10） ---------------- */
 
 const introCard = $("#intro-card");
+const papersCard = $("#papers-card");
 const listCard = $("#list-card");
 const readingCard = $("#reading-card");
 const readerHost = $("#reader-host");
@@ -90,10 +92,11 @@ function renderEmptyDetail() {
   );
 }
 
-/** 右栏在"上传 + 语料总览"与"阅读区"之间二选一。 */
+/** 右栏在"上传 + 在线找论文 + 语料总览"与"阅读区"之间二选一。 */
 function showReading(on) {
   readingCard.classList.toggle("hidden", !on);
   introCard.classList.toggle("hidden", on);
+  papersCard.classList.toggle("hidden", on);
   listCard.classList.toggle("hidden", on);
 }
 
@@ -112,6 +115,7 @@ function onSelect(doc, location) {
 /* ---------------- 启动 ---------------- */
 
 initTopbar("documents").then((health) => void initOnboard(health));
+initPapersPanel(); // 在线找论文：检索/导入/OpenAlex 密钥
 // 内嵌模式：阅读器挂进右栏，收起时交还上传/总览视图
 initReader(readerHost, {
   onClose: () => {

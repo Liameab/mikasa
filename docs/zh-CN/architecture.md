@@ -37,7 +37,7 @@
 | --- | --- | --- |
 | 入口 | `cli/` `web/` `__main__.py` | typer+rich 命令；FastAPI + 原生前端 |
 | 应用 | `pipeline/` | ask 编排：检索 → 注入 → 生成 → 校验 |
-| 领域服务 | `ingest/` `index/` `eval/` | 入库、索引、评测（可插拔的算法区） |
+| 领域服务 | `ingest/` `index/` `eval/` `papers/` | 入库、索引、评测、在线论文检索（可插拔的算法区） |
 | 提供方 | `providers/` | LLM / 嵌入 / 重排：Protocol + 实现（ADR-0003） |
 | 存储 | `storage/` | SQLite 连接/仓库 + meta.json 快照 |
 | 基础 | `config/` `models/` `utils/` `errors.py` | 配置、pydantic 模型、文本/日志 |
@@ -65,6 +65,10 @@
 - 向量只对新增/变更文档追加（INSERT OR REPLACE），同模型增量、不重嵌
   全库；`mikasa ingest --reindex` 提供全量重建路径（重建后 chunk id 平移，
   黄金集指纹会显式失配——这是特性，见 evaluation.md §2 教训）。
+
+Web 上传端点与在线找论文的导入端点共用同一段入库尾链
+（`documents.ingest_web_file`）：两边都交给它一个位于 web-tmp 独占子目录
+里的文件 + sha256，拿回**逐字节同形**的 201/200/409 响应（ADR-0019）。
 
 ## 四、分块策略
 
@@ -187,6 +191,14 @@ EvalJobManager（单槽状态机，threading.Lock）都活在进程内——
 上传安全四道（`web/routers/documents.py`）：sanitize_filename（保留中文）
 → 后缀白名单 415 → `read(max+1)` 超限 413 → 临时文件 finally unlink；
 DB 层 `file_path` 脱敏，杜绝路径探针。
+
+**在线找论文**（M7，ADR-0019）住在 `papers/`：双源检索服务（arXiv Atom +
+OpenAlex JSON，归一成一份 `PaperResult`）、奇偶交错的翻页与逐源降级、
+一个有防线的 PDF 下载器（逐跳复验公网地址、PDF 嗅探、50 MB 上限）。
+`web/routers/papers.py` 暴露四个端点——`POST /api/papers/search`、
+`POST /api/papers/import`、`GET/PUT /api/papers/settings`——导入路径按 id
+反查来源 API 自行推 PDF 地址、不信客户端，因此真正进入 URL 的用户输入只有
+一对正则校验过的 `{source, id}`。
 
 ## 九、评测编排（CLI 与 Web 同一套）
 

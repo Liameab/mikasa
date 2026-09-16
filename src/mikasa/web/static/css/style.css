@@ -1010,6 +1010,79 @@ table.list td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .kb-search:focus { border-color: var(--focus); }
 .kb-search::-webkit-search-cancel-button { filter: invert(0.6); cursor: pointer; }
 
+/* ---- 在线找论文面板（M7，逻辑见 js/papers.js）----
+   结果列表自带滚动上限：面板是右列的第一屏常驻件，几十条结果不能
+   把"语料总览"顶到很下面。 */
+.paper-form { display: flex; gap: 8px; align-items: flex-start; }
+.paper-form .kb-search { flex: 1; width: auto; margin-bottom: 0; } /* 行内输入：交给 flex 分配宽度 */
+
+.paper-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.paper-bar .btn { font-size: 12px; padding: 4px 10px; }
+
+/* 密钥行：默认折叠（可选配置，不抢搜索的主视线） */
+.paper-key-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+.paper-key-row .kb-search { flex: 1; min-width: 200px; margin-bottom: 0; font-size: 12px; }
+.paper-key-row .btn { font-size: 12px; padding: 4px 12px; }
+.paper-key-row .muted { flex-basis: 100%; }
+
+#paper-status { margin-top: 8px; min-height: 0; }
+
+.paper-results {
+  display: flex;
+  flex-direction: column;
+  margin-top: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.paper-results .empty { padding: 18px 10px; font-size: 13px; }
+
+.paper-item {
+  padding: 10px 2px;
+  border-bottom: 1px solid var(--border);
+}
+.paper-item:last-child { border-bottom: none; }
+.paper-head { display: flex; align-items: baseline; gap: 8px; }
+.paper-title {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  line-height: 1.45;
+}
+a.paper-title:hover { color: var(--green); }
+.paper-src { flex: none; font-size: 11px; padding: 2px 8px; }
+.paper-meta { margin-top: 3px; }
+
+.paper-actions { display: flex; gap: 6px; margin-top: 7px; }
+.paper-actions .btn { font-size: 12px; padding: 4px 12px; text-decoration: none; }
+
+.paper-abstract {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--bg-inset);
+  border-radius: 8px; /* row 档（DESIGN.md 圆角语法：6 控件 / 8 行 / 10 卡 / 12 模态 / 999 胶囊） */
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.paper-status { margin-top: 5px; }
+
+#paper-more-row { text-align: center; margin-top: 8px; }
+#paper-more-row .btn { font-size: 12px; padding: 5px 14px; }
+
 /* 文档行状态后缀字色（s-meta 是 muted，需显式压过） */
 .doc-item .meta-bad { color: var(--red); }
 .doc-item .meta-busy { color: var(--yellow); }
