@@ -12,6 +12,7 @@ trade-offs, boundaries, and mistakes.
 | [Limitations & failures](limitations-and-failures.md) | Ecosystem pitfalls, heuristic boundaries, and a postmortem archive of real bugs |
 | [Usage guide](usage-guide.md) | End-to-end workflows: paper reading, follow-up questions, and what to do when it refuses |
 | [Known issues](known-issues.md) | Unfixed issues (with rulings) and unscheduled candidates |
+| [Design system](../DESIGN.md) | The web UI's tokens (CSS variables), type scale, radius grammar, z-index ladder, states and component contract — kept honest by a guardrail test |
 
 ## Chinese originals
 
