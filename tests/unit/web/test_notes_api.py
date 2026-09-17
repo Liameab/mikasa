@@ -663,7 +663,8 @@ def test_update_note_survives_readonly_copy(client):
         if os.name == "nt":  # POSIX 下删只读文件不失败（看目录权限）
             assert any(n.endswith(".replacing") for n in _uploads_files(settings))
     finally:
-        os.chmod(copy, stat_mod.S_IWRITE)
+        if copy.exists():  # 同上：POSIX 上只读挡不住删除，收尾要容得下"文件已不在"
+            os.chmod(copy, stat_mod.S_IWRITE)
 
 
 def test_update_note_keeps_marker_when_rows_vanish_midflight(client, monkeypatch):
@@ -713,7 +714,11 @@ def test_delete_note_with_readonly_copy_still_200(client):
         assert c.delete(f"/api/documents/{doc_id}").status_code == 200
         assert _rows(settings) == []
     finally:
-        os.chmod(copy, stat_mod.S_IWRITE)
+        # 收尾要**两种系统都能跑**（2026-09-17 CI 实测）：POSIX 的 unlink 只看
+        # 目录权限，只读副本照样被删掉（文件已不在）；Windows 才删不掉、留在原处。
+        # 断言本身只锁状态码，刻意不管"副本剩没剩"——那是系统差异，不是契约。
+        if copy.exists():
+            os.chmod(copy, stat_mod.S_IWRITE)
 
 
 def test_create_note_title_with_lone_surrogate_422_not_500(client):
