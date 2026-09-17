@@ -8,8 +8,8 @@
   **全新库**直建当前版本 SCHEMA_VERSION；**低版本库**沿 _MIGRATIONS 逐级
   自动迁移——每级显式提交、迁移函数内部幂等（半途崩溃后重跑可从已
   完成处续走）、logger 留痕；**高版本库**仍硬报错：旧程序绝不读写新库。
-  历史 schema 快照（_SCHEMA_V1_SQL / _SCHEMA_V2_SQL）仅供迁移测试造旧库，
-  不可变——schema 终态、历史快照、迁移函数三者同一 PR 落地。
+  历史 schema 快照（_SCHEMA_V1_SQL / _SCHEMA_V2_SQL / _SCHEMA_V3_SQL）仅供
+  迁移测试造旧库，不可变——schema 终态、历史快照、迁移函数三者同一 PR 落地。
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from mikasa.utils.text import fold_title
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # 初始化串行化锁（见 open_db 的说明）
 _INIT_LOCK = threading.Lock()
@@ -133,6 +133,21 @@ _SCHEMA_DOC_FOLDER_ALTER = """
 ALTER TABLE documents ADD COLUMN folder_id INTEGER REFERENCES kb_folders(id);
 """
 
+# v4 补列覆层：documents.source_ref（形如 "arxiv:2401.12345" / "core:72543"；
+# NULL=非导入文档）。语义 = "这篇文档的来源标识"，两个消费方：
+#   - 论文导入："arxiv:<id>" / "core:<id>"，「找论文」页据此标「已在库中」
+#     （精确匹配，见 ADR-0020）；
+#   - 知识库页写的笔记："note:<key>"，前端据此识别"哪些行可编辑正文"
+#     （见 ADR-0021）。
+# 两个前缀互不冲突：论文页只做 arxiv:/core: 的精确匹配。
+# **不加唯一约束**：同一篇论文内容变了（出版商换了 PDF）会重新导入成新行，
+# 唯一约束会让那次导入直接失败；查询取"任一条命中"即可。
+# 也不加索引：本列只在搜索页做一次 `IS NOT NULL` 全表集合查询，文档量级
+# 下全表扫描是零成本，加索引反而要连带迁移复杂度。
+_SCHEMA_DOC_SOURCE_ALTER = """
+ALTER TABLE documents ADD COLUMN source_ref TEXT;
+"""
+
 _SCHEMA_TAIL = """
 CREATE TABLE IF NOT EXISTS qa_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -179,16 +194,22 @@ CREATE TABLE IF NOT EXISTS qa_sessions (
 # v2→v3 迁移测试用本快照逐字造库；immutable，改动属篡改。
 _SCHEMA_V2_SQL = _SCHEMA_HEAD + _SCHEMA_QA_FOLDERS_DDL + _SCHEMA_QA_SESSIONS_V2 + _SCHEMA_TAIL
 
-# 当前终态（v3）：**只**在全新库上执行。历史库绝不跑本 SQL——IF NOT EXISTS
-# 只会"跳过已存在的表"，绝不会给旧表补列（补列是 ALTER 的活，归 _MIGRATIONS
-# 与 init_db 里那条走 _ensure_column 的 _SCHEMA_DOC_FOLDER_ALTER）。
-_SCHEMA_SQL = (
+# v3 历史快照（M7 终态）：表结构与 v4 相同（v4 只在 documents 上补了一列，
+# 走 ALTER 覆层、不动表定义）。**v3 的终态 = 本快照 + _SCHEMA_DOC_FOLDER_ALTER**
+# ——造 v3 旧库的测试要先 executescript 本快照、再执行那条 ALTER（与当时
+# init_db 的全新库路径同一顺序）。immutable，改动属篡改。
+_SCHEMA_V3_SQL = (
     _SCHEMA_HEAD
     + _SCHEMA_KB_FOLDERS_DDL
     + _SCHEMA_QA_FOLDERS_DDL
     + _SCHEMA_QA_SESSIONS_V2
     + _SCHEMA_TAIL
 )
+
+# 当前终态（v4）：**只**在全新库上执行。历史库绝不跑本 SQL——IF NOT EXISTS
+# 只会"跳过已存在的表"，绝不会给旧表补列（补列是 ALTER 的活，归 _MIGRATIONS
+# 与 init_db 里那两条走 _ensure_column 的 ALTER 覆层）。
+_SCHEMA_SQL = _SCHEMA_V3_SQL
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
@@ -269,8 +290,10 @@ def init_db(conn: sqlite3.Connection) -> None:
     if row is None:
         # 全新库：一次性建齐当前终态并写入版本行
         conn.executescript(_SCHEMA_SQL)
-        # ALTER 单独走幂等补列（理由见 _ensure_column 的 docstring）
+        # ALTER 单独走幂等补列（理由见 _ensure_column 的 docstring）。
+        # 逐版累加：新库要补齐**所有**历史版本的补列，终态才与迁移库一致。
         _ensure_column(conn, "documents", "folder_id", _SCHEMA_DOC_FOLDER_ALTER)
+        _ensure_column(conn, "documents", "source_ref", _SCHEMA_DOC_SOURCE_ALTER)
         # **幂等写入**：并发首次建库时两个连接都会走到这里（都看到"没有版本行"），
         # 一个先插入，另一个撞 UNIQUE constraint failed: schema_version.version
         # ——原本是 500（2026-09-11 并发首连测试暴露）。OR IGNORE 让后来者静默成为
@@ -391,11 +414,26 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
+    """v3 → v4：documents.source_ref（在线来源标识，供「找论文」页标"已在库中"）。
+
+    单步、幂等：ALTER 没有 IF NOT EXISTS，用 _column_names 守卫只补缺列
+    （崩溃重跑不重列）。**不需要数据回填**：v4 之前导入的文档没有来源信息
+    ——当时的实现把 source+id 拼进文件名后就丢掉了，无从考证，一律 NULL。
+    代价是历史导入的论文在「找论文」页不会标"已在库中"（重新导入会被
+    sha256 去重挡下并提示已存在，不会产生重复文档）——如实接受，不猜。
+    """
+    if "source_ref" not in _column_names(conn, "documents"):
+        conn.execute(_SCHEMA_DOC_SOURCE_ALTER)
+    conn.commit()
+
+
 # 迁移表：{目标版本: 迁移函数}。版本断层（缺 key）= 硬报错，不留半迁移状态。
 # 定义在迁移函数之后（模块级 dict 求值时函数须已定义）。
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     2: _migrate_v1_to_v2,
     3: _migrate_v2_to_v3,
+    4: _migrate_v3_to_v4,
 }
 
 

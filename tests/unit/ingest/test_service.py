@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
@@ -102,6 +103,50 @@ def test_duplicate_content_different_names_skipped_once(tmp_path, offline_settin
     with open_db(offline_settings.db_path) as conn:
         assert repo.count_documents(conn) == 1
         assert repo.count_chunks(conn) == 2
+
+
+def test_force_bypasses_content_dedup_so_same_body_coexist(tmp_path, offline_settings):
+    """force=True 时"异名同内容"各自成篇（笔记链路依赖的逃生口）。
+
+    默认的跨文件内容去重对语料是好事（备份副本不污染检索），但笔记的第二篇
+    可能就是同一份内容（或编辑成与他人同内容）：走默认语义会被**静默跳过**
+    ——接口照样返回成功、库里却没有那一行。force 绕过它，同时仍走同名替换。
+    """
+    _write_note(tmp_path, "b1.md", CONTENT_A)
+    _write_note(tmp_path, "b2.md", CONTENT_A)
+    svc = _svc(offline_settings)
+    svc.ingest_one(tmp_path / "b1.md", force=True)
+    svc.ingest_one(tmp_path / "b2.md", force=True)
+    with open_db(offline_settings.db_path) as conn:
+        assert repo.count_documents(conn) == 2
+
+
+def test_explicit_title_beats_inherited_title_and_reaches_index(tmp_path, offline_settings):
+    """显式 title 压过同名替换继承的旧标题，且**在分块时就生效**。
+
+    笔记编辑改标题走的就是这条路。两条都错不得：
+      - 让旧标题胜出 → 编辑时改标题永远不生效（keep_title 继承旧行）；
+      - 改成"入库后再 set_document_title" → 索引词空间（BM25 与向量共用的
+        检索表示）里留的仍是旧名字 → 改完名搜不到新名字。
+    标题用纯 ASCII 标记词：jieba 会把中文词组切开，子串断言不可靠。
+    """
+    note = _write_note(tmp_path, "a.md", CONTENT_A)
+    svc = _svc(offline_settings)
+    svc.ingest_one(note, title="FirstTitleA")
+
+    # 同名替换：内容变了才走替换（sha 相同会被跳过），标题也一并换掉
+    _write_note(tmp_path, "a.md", CONTENT_A + "\n## 补记\n\n新增一段可检索的正文。\n")
+    svc.ingest_one(note, title="SecondTitleB")
+
+    with open_db(offline_settings.db_path) as conn:
+        docs = repo.list_documents(conn)
+        assert len(docs) == 1, "同名替换必须是原地更新"
+        assert docs[0].title == "SecondTitleB"
+        tokens = " ".join(
+            t for chunk in repo.chunks_by_document(conn, docs[0].id) for t in chunk.tokens
+        )
+    assert "SecondTitleB" in tokens
+    assert "FirstTitleA" not in tokens
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +271,29 @@ def test_reindex_keeps_folder_and_title(tmp_path, offline_settings):
         assert doc.folder_id == folder
 
 
+def test_reindex_keeps_source_ref(tmp_path, offline_settings):
+    """reindex 后论文来源标识（source_ref）不丢——v4 的同一个坑。
+
+    reindex 会清空全部行再重建；来源若不进保留清单，每次换嵌入模型都会
+    把"这篇论文来自哪条在线记录"清成 NULL → 「找论文」页的"已在库中"标记
+    集体失效（folder_id 当年就是这么丢的）。
+    """
+    _write_note(tmp_path, "a.md", CONTENT_A)
+    svc = _svc(offline_settings)
+    svc.ingest_paths([tmp_path])
+    with open_db(offline_settings.db_path) as conn:
+        doc = repo.list_documents(conn)[0]
+        repo.set_document_source_ref(conn, doc.id, "arxiv:2401.12345")
+        conn.commit()
+
+    rebuilt = svc.reindex()
+    assert len(rebuilt.ingested) == 1
+    with open_db(offline_settings.db_path) as conn:
+        doc = repo.list_documents(conn)[0]
+        assert doc.source_ref == "arxiv:2401.12345"
+        assert repo.list_source_refs(conn) == {"arxiv:2401.12345"}
+
+
 def test_reindex_keeps_folder_when_file_path_is_stale(tmp_path, offline_settings):
     """reindex 的保留键必须是文件名而非 file_path（2026-09-11 修复的真实 bug）。
 
@@ -346,6 +414,39 @@ def test_same_name_reupload_embed_failure_keeps_old_copy(tmp_path, offline_setti
     assert copy_path.is_file(), "旧副本必须放回原位（否则文档彻底消失）"
     assert copy_path.read_text(encoding="utf-8") == original_text, "放回的应是旧版内容"
     assert not list(offline_settings.uploads_dir.glob("*.replacing")), "让位文件不能残留"
+
+
+@pytest.mark.skipif(
+    os.name != "nt", reason="POSIX 的 rename 不受文件占用影响，触发条件是 Windows 文件锁"
+)
+def test_same_name_replace_keeps_row_when_old_copy_locked(tmp_path, offline_settings):
+    """同名替换时旧副本被别的程序占着：**旧行必须留在库里**（2026-09-17 修复）。
+
+    旧顺序是"先删旧行并提交，再做让位 rename"：rename 撞 Windows 文件锁
+    （WinError 32，任何打开着该副本的程序都会造成）时异常上抛，而旧行早已
+    删除——文档从界面消失、文件却还在盘上，要等一次 reindex 才能回来（笔记
+    还会顺带降级成普通文档，因为标记在丢掉的行走里）。用户什么都没改，却看到
+    文档不见了。
+    修复 = 顺序反过来：新副本先在盘上就位，旧行只在文件操作全部成功后才删。
+    这一步失败时库与盘都原样不动，错误如实上抛（用户重试即可）。
+    """
+    note = _write_note(tmp_path, "笔记.md", CONTENT_A)
+    svc = _svc(offline_settings)
+    svc.ingest_one(note)
+    copy_path = offline_settings.uploads_dir / "笔记.md"
+    assert copy_path.is_file()
+
+    changed = _write_note(tmp_path, "笔记.md", CONTENT_A.replace("Adam", "AdamW 优化器"))
+    with open_db(offline_settings.db_path) as conn:
+        before = repo.list_documents(conn)
+
+    with open(copy_path, "rb"), pytest.raises(OSError):  # 句柄占用 → 让位 rename 必失败
+        svc.ingest_one(changed)
+
+    with open_db(offline_settings.db_path) as conn:
+        after = repo.list_documents(conn)
+    assert [d.id for d in after] == [d.id for d in before], "旧行必须原样在库（修复前这里会是空表）"
+    assert copy_path.read_text(encoding="utf-8") == CONTENT_A, "旧副本必须原样在位"
 
 
 def test_reindex_with_empty_uploads_refuses_instead_of_wiping(tmp_path, offline_settings):

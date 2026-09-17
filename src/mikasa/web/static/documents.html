@@ -2,11 +2,12 @@
 <!-- ============================================================================
      Mikasa —— 知识库页（语料库树形管理，v3）
      布局：左侧文件夹树（文件夹可嵌套、文档行可拖拽归夹/改名/删除，顶部
-     查找框实时过滤）+ 右侧上传区、在线找论文面板与选中文档详情。
+     查找框实时过滤）+ 右侧上传区与选中文档详情。
      上传 md/txt/pdf/docx（拖拽或选择）→ 入库分块嵌入 → 出现在树根级，
      拖入文件夹即可归档。
-     JS 入口：/static/js/documents.js（树模块：/static/js/kb-tree.js，
-     论文面板：/static/js/papers.js）
+     找论文（在线检索导入）自 2026-09-16 起是独立一页（/papers，见 ADR-0020），
+     本页不再挂面板。
+     JS 入口：/static/js/documents.js（树模块：/static/js/kb-tree.js）
      ============================================================================ -->
 <html lang="zh-CN">
 <head>
@@ -23,6 +24,7 @@
     <nav class="main">
       <a href="/" data-page="qa">问答</a>
       <a href="/documents" data-page="documents">知识库</a>
+      <a href="/papers" data-page="papers">找论文</a>
       <a href="/eval" data-page="eval">评测</a>
     </nav>
     <div class="health-pill"><span class="muted small">正在连接服务…</span></div>
@@ -38,6 +40,8 @@
       <input id="kb-search" class="kb-search" type="search"
              placeholder="查找文档 / 文件夹…" autocomplete="off" aria-label="查找">
       <div class="side-actions">
+        <button id="new-note" class="btn ghost grow" type="button"
+                title="直接写一篇 Markdown 笔记，保存即入库可被检索">＋ 新建笔记</button>
         <button id="new-kb-folder" class="btn ghost grow" type="button"
                 title="新建文件夹（可嵌套）">＋ 新建文件夹</button>
       </div>
@@ -57,38 +61,6 @@
           <input id="file-input" type="file" hidden accept=".md,.markdown,.txt,.pdf,.docx">
         </div>
         <div id="upload-note" class="muted small" style="margin-top:8px"></div>
-      </section>
-
-      <!-- 在线找论文（M7）：检索 arXiv/OpenAlex → 导入开放获取 PDF → 立刻可提问。
-           逻辑在 js/papers.js；结果行类样式见 style.css「在线找论文」段 -->
-      <section class="card" id="papers-card">
-        <h2>在线找论文 <span class="muted small">arXiv + OpenAlex，导入后立刻可提问</span></h2>
-        <form id="paper-form" class="paper-form" autocomplete="off">
-          <input id="paper-q" class="kb-search" type="search"
-                 placeholder="检索论文：中英文关键词均可，如「大语言模型 检索增强」"
-                 aria-label="论文检索词">
-          <button id="paper-search-btn" class="btn primary" type="submit">搜索</button>
-        </form>
-        <div class="paper-bar">
-          <span id="paper-sources" class="s-chips">
-            <button class="s-chip on" type="button" data-source="all">全部来源</button>
-            <button class="s-chip" type="button" data-source="arxiv">arXiv</button>
-            <button class="s-chip" type="button" data-source="openalex">OpenAlex</button>
-          </span>
-          <button id="paper-key-toggle" class="btn ghost" type="button"
-                  title="OpenAlex 密钥（可选）：填了额度更稳，不填也能用">密钥</button>
-        </div>
-        <div id="paper-key-row" class="paper-key-row hidden">
-          <input id="paper-key-input" class="kb-search" type="password"
-                 autocomplete="off" aria-label="OpenAlex 密钥">
-          <button id="paper-key-save" class="btn" type="button">保存</button>
-          <div id="paper-key-note" class="muted small"></div>
-        </div>
-        <div id="paper-status" class="muted small"></div>
-        <div id="paper-results" class="paper-results"></div>
-        <div id="paper-more-row">
-          <button id="paper-more" class="btn ghost hidden" type="button">加载更多</button>
-        </div>
       </section>
 
       <!-- 语料总览（未选中时）：计数 + 空态引导 -->

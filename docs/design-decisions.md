@@ -44,6 +44,9 @@
 | ADR-0016 | Reader view: backend seam removal + original-file allowlist + the boundary of exposing body text | Accepted |
 | ADR-0017 | Merging the "Page" view + page-number alignment + the Ollama context window | Accepted |
 | ADR-0018 | Configuring the LLM from the web settings panel: user config overlay + live re-apply | Accepted |
+| ADR-0019 | Online paper search: two free sources, interleaved pagination, a defended downloader | Accepted (point 8 superseded by ADR-0020) |
+| ADR-0020 | "Find papers" becomes a page of its own: three sources, declared capabilities, an honest paging contract | Accepted |
+| ADR-0021 | Notes are ordinary documents: a `source_ref` marker, no schema change, force-ingest past content dedup | Accepted |
 
 ---
 
@@ -878,8 +881,12 @@ answers 400 with the file path). Judge and reranker are not configurable from th
 ## ADR-0019 Online paper search: two free sources, interleaved pagination, a defended downloader
 
 - Status: Accepted | M7 (2026-09-15/16, user request: "search related papers in the knowledge base, like CNKI")
+  — **superseded in part by ADR-0020** (M8, 2026-09-16): point 8's "the panel lives on the knowledge
+  base page" no longer holds; the feature is a page of its own (`/papers`) with three sources. Points 1-7
+  and 9-10 (sources, interleaved paging, degradation, the defended downloader, the import tail, the key
+  discipline) still stand.
 - Related: ADR-0002 (secrets live in the environment), ADR-0016 (reader view, original-file allowlist),
-  ADR-0018 (the settings panel's key discipline this panel copies)
+  ADR-0018 (the settings panel's key discipline this panel copies), ADR-0020 (its successor)
 
 **Problem**: the user wanted CNKI-style literature search inside the knowledge base — find papers
 beyond the ones already uploaded, pull them in, and ask questions about them right away. The
@@ -937,6 +944,9 @@ the UI says so.
    exists on the QA page, so the key row is the panel's own. Result rows render title/authors/
    year/source with an expandable abstract; the import button is disabled up front for papers
    without open access, so the 409 is a safety net rather than the UX.
+   *(M8 note: reversed by ADR-0020 — the panel was too cramped to carry filters and a detail pane,
+   so it became the `/papers` page. The "already in the library" feedback it traded away is restored
+   by `documents.source_ref`.)*
 
 **Rejected options**: scraping CNKI/Wanfang/VIP (paywall + anti-bot + no API = legal problem, and
 the docs say so); Semantic Scholar as a third source (it works, but rate-limits at 429 — not worth
@@ -959,3 +969,211 @@ preview for a paper that has not been imported, and the 50 MB cap rejects oversi
 (`ingest_web_file` extraction), `web/static/js/papers.js` (new), `static/documents.html`,
 `static/js/documents.js`, `css/style.css`; tests `tests/unit/papers/` (sources, service, download)
 and `tests/unit/web/test_papers_api.py`; E2E `tools/chrome_papers.py`.
+
+## ADR-0020 "Find papers" becomes a page of its own: three sources, declared capabilities, an honest paging contract
+
+- Status: Accepted | M8 (2026-09-16, user request after using M7: "the search is too thin — make it its own page")
+- Related: ADR-0019 (superseded in part — its point 8 placed the panel on the library page),
+  ADR-0004 (schema migration discipline), ADR-0016 (the reader can only show ingested documents)
+
+**Problem**: M7 shipped online paper search as a panel in the library page's right column, and the
+user's verdict after using it was that it was too cramped to be useful: one search box, one flat list,
+no filters. The ask was to promote it to a **page of its own** (alongside 问答 / 知识库 / 评测) and to
+make it richer in four directions: more metadata per result, filtering and sorting, more sources, and a
+reading/status experience (pick a result, read the full abstract, see what is already in the library).
+
+**Decision**:
+
+1. **A fourth page (`/papers`), not a bigger panel.** The three-column layout (filters 300px / results /
+   details 340-440px) needs horizontal room the library page does not have — its right column is the
+   upload + corpus area. The nav is hardcoded in four HTML files, so this cost one line each plus a
+   `_PAGES` entry; the panel was removed from the library page in the same change so the two cannot drift.
+2. **A third source: CORE, chosen by measurement.** CORE's v3 works API answered anonymously (no key),
+   tolerated a handful of quick requests, and its `downloadUrl` served a real PDF (`%PDF-1.5` verified).
+   Semantic Scholar was rejected for now (HTTP 429 on the anonymous pool, twice) and ChinaXiv was
+   rejected outright: its `/api/search` exists but the contract is unguessable — GET and two POST
+   encodings all answer "请求方法应为POST", and `/oai` refuses anonymous access. Scraping it would be the
+   only way in, and that is out (ADR-0019's reasoning about paywalled Chinese full text still stands).
+3. **Sources declare their capabilities; the UI disables what they cannot do.** `SourceCaps(year,
+   cited_sort, recent_sort, language, oa)` is part of the `PaperSource` protocol, and
+   `GET /api/papers/sources` hands the catalogue to the frontend, which greys out unsupported options and
+   says why. This exists because of a measured "false support": CORE's `yearFrom`/`yearTo` **parameters**
+   return HTTP 200 while being silently ignored (asked for 2020+, got 2012/2018/2010 papers) — its year
+   filter only works through query syntax (`... AND yearPublished>=2020`), which is what the source now
+   emits. Serving an option that quietly does nothing is worse than not offering it.
+4. **`notes` and `errors` are different things.** `errors` is failure (the source raised), `notes` is
+   degradation (the source answered but could not honour a filter: arXiv has no citation data, so "sort
+   by cited" falls back to relevance). Both surface in the UI, in different words. One subtlety worth
+   writing down: `oa: "always"` is **satisfied**, not degraded — a source that is entirely open access
+   already fulfils "only open access", so it produces no note, and the frontend renders the checkbox as
+   checked-and-disabled ("已自动满足"), deliberately distinct from "not supported".
+5. **Rotating interleave generalised from two sources to N.** Global position `p` belongs to source
+   `p % n` and is that source's result number `p // n`; the window math is `k ∈ [max(0,
+   ceil((offset-i)/n)), floor((offset+limit-1-i)/n)]`. Substituting `n=2` reproduces the old parity
+   arithmetic digit for digit (a unit test pins that equivalence). The merge fills by global position and
+   **leaves holes rather than packing**: the old `zip + extend` tail-packing made the second page repeat
+   results when a source ran out early (page 1 took `[a0, o0, o1, o2]`, the client advanced by the four
+   results it received, and `o2` came back on page 2).
+6. **The paging contract is by window, not by results received.** With holes in a page, "advance offset
+   by the number of results" is wrong; the client advances by `limit`. Both halves are regression-locked,
+   because either one alone still duplicates.
+7. **OpenAlex's window alignment needed its own fix.** OpenAlex has only `page`/`per-page`, and page
+   boundaries sit on multiples of `per-page` — there is no way to ask for an arbitrary offset. The old
+   `page = start // count + 1` was accidentally correct only while `start` was a multiple of `count`
+   (true for two sources splitting a 20-item page, false the moment N sources rotate). A first fix
+   (align to `count`, fetch by `per_page`) was still wrong — the two multiples differ. The shipped
+   approach fetches **page 1 with `per-page = start + count` and slices** `[start : start+count]`: one
+   request, no boundary arithmetic, and OpenAlex bills per query (10 credits) regardless of page size, so
+   the extra bytes are free. Windows deeper than the 200-record page cap come back short, so `has_more`
+   turns false and that source's paging stops honestly instead of pretending.
+8. **"Already in the library" needs a column, not a title suffix.** `documents` gained
+   `source_ref TEXT` (`"arxiv:2401.12345"`, `"core:72543"`), written by the import path and read by the
+   search endpoint in one `IS NOT NULL` sweep. Reverse-parsing the filename suffix `(arxiv 2401.12345)`
+   was rejected: users rename documents (`PATCH /api/documents/{id}` touches only `title`), a rename is
+   inherited across re-ingests so it never heals, titles are truncated at 80 characters before the suffix
+   is appended, and the only stable carrier (the uploads copy name) is reachable solely through
+   `file_path`, a known-dirty legacy field. The column follows the v3 `folder_id` precedent exactly —
+   including the two "keep" lists that preserve it across a re-index, whose omission is precisely how
+   `folder_id` was lost once.
+9. **The sha256 skip path backfills the source.** A user who dragged the PDF in by hand and later clicks
+   "import" on the same paper hits the content-hash skip; without a backfill that row keeps
+   `source_ref = NULL` forever and the search page never shows "already in the library" for a document
+   that is demonstrably in the library. The skip branch fills it in when (and only when) the existing row
+   has no source.
+10. **The source reference is public metadata.** It is exposed through `_public_document`, a deliberate
+    widening of the redaction boundary: `file_path` and `file_sha256` stay hidden (local filesystem
+    facts), while an arXiv id or DOI is already printed in every search result.
+11. **Public `http://` full texts are allowed again** (measured, user-approved on 2026-09-16). ADR-0019
+    had restricted http to loopback. That turned out to block the feature's own main use case: sampling
+    three queries showed **5/7 and 3/6 of the Chinese open-access links are plain `http://`** (domestic
+    journals and repositories frequently never moved to https), while the English sample had 0/15 —
+    "Chinese papers are findable but not importable". Since the URL always comes from a source API
+    record (never user input — ADR-0019's entry-point design) and the payload is a public paper fetched
+    without credentials, the transport-security argument for https-only is weak here. Every SSRF check
+    stays: public addresses only, plus a loopback exception for http (the E2E fake source, and local
+    services), with private/reserved/`169.254.0.0/16` ranges rejected exactly as before. Verification
+    after the change: a Chinese `http://` full text imported cleanly (138 chunks), a second host
+    answered 403 regardless of browser-like headers (upstream blocking, reported as a 502, out of our
+    hands). The residual risk is integrity — a network attacker could substitute a different PDF in
+    transit — and it is accepted for a local single-user tool.
+
+**Rejected options**: keeping the panel and enlarging it (no horizontal room; the corpus tree is the
+library page's job); a fourth source for its own sake (S2/ChinaXiv fail on evidence, not taste); letting
+the client send an arbitrary PDF URL (ADR-0019 point 4 — the SSRF line closes at `{source, id}`); packing
+holes in the interleave (see 5); a separate `document_sources` table (a second FK surface for a
+one-to-one fact); per-source filter flags hardcoded in the frontend (capabilities belong to the source,
+and hardcoding them is how "options that do nothing" get shipped).
+
+**Limitations**: CORE has no citation sort (`sort=citationCount` answers HTTP 500) and rate-limits
+aggressively under bursts, so it carries its own 2-second throttle; a meaningful share of its
+`downloadUrl` values are `http://` repository addresses, which the downloader's security policy rejects
+(public https or loopback http only), so those records cannot be imported; `yearPublished` arrives dirty
+(observed `710300`, `202022`), so years are parsed as the first four digits and range-checked; arXiv has
+no citation data at all, so "sort by cited" is offered only when a selected source can honour it;
+OpenAlex's deep paging is capped at its 200-record page; and the reader still cannot preview a paper
+before it is imported (the detail pane renders the search response instead).
+
+**Code**: `papers/sources.py` (`SourceCaps` / `PaperFilters` / `PaperResult.cited_by`), `papers/core.py`
+(new), `papers/arxiv.py` and `papers/openalex.py` (filter translation, capability declarations, the
+window fix), `papers/service.py` (N-source rotation, hole-leaving merge, `attempted` / `notes`,
+`source_catalog`), `storage/db.py` + `models/document.py` + `storage/repo.py` + `ingest/service.py`
+(`source_ref`, v4 migration, the re-index keep lists), `web/routers/papers.py` (+ `GET
+/api/papers/sources`, `in_library`), `web/routers/documents.py` (`ingest_web_file(source_ref=...)`, the
+skip-path backfill), `web/app.py` (`/papers`); frontend `static/papers.html`, `static/js/papers-page.js`,
+`papers-api.js`, `papers-filters.js`, `papers-detail.js`, `css/style.css`, and the four nav bars; tests
+`tests/unit/papers/test_core.py`, `test_papers_service.py`, `test_sources.py`,
+`tests/unit/storage/test_db_migration.py`, `tests/unit/ingest/test_service.py`,
+`tests/unit/web/test_papers_api.py`; E2E `tools/chrome_papers.py` (three fake sources).
+
+---
+
+## ADR-0021 Notes are ordinary documents: a `source_ref` marker, no schema change, and a force-ingest escape from content dedup
+
+- Status: Accepted | M6 phase 1 (2026-09-16, user picked "build a new feature" and confirmed two product
+  calls: notes must be **editable** — saving re-ingests automatically — and the editor must have a
+  **live Markdown preview**)
+- Related: ADR-0020 (whose `source_ref` semantics this entry broadens), ADR-0004 (schema migration
+  discipline — the path deliberately not taken), ADR-0012 (the chunker that notes reuse unchanged)
+
+**Problem**: the product's stated shape is "notes and AI Q&A, two wings", but the only way into the
+library was to bring a file from outside. Writing a note meant leaving the app, and whatever you learned
+while asking questions had nowhere to land. M6's phase 1 is the smallest step that closes the loop: write
+Markdown on the library page, save, and it is immediately retrievable and citable.
+
+**Decision**:
+
+1. **A note is an ordinary document with a marker, not a new kind of entity.** The marker is
+   `source_ref = "note:<key>"`. Everything else — the folder tree, drag-and-drop, rename, delete,
+   retrieval, citations, the reader — already works on documents and now works on notes for free. Why not
+   a new column or table: `_KeptProps` already carries `source_ref` through both re-index and same-name
+   replacement, so the marker survives a full rebuild without a single new line; `_public_document`
+   already exposes the field; and the find-papers page matches `arxiv:` / `core:` **exactly**, so a
+   `note:` value cannot be mistaken for a paper already in the library. The price is that the column's
+   meaning widens from "which online record this came from" to "this document's origin" — the four
+   comments that claimed otherwise are updated in the same change, because that is exactly the kind of
+   comment that otherwise becomes a quiet lie.
+2. **The note is a real `.md` file in `uploads/`**, named `<sanitized title> (note <key12>).md`. This
+   falls out of the ingest contract: the uploads copy's basename *is* the document's identity, so the
+   name is generated once, server-side, and **never changes** — renaming a note renames the display
+   title only, which is what `set_document_title` already promises for uploaded documents. The body is
+   stored byte-exact (binary write, LF-normalised) so an editor round-trip is lossless. The `<key>` is 48
+   random bits, checked against both existing paths and existing markers before use: a collision would
+   not raise, it would *replace someone else's row*.
+3. **Notes ingest with `force=True`, and that is not an optimisation.** `_ingest_one`'s byte-level
+   content dedup is right for a corpus (a backup copy of the same bytes should not pollute retrieval)
+   but silently wrong for notes: a second note with the same body would return success and never be
+   written, and editing one note to match another would make the response point at *the other row*.
+   `force` bypasses the dedup at both checks while still taking the same-name-replacement path, so
+   editing stays an in-place update. Identical chunk bodies across two notes are fine — `chunks` is only
+   unique on `(document_id, seq)`.
+4. **The title is handed to ingest, not patched afterwards.** `ingest_one(title=...)` with precedence
+   explicit title > inherited title > loader-derived title. Two independent reasons: the chunker builds
+   each chunk's index text as `《title》｜heading_path`, so fixing the title after ingest would leave the
+   old name inside the very representation BM25 and the vectors search — rename a note and you cannot
+   find it by its new name; and same-name replacement inherits the *previous* row's title, so without an
+   explicit override, editing the title would never take effect at all.
+5. **Editing is same-name replacement, so `documents.id` changes on every save.** In-place update means
+   delete the old row and insert a new one. The response is therefore built from a lookup **by uploads
+   path**, never from the id in the request, and the page re-selects the row by the id it gets back
+   (without that, the refresh sees "the selected row was deleted" and collapses the reading pane the user
+   was in the middle of). A save whose body hash and title are both unchanged short-circuits to 200 and
+   touches nothing, so "open the editor, press save" costs zero.
+6. **The whole save holds the ingest lock** (`services.ingest.exclusive()`), the same discipline DELETE
+   uses. Without it, a save racing a delete resurrects the deleted note as an **ordinary document with no
+   marker**: ingest happily rebuilds the copy from the web-tmp file and inserts a fresh row.
+7. **Read-back reads the uploads copy raw.** The editor must prefill with what the user actually typed,
+   so `GET /api/notes/{id}` returns the file's bytes decoded. `/content` is not an option: it is the
+   stitched-chunk reading text, and by construction it has already dropped `#` heading lines, code fences
+   and blockquote markers — prefilling from it would silently rewrite the user's note on the next save.
+8. **The endpoints refuse to touch anything that is not a note.** PUT and GET check the `note:` prefix
+   and answer 404 otherwise (404, not 403 — no existence oracle), so an uploaded file or an imported
+   paper can never be overwritten through the note API.
+9. **Alternatives rejected**: a dedicated `is_note` column (a v5 migration plus keep-list plus repo and
+   API plumbing, for a boolean already derivable from a field that survives rebuilds); a separate
+   `notes` table (would forfeit the folder tree, retrieval, citations, reader and delete paths, all of
+   which would then need re-implementing and re-testing); and reusing `PATCH /api/documents` with
+   `/content` for editing (see point 7).
+
+**Consequences**: fenced code blocks **do not enter retrieval** — the Markdown loader skips them so that
+a `#` inside code is not read as a heading — which means a note consisting only of code is rejected with
+a 400 whose wording has to explain that; the uploads copy is the note's *only* authoritative copy (there
+is no "user's original" to fall back on), so `data/` must be backed up before any re-index; the parsed
+text still passes through `strip_repeated_lines` (≥3 identical lines) and Setext `---` handling, so the
+indexed representation can differ from the file (the file itself is untouched); two browser tabs editing
+one note is last-write-wins (no optimistic locking — SQLite's `datetime('now')` is second-granular and
+useless as a version); and every save rebuilds chunks, so citation chips in older answers point at
+deleted chunk ids — the same consequence re-uploading a file already has. The pre-existing
+same-name-replace file-lock hazard (an external program holding the uploads copy makes the rename step
+fail *after* the old row was deleted) applies to notes too and is documented rather than fixed here,
+because it lives on the ingest rollback path the corpus depends on.
+
+**Code**: `web/routers/documents.py` (the `notes` section: `NOTE_REF_PREFIX`, `_note_stem`,
+`_note_name`, `_note_payload`, `_get_note`, `_write_note_tmp`, `create_note` / `update_note` /
+`get_note`; `ingest_web_file` grew `force` / `title` / `folder_id`), `web/schemas.py` (`NoteIn`,
+`NoteUpdateIn`, `NOTE_BODY_MAX`), `ingest/service.py` (`ingest_one(title=...)` and the precedence rule),
+`storage/db.py` + `storage/repo.py` (comment-level widening of `source_ref`); frontend
+`static/js/note-editor.js` (new), `static/js/tree.js` (`isNote`, `folderOptions`), `static/js/kb-tree.js`
+(`onEditNote`, `selectDocById`, the `笔记` meta label), `static/js/documents.js`, `static/documents.html`,
+`css/style.css`, `DESIGN.md` + `docs/zh-CN/DESIGN.md` (the `note-editor: 70` rung); tests
+`tests/unit/web/test_notes_api.py` (new), `tests/unit/ingest/test_service.py`; smoke
+`tools/smoke_tree.mjs`; E2E `tools/chrome_notes.py` (new).

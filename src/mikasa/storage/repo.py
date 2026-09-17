@@ -98,6 +98,7 @@ def _row_to_document(row: sqlite3.Row) -> Document:
         ingest_status=row["ingest_status"],
         error_message=row["error_message"],
         folder_id=row["folder_id"],
+        source_ref=row["source_ref"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -120,6 +121,50 @@ def move_document(conn: sqlite3.Connection, doc_id: int, folder_id: int | None) 
 def set_document_title(conn: sqlite3.Connection, doc_id: int, title: str) -> None:
     """文档改名（显示层：只改 documents.title，upload 副本文件名不动）。"""
     conn.execute("UPDATE documents SET title = ? WHERE id = ?", (title, doc_id))
+
+
+def set_document_file_path(conn: sqlite3.Connection, doc_id: int, file_path: str) -> None:
+    """改写文档的 uploads 副本路径——**只用于修复历史脏值**。
+
+    库里的 file_path 可能是废弃的旧项目路径（本项目真发生过：仓库改名后
+    23 行里 21 行指向旧目录）。读侧 `_resolve_upload_file` 一直有"按文件名
+    兜底"的两跳解析，但**写侧的同名替换判定用的是全路径**：拿着脏路径去
+    入库会被判成"这是一个新文件"，于是插出第二行（多一篇、丢标记、索引
+    仍旧）。修法是把这个键修回真实副本路径，让两侧口径一致。
+
+    调用方负责：确认目标是 uploads 下的文件名、且新路径不与既有行冲突
+    （file_path 有 UNIQUE 约束，撞了会抛 IntegrityError）。
+    """
+    conn.execute("UPDATE documents SET file_path = ? WHERE id = ?", (file_path, doc_id))
+
+
+# ---------------------------------------------------------------------------
+# documents 在线来源（v4：source_ref）
+# ---------------------------------------------------------------------------
+
+
+def set_document_source_ref(conn: sqlite3.Connection, doc_id: int, source_ref: str) -> None:
+    """写入文档来源标识——由论文导入（"arxiv:2401.12345"）与笔记链路
+    （"note:<key>"）调用，见 ADR-0020 / ADR-0021。
+
+    与 folder_id 同构走 UPDATE（insert_document 的 SQL 保持列不变）。
+    没有"清除"入口：来源是既成事实，用户删文档即随之消失。
+    """
+    conn.execute("UPDATE documents SET source_ref = ? WHERE id = ?", (source_ref, doc_id))
+
+
+def list_source_refs(conn: sqlite3.Connection) -> set[str]:
+    """全部已入库文档的来源标识集合（「找论文」页标"已在库中"用）。
+
+    一次查全而不是逐条查：搜索页一屏 20-50 条结果，逐条查是 20-50 次
+    SQL；本表量级（个人语料）下全表扫描的成本可忽略。NULL 行（普通上传、
+    历史导入）不进集合。
+
+    集合里也可能有笔记的 `note:<key>`（同一个来源标识列）：找论文页是
+    **精确匹配** `arxiv:<id>` / `core:<id>`，前缀不同不会误命中。
+    """
+    rows = conn.execute("SELECT source_ref FROM documents WHERE source_ref IS NOT NULL").fetchall()
+    return {row["source_ref"] for row in rows}
 
 
 # ---------------------------------------------------------------------------

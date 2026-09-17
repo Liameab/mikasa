@@ -3,18 +3,23 @@
 下载目标只来自**来源 API 自己的记录**（导入端点不接用户任意 URL），
 但 oa_url 可能指向任意出版商主机——纵深防御仍然必要：
 
-1. **协议与地址**：https 只放行解析到公网地址的主机；http 只放行解析
-   到回环地址的（E2E 假源的逃生门——回环打不到内网，不削弱 SSRF 保证）；
-   其余协议、URL 内嵌凭据、私网/链路本地/保留地址一律拒。
+1. **协议与地址**：https / http 都只放行解析到**公网地址**的主机，
+   外加 http 的回环例外（E2E 假源与本地服务的逃生门——回环打不到内网，
+   不削弱 SSRF 保证）；其余协议、URL 内嵌凭据、私网/链路本地/保留地址
+   一律拒。
+   *（2026-09-16 放宽：原策略只放行公网 https，实测中文开放获取论文约
+   六成全文链接是明文 http（国内期刊/仓储普遍没上 https），等于"搜得到、
+   导不进来"。链接来自上游记录而非用户输入、下的是公开论文、不带凭据，
+   所以放行公网 http；代价是明文传输理论上可被中途替换，属已接受的残差。）*
 2. **重定向逐跳复验**：跳转是 SSRF 的第二入口，每一跳都重新走校验，
    上限 3 跳。
 3. **内容验证**：Content-Type 必须是 application/pdf + 首块 `%PDF-`
    嗅探（拦住"伪装成 PDF 的 HTML 错误页"）。
 4. **体积上限**：50MB 硬上限，超限删半成品并报错。
 
-已接受的残差（ADR-0019）：校验用 `getaddrinfo` 与 urlopen 自身的解析是
-两次独立 DNS——存在理论上的 DNS-rebinding 窗口，闭合它需要自建连接层，
-对个人本地应用收益不成比例。
+已接受的残差（ADR-0019/0020）：① 校验用 `getaddrinfo` 与 urlopen 自身的
+解析是两次独立 DNS——存在理论上的 DNS-rebinding 窗口，闭合它需要自建
+连接层，对个人本地应用收益不成比例；② 公网 http 的明文完整性风险（见 1）。
 """
 
 from __future__ import annotations
@@ -39,7 +44,7 @@ _DEFAULT_PORTS = {"https": 443, "http": 80}
 
 
 def _check_host(host: str, port: int, *, resolve=socket.getaddrinfo) -> None:
-    """校验主机解析结果：https 须全公网；http 须全回环；其余一律拒。
+    """校验主机解析结果：须解析到公网地址，或（仅 http 时）回环地址。
 
     resolve 参数可注入：单测传假 addrinfo 列表，零真实 DNS。
     """
@@ -58,6 +63,24 @@ def _check_host(host: str, port: int, *, resolve=socket.getaddrinfo) -> None:
             raise PaperError("论文下载目标解析到了内网地址，已拒绝（安全策略）")
 
 
+def _check_http_host(host: str, port: int, *, resolve=socket.getaddrinfo) -> None:
+    """http 专用：公网或回环皆可（回环 = E2E 假源/本地服务的逃生门）。
+
+    与非回环的内网地址仍然一律拒绝——SSRF 防线是"打不到内网"，与协议无关。
+    """
+    try:
+        infos = resolve(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise PaperError(f"论文下载目标无法解析（{host}）：{exc}") from exc
+    for info in infos:
+        sockaddr = info[4]
+        if not sockaddr:
+            continue
+        ip = ipaddress.ip_address(str(sockaddr[0]))
+        if not (ip.is_global or ip.is_loopback):
+            raise PaperError("论文下载目标解析到了内网地址，已拒绝（安全策略）")
+
+
 def _validate_url(url: str, *, resolve=socket.getaddrinfo) -> urllib.parse.SplitResult:
     """下载前校验：协议白名单 + 无内嵌凭据 + 主机解析安全检查。"""
     parts = urllib.parse.urlsplit(url)
@@ -67,17 +90,11 @@ def _validate_url(url: str, *, resolve=socket.getaddrinfo) -> urllib.parse.Split
         raise PaperError("论文下载链接不允许内嵌凭据")
     if not parts.hostname:
         raise PaperError("论文下载链接缺少主机名")
+    port = parts.port or _DEFAULT_PORTS[parts.scheme]
     if parts.scheme == "https":
-        _check_host(parts.hostname, parts.port or _DEFAULT_PORTS["https"], resolve=resolve)
-    else:  # http：仅回环（本地假源）；连公网明文、更连不到内网
-        try:
-            infos = resolve(parts.hostname, parts.port or _DEFAULT_PORTS["http"])
-        except OSError as exc:
-            raise PaperError(f"论文下载目标无法解析（{parts.hostname}）：{exc}") from exc
-        for info in infos:
-            sockaddr = info[4]
-            if sockaddr and not ipaddress.ip_address(str(sockaddr[0])).is_loopback:
-                raise PaperError("论文下载目标不是本机服务（http 链接仅允许本地回环），已拒绝")
+        _check_host(parts.hostname, port, resolve=resolve)
+    else:  # http：公网放行（中文论文的全文链接多是明文 http，见模块头）+ 回环例外
+        _check_http_host(parts.hostname, port, resolve=resolve)
     return parts
 
 

@@ -23,7 +23,7 @@
 
 import { $, apiFetch, el, esc, toast } from "./common.js";
 import { confirmDialog } from "./confirm.js"; // 自定义确认框（替换原生 confirm）
-import { buildDocTree, folderPath, subtreeIds } from "./tree.js";
+import { buildDocTree, folderPath, isNote, subtreeIds } from "./tree.js";
 
 /* ---------------- 状态 ---------------- */
 
@@ -43,6 +43,11 @@ let onCount = null; // 回拨 documents.js：文档总数 → 标题计数 pill
 // （上传/删除/改名/拖拽落定后都触发）都会跑——并进 onSelect 会导致
 // "拖一篇文档进文件夹就自动弹出阅读面板"。
 let onOpen = null;
+// 回拨 documents.js：笔记行的「编辑笔记」→ 打开笔记编辑器。**走注入而不是
+// 直接 import note-editor.js**：note-editor 保存后要回拨本模块的
+// refreshCorpusTree/selectDocById，互相 import 就成环（本模块头部承诺
+// "与 documents.js 零循环依赖"，注入回调是既定的解环方式）。
+let onEditNote = null;
 
 /** 单例菜单：body 级 fixed，任何时刻至多一个（重复打开先关旧的）。 */
 const menuEl = el("div", { id: "ctx-menu" });
@@ -69,11 +74,13 @@ let dragOverEl = null; // 当前绿框高亮的目标行（换目标/离开时�
  *   onCount(n)               —— 文档总数（右侧标题计数 pill）。
  *   onOpen(doc, location)    —— 点文档行：在右栏打开阅读区（只在真实点行时
  *                               触发，刷新重绘走 notifyActive 不触发）。
+ *   onEditNote(doc)          —— ⋯ 菜单「编辑笔记」（仅笔记行有该项）。
  */
 export function initCorpusTree(handlers) {
   onSelect = handlers.onSelect;
   onCount = handlers.onCount;
   onOpen = handlers.onOpen;
+  onEditNote = handlers.onEditNote || null;
   document.body.append(menuEl);
   document.addEventListener("click", (ev) => {
     if (!ev.target.closest("#ctx-menu")) closeMenu(); // 点菜单外关闭
@@ -321,10 +328,13 @@ function docRow(doc, depth) {
   item.setAttribute("draggable", "true"); // 文档行可拖（文件夹行不设）
   item.title = "按住拖到文件夹或空白处可移动"; // 拖拽入门的轻提示
 
+  // 笔记的 file_type 也是 "md"（它就是一篇 .md 文档）：按类型名显示会让
+  // 用户分不清"自己写的"和"上传的"，故笔记行改显示"笔记"
+  const kind = isNote(doc) ? "笔记" : doc.file_type;
   const meta = el(
     "div",
     { class: "s-meta" },
-    `${doc.file_type} · ${doc.chunk_count} 块 · ${doc.char_count} 字符`
+    `${kind} · ${doc.chunk_count} 块 · ${doc.char_count} 字符`
   );
   if (doc.ingest_status !== "done") {
     // 非终态行（CLI 并行入库的瞬态/失败残留）：后缀标注，失败用红字
@@ -359,12 +369,27 @@ function displayTitle(doc) {
 }
 
 /** 选中文档：本地高亮 + 详情卡回填（onSelect）+ 打开阅读面板（onOpen）。 */
-function selectDoc(doc) {
+function selectDoc(doc, { open = true } = {}) {
   activeDocId = doc.id;
   renderTree(); // 高亮重绘（只差 active 类，全量重绘最省心）
   const location = locationText(doc);
   onSelect?.(doc, location);
-  onOpen?.(doc, location);
+  if (open) onOpen?.(doc, location);
+}
+
+/**
+ * 按 id 选中文档（保存笔记后重新选中用），返回是否命中。
+ *
+ * 为什么需要它：编辑笔记走的是**同名替换**，后端删旧行插新行 → documents.id
+ * 变了。保存后若还按旧 id 选中，refreshCorpusTree 会判定"选中行已被删除" →
+ * 清空选中 → 右侧阅读区自己塌掉。调用方拿响应里的新 id 走这里即可无缝接上。
+ * open 默认 false：保存完只是把树里的行重新点亮，不强推右栏切视图。
+ */
+export function selectDocById(docId, { open = false } = {}) {
+  const doc = docsCache.find((d) => d.id === docId);
+  if (!doc) return false; // 缓存未刷新/行已不在：静默（不打断保存流程）
+  selectDoc(doc, { open });
+  return true;
 }
 
 function toggleFolder(id) {
@@ -443,6 +468,11 @@ function openDocMenu(ev, doc, depth) {
 
 function buildDocMenu(doc, depth) {
   menuEl.innerHTML = "";
+  // 笔记多一项「编辑笔记」：正文用编辑器回填（上传件没有"可编辑的正文"
+  // 这回事——它的正文来自用户手里的原文件）
+  if (isNote(doc)) {
+    menuEl.append(menuItem("编辑笔记", () => onEditNote?.(doc)));
+  }
   menuEl.append(
     menuItem("重命名", () => beginRenameDoc(doc)),
     menuItem("移动到…", () => buildMoveMenu({ kind: "doc", id: doc.id })),

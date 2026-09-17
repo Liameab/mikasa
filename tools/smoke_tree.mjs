@@ -16,7 +16,8 @@ const source = fs.readFileSync(
   "utf8"
 );
 const mod = await import("data:text/javascript;base64," + Buffer.from(source).toString("base64"));
-const { buildTree, buildDocTree, folderPath, subtreeIds, displayTitle } = mod;
+const { buildTree, buildDocTree, folderPath, subtreeIds, displayTitle, isNote, folderOptions } =
+  mod;
 
 let passed = 0;
 const assert = (cond, msg) => {
@@ -84,5 +85,30 @@ assert("docs" in docTree.roots[0] && !("sessions" in docTree.roots[0].children[0
 // 与 buildTree 互不污染：同名核心函数产出各自的槽位
 const tree2 = buildTree(folders, sessions);
 assert("sessions" in tree2.roots[0].children[0], "会话树节点带 sessions 槽");
+
+// ---- isNote（M6 ①：笔记判据，与后端 NOTE_REF_PREFIX 是跨端合同） ----
+assert(isNote({ source_ref: "note:abc123" }) === true, "note: 前缀 = 笔记");
+assert(isNote({ source_ref: "arxiv:2401.12345" }) === false, "论文导入不是笔记");
+assert(isNote({ source_ref: null }) === false, "上传件（NULL）不是笔记");
+assert(isNote({}) === false, "缺字段的行不炸且不是笔记");
+assert(isNote(null) === false, "null 行不炸");
+
+// ---- folderOptions（笔记编辑器"保存到"下拉） ----
+const opts = folderOptions(folders);
+assert(opts.map((o) => o.id).join() === "1,2,3,4", "深度优先、父在子前");
+assert(opts[0].depth === 0 && opts[1].depth === 1 && opts[2].depth === 1, "层级深度");
+assert(opts[1].label === "　数学", "子级用全角空格缩进");
+assert(opts[0].label === "复习", "根级不缩进");
+assert(folderOptions([]).length === 0, "空列表不炸");
+
+// 父不存在的脏数据 → 当根级挂出（与 group 同口径），不许丢
+const orphan = folderOptions([{ id: 7, name: "孤儿夹", parent_id: 99 }]);
+assert(orphan.length === 1 && orphan[0].depth === 0, "父缺失的文件夹当根级列出");
+// 成环：两个都要出现在列表里（宁位置不完美，不能让用户找不到）
+const cycleOpts = folderOptions([
+  { id: 1, name: "a", parent_id: 2 },
+  { id: 2, name: "b", parent_id: 1 },
+]);
+assert(cycleOpts.length === 2, "成环文件夹不丢、不死循环");
 
 console.log(`tree.js 冒烟通过：${passed} 条断言全绿`);

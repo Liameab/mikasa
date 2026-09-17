@@ -14,8 +14,11 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.requests import ClientDisconnect
@@ -40,6 +43,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 _PAGES = {
     "/": "index.html",
     "/documents": "documents.html",
+    "/papers": "papers.html",
     "/eval": "eval.html",
 }
 
@@ -49,6 +53,23 @@ def _error_body(status: int, type_name: str, message: str) -> JSONResponse:
     return JSONResponse(
         status_code=status, content={"error": {"type": type_name, "message": message}}
     )
+
+
+def _drop_surrogates(value: Any) -> Any:
+    """递归洗掉字符串里的孤立代理项（校验错误的 `input` 原值可能是它们）。
+
+    `json.dumps` 本身不报错（它按 UTF-16 转义），但 Starlette 随后
+    `.encode("utf-8")` 会抛 UnicodeEncodeError —— 于是"客户端送了个坏字符串"
+    变成了"服务器内部错误"。替换成 U+FFFD：调用方仍能看到自己送了什么，
+    只是坏字符被标了出来。
+    """
+    if isinstance(value, str):
+        return value.encode("utf-8", "replace").decode("utf-8")
+    if isinstance(value, dict):
+        return {key: _drop_surrogates(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_drop_surrogates(item) for item in value]
+    return value
 
 
 def create_app(settings: Settings) -> FastAPI:
@@ -95,6 +116,27 @@ def create_app(settings: Settings) -> FastAPI:
             413,
             "too_large",
             f"上传内容超过大小上限（{settings.web.upload_max_mb} MB），已中断。",
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        """422 校验错误，但**响应体里要洗掉孤立代理项**。
+
+        FastAPI 默认处理器把出错字段的**原值**（pydantic 的 `input`）回显进
+        响应体；原值本身合法（它是 Python str），可再编码成 UTF-8 时就会炸
+        ——`'\\ud800'.encode('utf-8')` 抛 UnicodeEncodeError，于是 422 变成
+        500「服务器内部错误」（2026-09-16 对抗性实测：标题从坏 UTF-16 来源
+        粘贴就能触发）。这里把字符串里的代理项替换成 U+FFFD 再渲染，形状与
+        默认处理器完全一致（`{"detail": [...]}`），前端 errorMessage 零改动。
+        """
+        logger.warning(
+            "请求校验失败：%s %s（%s）", request.method, request.url.path, exc.errors()[:1]
+        )
+        return JSONResponse(
+            status_code=422,
+            content={"detail": jsonable_encoder(_drop_surrogates(exc.errors()))},
         )
 
     @app.exception_handler(sqlite3.IntegrityError)

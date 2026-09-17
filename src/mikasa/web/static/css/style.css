@@ -1010,48 +1010,66 @@ table.list td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .kb-search:focus { border-color: var(--focus); }
 .kb-search::-webkit-search-cancel-button { filter: invert(0.6); cursor: pointer; }
 
-/* ---- 在线找论文面板（M7，逻辑见 js/papers.js）----
-   结果列表自带滚动上限：面板是右列的第一屏常驻件，几十条结果不能
-   把"语料总览"顶到很下面。 */
+/* ---- 找论文页（M8，逻辑见 js/papers-page.js / papers-filters.js / papers-detail.js）----
+   三栏：筛选栏 300 + 结果列表自适应 + 详情面板 340~440。窄屏只保留
+   DESIGN.md 的那一条断点（阅读面板宽度的先例），三栏不塌——本应用是
+   桌面窗口优先，见 DESIGN.md「响应式行为」。 */
+.papers-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr) minmax(340px, 440px);
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+}
+/* 三栏各自内部滚动：.card 默认按内容撑高，这里要的是"列内滚" */
+.papers-layout > .card { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+
+/* 搜索行（结果栏顶排）：输入 + 按钮 */
 .paper-form { display: flex; gap: 8px; align-items: flex-start; }
 .paper-form .kb-search { flex: 1; width: auto; margin-bottom: 0; } /* 行内输入：交给 flex 分配宽度 */
 
-.paper-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-}
-.paper-bar .btn { font-size: 12px; padding: 4px 10px; }
-
-/* 密钥行：默认折叠（可选配置，不抢搜索的主视线） */
+/* 密钥行（筛选栏内，默认折叠：可选配置，不抢主视线） */
 .paper-key-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  margin-top: 10px;
+  margin-top: 8px;
 }
-.paper-key-row .kb-search { flex: 1; min-width: 200px; margin-bottom: 0; font-size: 12px; }
+.paper-key-row .kb-search { flex: 1; min-width: 120px; margin-bottom: 0; font-size: 12px; }
 .paper-key-row .btn { font-size: 12px; padding: 4px 12px; }
 .paper-key-row .muted { flex-basis: 100%; }
 
+/* 来源芯片行 + 无结果/加载提示等状态字 */
+.paper-bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.paper-bar .btn { font-size: 12px; padding: 4px 10px; }
 #paper-status { margin-top: 8px; min-height: 0; }
 
+/* 结果列表：列内滚动（页面不滚） */
 .paper-results {
   display: flex;
   flex-direction: column;
   margin-top: 6px;
-  max-height: 320px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 .paper-results .empty { padding: 18px 10px; font-size: 13px; }
 
 .paper-item {
-  padding: 10px 2px;
+  padding: 10px 8px;
   border-bottom: 1px solid var(--border);
+  border-left: 2px solid transparent; /* 选中态的位置占位：不选中也留 2px，避免抖动 */
+  cursor: pointer;
 }
 .paper-item:last-child { border-bottom: none; }
+.paper-item:hover { background: var(--bg-inset); }
+/* 选中 = 绿系（DESIGN.md「选中就要长得像选中」）；左侧竖条比整块底色安静，
+   适合"列表里挑一条"这种高频、可反复切换的场景 */
+.paper-item.on {
+  background: rgba(63, 185, 80, 0.1);
+  border-left-color: var(--green);
+}
 .paper-head { display: flex; align-items: baseline; gap: 8px; }
 .paper-title {
   color: var(--text);
@@ -1063,25 +1081,100 @@ table.list td.num { text-align: right; font-variant-numeric: tabular-nums; }
 a.paper-title:hover { color: var(--green); }
 .paper-src { flex: none; font-size: 11px; padding: 2px 8px; }
 .paper-meta { margin-top: 3px; }
+/* 被引数：与元信息同排的小徽标（0 与"不提供"文案不同，见 papers-page.js） */
+.paper-cites { color: var(--cyan); }
+/* 摘要预览：列表里最多两行，点开看详情面板的全文 */
+.paper-snippet {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* 「已在库中」标记：绿系实心小标（与选中态同色系但形态不同） */
+.paper-inlib {
+  flex: none;
+  color: var(--green);
+  border-color: rgba(63, 185, 80, 0.5);
+  background: rgba(63, 185, 80, 0.08);
+  font-size: 11px;
+  padding: 2px 8px;
+}
 
 .paper-actions { display: flex; gap: 6px; margin-top: 7px; }
 .paper-actions .btn { font-size: 12px; padding: 4px 12px; text-decoration: none; }
 
-.paper-abstract {
-  margin-top: 8px;
-  padding: 8px 10px;
-  background: var(--bg-inset);
-  border-radius: 8px; /* row 档（DESIGN.md 圆角语法：6 控件 / 8 行 / 10 卡 / 12 模态 / 999 胶囊） */
-  color: var(--muted);
-  font-size: 12.5px;
-  line-height: 1.6;
-  max-height: 180px;
-  overflow-y: auto;
-}
 .paper-status { margin-top: 5px; }
 
 #paper-more-row { text-align: center; margin-top: 8px; }
 #paper-more-row .btn { font-size: 12px; padding: 5px 14px; }
+
+/* ---- 找论文页：左筛选栏 ---- */
+.p-filter { margin-bottom: 14px; }
+.p-filter:last-child { margin-bottom: 0; }
+.p-filter-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.p-filter .s-chips { gap: 6px; }
+/* 复选框行（来源多选 / 只看开放获取）：整行可点，命中区域比裸 checkbox 大 */
+.p-check { display: flex; align-items: center; gap: 7px; font-size: 13px; padding: 3px 0; cursor: pointer; }
+.p-check input { accent-color: var(--green); margin: 0; }
+.p-check.disabled { color: var(--muted); cursor: not-allowed; }
+/* 年份区间：两个数字输入并排 */
+.p-year { display: flex; align-items: center; gap: 6px; }
+.p-year input {
+  width: 74px;
+  background: var(--bg-inset);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 8px;
+  outline: none;
+}
+.p-year input:focus { border-color: var(--focus); }
+.p-year .muted { font-size: 12px; }
+/* 能力提示：某个来源不支持该选项时的说明（"给了选项却不生效"比不支持更坏） */
+.p-note { font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.45; }
+
+/* 排序：胶囊分段（复用 .rd-tabs 的语言，竖排更省宽） */
+.p-sorts { display: flex; flex-direction: column; gap: 4px; }
+.p-sorts .btn { font-size: 12.5px; padding: 5px 10px; justify-content: flex-start; text-align: left; }
+.p-sorts .btn.active {
+  color: var(--green);
+  background: rgba(63, 185, 80, 0.16);
+  border-color: var(--green);
+  font-weight: 600;
+}
+.p-sorts .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ---- 找论文页：右详情面板 ---- */
+.pd-title { font-size: 16px; font-weight: 600; line-height: 1.45; color: var(--text); text-decoration: none; }
+a.pd-title:hover { color: var(--green); }
+.pd-meta { margin-top: 8px; font-size: 12.5px; color: var(--muted); line-height: 1.7; }
+.pd-meta .paper-cites { color: var(--cyan); }
+.pd-body {
+  margin-top: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  font-size: 13.5px;
+  line-height: 1.75;
+}
+.pd-actions { display: flex; gap: 8px; margin-top: 12px; }
+/* 导入后的出口（去提问 / 去知识库）：绿色描边，与"导入"主按钮区分开 */
+.pd-exits { display: flex; gap: 8px; margin-top: 12px; }
+.pd-exits .btn { font-size: 13px; text-decoration: none; }
 
 /* 文档行状态后缀字色（s-meta 是 muted，需显式压过） */
 .doc-item .meta-bad { color: var(--red); }
@@ -1289,6 +1382,98 @@ a.paper-title:hover { color: var(--green); }
 }
 .btn.danger.solid:hover { background: rgba(248, 81, 73, 0.3); border-color: var(--red); }
 .btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+/* ---------- 笔记编辑器（M6 ①，2026-09-16） ----------
+   居中模态：z-index 70 —— 在 ⋯ 菜单(60) 之上、"放弃未保存修改"确认框(90)
+   之下（确认框必须盖得住编辑器）。左写右预览；窄屏（900px 单断点）改成
+   上下堆叠，预览退到下半屏。 */
+.note-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.note-box {
+  width: min(1000px, 100%);
+  height: min(720px, 100%);
+  display: flex;
+  flex-direction: column;
+  min-height: 0; /* flex 链：不给 0 的话子元素会把卡片撑破（历史坑） */
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+.note-head { padding: 14px 18px 10px; border-bottom: 1px solid var(--border); }
+/* 标题是无边框的大字输入：整条头部都是标题的点击区，视觉上像"文档抬头" */
+.note-title {
+  width: 100%;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 2px 0;
+}
+.note-title::placeholder { color: var(--muted); font-weight: 400; }
+.note-split { display: flex; flex: 1; min-height: 0; }
+.note-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  resize: none;
+  border: none;
+  border-right: 1px solid var(--border);
+  outline: none;
+  background: var(--bg-inset);
+  color: var(--text);
+  padding: 14px 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13.5px;
+  line-height: 1.8;
+  tab-size: 4;
+}
+.note-preview {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 16px;
+  font-size: 14px;
+  line-height: 1.75;
+}
+/* 预览复用回答气泡那套 Markdown 样式（.bubble 里的 .md-table/.code-block/…），
+   但代码块的"复制"按钮的处理器在 qa.js 私有函数里，这里没有——藏掉，
+   免得按钮点下去没反应看起来像坏了 */
+.note-preview .btn-copy { display: none; }
+.note-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+}
+.note-folder-wrap { color: var(--muted); font-size: 13px; }
+.note-folder {
+  background: var(--bg-inset);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 13px;
+  max-width: 260px;
+}
+.note-hint { white-space: nowrap; }
+@media (max-width: 900px) {
+  .note-split { flex-direction: column; }
+  .note-input { border-right: none; border-bottom: 1px solid var(--border); }
+}
 
 /* ---------- 阅读器的内嵌形态（知识库页右栏，2026-09-10） ----------
    与浮层同源同构（reader.js 一套渲染）：只是去掉 fixed/阴影，改成填满卡片。

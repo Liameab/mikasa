@@ -76,10 +76,16 @@ discussing in a technical review):
   rebuild, chunk ids shift, so golden-set fingerprints will mismatch explicitly —
   that is a feature; see the lesson in evaluation.md §2).
 
-The web upload endpoint and the online-paper import endpoint share one ingest
-tail (`documents.ingest_web_file`): both hand it a file inside an exclusive
-`web-tmp` subdirectory plus its sha256, and both get back the same byte-identical
-201/200/409 response (ADR-0019).
+The web upload endpoint, the online-paper import endpoint and the note editor all
+share one ingest tail (`documents.ingest_web_file`): all three hand it a file inside
+an exclusive `web-tmp` subdirectory plus its sha256, and all three get back the same
+byte-identical 201/200/409 response (ADR-0019). Notes pass three extra arguments:
+`force=True` (bypass content dedup — otherwise a second note with the same body is
+silently skipped), `title=` (the title has to be in place *before* chunking, or the
+index text keeps the old name), and `folder_id` (the "save into" choice must happen
+inside the same lock). A note is not a new type — it is an ordinary document marked
+`source_ref = "note:<key>"`, so retrieval, citations, the folder tree and the reader
+need zero special cases (ADR-0021).
 
 ## 4. Chunking strategy
 
@@ -239,14 +245,22 @@ Four layers of upload safety (`web/routers/documents.py`): sanitize_filename
 over-limit, 413 → temp file unlinked in a finally block; at the DB layer
 `file_path` is redacted, closing off path probes.
 
-**Online paper search** (M7, ADR-0019) sits in `papers/`: a two-source search
-service (arXiv Atom + OpenAlex JSON, normalised into one `PaperResult`),
-parity-interleaved pagination with per-source degradation, and a defended PDF
-downloader (public-address check per redirect hop, PDF sniffing, 50 MB cap).
-`web/routers/papers.py` exposes four endpoints — `POST /api/papers/search`,
-`POST /api/papers/import`, `GET/PUT /api/papers/settings` — and the import path
+**Online paper search** (M7/M8, ADR-0019/0020) sits in `papers/`: a three-source
+search service (arXiv Atom, OpenAlex and CORE JSON, normalised into one
+`PaperResult`), rotating-interleaved pagination with per-source degradation, and
+a defended PDF downloader (public-address check per redirect hop, PDF sniffing,
+50 MB cap). Each source declares what it can do (`SourceCaps`: year filter,
+citation sort, recency sort, language filter, open-access handling), and the
+filters the source cannot honour come back as `notes` — degradation is reported,
+never silently ignored (CORE's year *parameters* are accepted and dropped by the
+upstream, so that source filters by query syntax instead). `web/routers/papers.py`
+exposes five endpoints — `POST /api/papers/search`, `POST /api/papers/import`,
+`GET /api/papers/sources`, `GET/PUT /api/papers/settings` — and the import path
 re-derives the PDF URL from the source API rather than trusting the client, so
 the only user input that reaches a URL is a regex-validated `{source, id}` pair.
+The import also records `documents.source_ref` (`"arxiv:2401.12345"`), which is
+what lets a search result say "already in your library"; the v4 migration adds
+that column, and the two re-index keep-lists carry it across a full rebuild.
 
 ## 9. Eval orchestration (one implementation for CLI and web)
 

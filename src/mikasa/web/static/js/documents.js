@@ -13,8 +13,13 @@
    ========================================================================= */
 
 import { $, el, initTopbar, toast } from "./common.js";
-import { clearDocSelection, initCorpusTree, refreshCorpusTree } from "./kb-tree.js";
-import { initPapersPanel } from "./papers.js"; // 在线找论文（M7）
+import {
+  clearDocSelection,
+  initCorpusTree,
+  refreshCorpusTree,
+  selectDocById,
+} from "./kb-tree.js";
+import { openNoteEditor } from "./note-editor.js"; // 笔记编辑器（M6 ①）
 import { initReader, openDocument, updateLocation } from "./reader.js"; // 阅读器（两页共用）
 import { initOnboard } from "./onboard.js"; // 首启引导（空库时弹一次）
 
@@ -74,7 +79,6 @@ dropzone.addEventListener("drop", (ev) => {
 /* ---------------- 选中 → 右栏直接读正文（2026-09-10） ---------------- */
 
 const introCard = $("#intro-card");
-const papersCard = $("#papers-card");
 const listCard = $("#list-card");
 const readingCard = $("#reading-card");
 const readerHost = $("#reader-host");
@@ -92,11 +96,10 @@ function renderEmptyDetail() {
   );
 }
 
-/** 右栏在"上传 + 在线找论文 + 语料总览"与"阅读区"之间二选一。 */
+/** 右栏在"上传 + 语料总览"与"阅读区"之间二选一。 */
 function showReading(on) {
   readingCard.classList.toggle("hidden", !on);
   introCard.classList.toggle("hidden", on);
-  papersCard.classList.toggle("hidden", on);
   listCard.classList.toggle("hidden", on);
 }
 
@@ -112,10 +115,31 @@ function onSelect(doc, location) {
   updateLocation(location);
 }
 
+/* ---------------- 笔记（M6 ①） ---------------- */
+
+/**
+ * 保存成功后的接续动作（新建与编辑共用）。
+ *
+ * 必须用**响应里的新 id** 重新选中：编辑走的是同名替换，后端删旧行插新行，
+ * 旧 id 在 refreshCorpusTree 里会被判成"选中行已被删除"→ 清空选中（顺带
+ * 收起阅读区）→ 用户正在读的那篇突然从右栏消失，像是保存把它弄丢了。
+ * 所以：先记住阅读区原状态，刷新后用新 id 重选，并把阅读区**恢复原样**
+ * （原本开着就重新打开，原本关着就别自作主张弹出来）。
+ */
+async function onNoteSaved(doc) {
+  const wasReading = !readingCard.classList.contains("hidden");
+  await refreshCorpusTree();
+  if (doc?.id == null) return;
+  if (!selectDocById(doc.id, { open: wasReading })) {
+    // 刷新后仍定位不到新行：说明列表没跟上（刷新请求本身失败之类），
+    // 此时右栏已经因为"选中行不存在"被收起，必须给一句话解释
+    toast("已保存，但列表未刷新到最新，请手动刷新页面", "warn");
+  }
+}
+
 /* ---------------- 启动 ---------------- */
 
 initTopbar("documents").then((health) => void initOnboard(health));
-initPapersPanel(); // 在线找论文：检索/导入/OpenAlex 密钥
 // 内嵌模式：阅读器挂进右栏，收起时交还上传/总览视图
 initReader(readerHost, {
   onClose: () => {
@@ -134,6 +158,9 @@ initCorpusTree({
   onCount: (n) => {
     docCountPill.textContent = `${n} 篇`;
   },
+  // ⋯ 菜单「编辑笔记」（只有笔记行有这个菜单项）
+  onEditNote: (doc) => void openNoteEditor({ docId: doc.id, onSaved: onNoteSaved }),
 });
+$("#new-note").addEventListener("click", () => void openNoteEditor({ onSaved: onNoteSaved }));
 refreshCorpusTree(); // 树拉数据后经 onCount 回填计数
 renderEmptyDetail(); // 详情卡初始空态

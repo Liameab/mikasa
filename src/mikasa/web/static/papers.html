@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<!-- ============================================================================
+     Mikasa —— 找论文页（M8，在线论文检索）
+     布局：左侧筛选栏（年份 / 排序 / 来源多选 / 只看开放获取 / 密钥）
+     + 中间结果列表 + 右侧详情面板（点一条看完整摘要与元数据再决定导不导）。
+     三个来源（arXiv / OpenAlex / CORE）与它们的能力由 /api/papers/sources
+     下发，前端不硬编码——不支持的能力置灰并给说明，绝不摆一个点了不生效
+     的选项（见 js/papers-filters.js）。
+     JS 入口：/static/js/papers-page.js
+     ============================================================================ -->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>找论文 · Mikasa</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" href="data:,">
+</head>
+<body>
+
+  <header class="topbar">
+    <a class="brand" href="/">Mikasa<small>RAG 问答</small></a>
+    <nav class="main">
+      <a href="/" data-page="qa">问答</a>
+      <a href="/documents" data-page="documents">知识库</a>
+      <a href="/papers" data-page="papers">找论文</a>
+      <a href="/eval" data-page="eval">评测</a>
+    </nav>
+    <div class="health-pill"><span class="muted small">正在连接服务…</span></div>
+  </header>
+
+  <main class="papers-layout">
+
+    <!-- 左：筛选栏（来源列表由 JS 按服务端下发的目录渲染） -->
+    <aside class="card">
+      <h2>筛选</h2>
+      <div class="p-filter">
+        <span class="p-filter-label">发表时间</span>
+        <div id="p-presets" class="s-chips">
+          <button class="s-chip on" type="button" data-range="any">不限</button>
+          <button class="s-chip" type="button" data-range="3">近 3 年</button>
+          <button class="s-chip" type="button" data-range="5">近 5 年</button>
+          <button class="s-chip" type="button" data-range="10">近 10 年</button>
+        </div>
+        <div class="p-year">
+          <input id="p-date-from" type="date" aria-label="起始日期">
+          <span class="muted">至</span>
+          <input id="p-date-to" type="date" aria-label="结束日期">
+        </div>
+        <div id="p-year-note" class="p-note"></div>
+      </div>
+
+      <div class="p-filter">
+        <span class="p-filter-label">排序</span>
+        <div id="p-sorts" class="p-sorts">
+          <button class="btn ghost active" type="button" data-sort="relevance">相关度</button>
+          <button class="btn ghost" type="button" data-sort="cited">被引最多</button>
+          <button class="btn ghost" type="button" data-sort="recent">最新</button>
+        </div>
+        <div id="p-sort-note" class="p-note"></div>
+      </div>
+
+      <div class="p-filter">
+        <span class="p-filter-label">来源</span>
+        <div id="p-sources"></div>
+        <div id="p-sources-note" class="p-note"></div>
+      </div>
+
+      <div class="p-filter">
+        <span class="p-filter-label">语言</span>
+        <div id="p-langs" class="s-chips"></div>
+        <div id="p-lang-note" class="p-note"></div>
+      </div>
+
+      <div class="p-filter">
+        <label class="p-check" id="p-oa-row">
+          <input id="p-oa-only" type="checkbox">
+          <span>只看开放获取全文</span>
+        </label>
+        <div id="p-oa-note" class="p-note"></div>
+      </div>
+
+      <div class="p-filter">
+        <button id="paper-key-toggle" class="btn ghost" type="button">OpenAlex 密钥…</button>
+        <div id="paper-key-row" class="paper-key-row hidden">
+          <input id="paper-key-input" class="kb-search" type="password"
+                 autocomplete="off" aria-label="OpenAlex 密钥">
+          <button id="paper-key-save" class="btn" type="button">保存</button>
+          <div id="paper-key-note" class="muted small"></div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 中：搜索 + 结果列表（列表在列内滚动，页面不滚） -->
+    <section class="card">
+      <form id="paper-form" class="paper-form" autocomplete="off">
+        <input id="paper-q" class="kb-search" type="search"
+               placeholder="检索论文：中英文关键词均可，如「大语言模型 检索增强」"
+               aria-label="论文检索词">
+        <button id="paper-search-btn" class="btn primary" type="submit">搜索</button>
+      </form>
+      <div id="paper-status" class="muted small"></div>
+      <div id="paper-notes" class="p-note"></div>
+      <div id="paper-results" class="paper-results"></div>
+      <div id="paper-more-row">
+        <button id="paper-more" class="btn ghost hidden" type="button">加载更多</button>
+      </div>
+    </section>
+
+    <!-- 右：详情面板（渲染见 js/papers-detail.js） -->
+    <section class="card" id="paper-detail"></section>
+
+  </main>
+
+  <div id="toast"></div>
+  <script type="module" src="/static/js/papers-page.js"></script>
+</body>
+</html>

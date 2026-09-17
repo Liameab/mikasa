@@ -6,6 +6,8 @@ MockLLM 离线链路不含真实嵌入，上传文档即入库分块（与 inges
 
 from __future__ import annotations
 
+from mikasa.errors import ProviderError
+from mikasa.ingest.service import IngestService
 from mikasa.storage.db import open_db
 from tests.unit.web.conftest import NOTE
 
@@ -101,6 +103,30 @@ def test_upload_empty_file_400(client):
     c, _ = client
     resp = _upload(c, "空.md", content="")
     assert resp.status_code == 400
+
+
+def test_upload_embedding_provider_failure_502(client, monkeypatch):
+    """嵌入服务失败（额度/密钥/网络）→ 502，而不是 400（2026-09-16 记录、09-17 修）。
+
+    入库尾链原先把任何 ZhiwenError（ProviderError 也在内）翻成 400「入库失败」，
+    于是"上游额度用尽"以客户端错误的形式回到浏览器；同一个 ProviderError 在别的
+    端点上由 app 层处理器给 502。三条入库链路（上传/论文导入/笔记）共用这条尾链，
+    这里锁上传路径，笔记路径见 test_notes_api。
+    """
+    c, settings = client
+
+    def boom(self, chunks, doc_title):
+        raise ProviderError("模拟嵌入服务额度用尽（402）")
+
+    monkeypatch.setattr(IngestService, "_embed_chunks", boom)
+    resp = _upload(c, "笔记.md")
+    assert resp.status_code == 502, resp.text
+    assert "入库失败" in resp.json()["detail"]
+    # 失败不留半成品：库 / uploads / web-tmp 三处都要干净
+    assert c.get("/api/documents").json()["documents"] == []
+    assert list(settings.uploads_dir.iterdir()) == []
+    tmp_dir = settings.data_dir / "web-tmp"
+    assert not tmp_dir.exists() or not any(tmp_dir.iterdir())
 
 
 def test_delete_missing_document_404(client):

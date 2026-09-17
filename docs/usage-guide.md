@@ -108,19 +108,44 @@ Three pages in the top bar: **Chat** (home) / **Library** / **Evaluation**; the 
 - ⋯ menu: expand/collapse / new subfolder / **rename** (inline input; Enter commits, Esc cancels) / **move to…** (opens a path picker, with the folder itself and its descendants greyed out to prevent cycles) / delete (**empty folders only**: a folder containing subfolders or documents returns 409 with a count — a container never takes its documents down with it, so move them out first, then delete).
 
 **Document rows**:
-- Click = select → the details card on the right (path / type / chunk count / character count / ingest time / ingest status);
+- Click = select → the right column switches to the **reading view** for that document (body text or original file, with a status bar carrying path / type / chunk count / character count / ingest status);
 - **Drag** = drop onto a folder row to move it in (collapsed folders expand automatically), drop onto a document row to move it into that document's folder, drop on empty space to move it back to the root; the source row goes semi-transparent and the target row is outlined in green;
 - ⋯ menu: rename / move to… / delete (deleting opens an **in-app confirmation dialog** — not a native browser popup; it states plainly that "the chunks and the in-library copy are cleared together, and this cannot be undone", and confirms with a red button. `Esc` or a click outside cancels, so nothing is deleted by accident. Session deletion works the same way).
 
 **Semantics worth remembering**: renaming changes only the display name inside the library (the file in uploads is untouched); deleting a document removes its retrieval chunks and its uploaded copy together; re-uploading identical content is skipped, while re-uploading the same file with new content updates it (organizational placement preserved); and the full rebuild after switching embedding models (`reindex`) likewise preserves your organization.
 
-**Online paper search** (the panel between the upload area and the document list) searches two free sources — arXiv (preprints, all open access) and OpenAlex (journal metadata, including Chinese journals) — and imports what it finds straight into your corpus:
+## 6c. Writing Notes · Markdown straight into the library (M6 ①)
 
-- Type a query in Chinese or English ("大语言模型 检索增强", "retrieval augmented generation") and search; **全部来源 / arXiv / OpenAlex** chips narrow it to one source.
-- Each result shows title (click = the paper's landing page), authors, year, journal/conference, and a source badge. **摘要** expands the abstract, **打开** opens the landing page, **导入** downloads the PDF and ingests it — the document then appears at the root of the corpus tree, ready to be asked about. Import the same paper twice and the second one is skipped by content hash.
-- Papers without an open-access full text cannot be imported (their button is disabled) — use 打开 to reach the publisher page. This is also why the panel is honest about coverage: **CNKI-like experience, not CNKI's data** — CNKI/Wanfang/VIP exclusive full text is paywalled and has no public API, so Chinese social-science coverage is near zero, while DOI-carrying Chinese science/engineering journals are covered.
-- If one source is temporarily unreachable, the results from the other still come back with a "部分来源暂时不可用" note on top; only both failing at once is an error.
-- **密钥** (top right of the panel) stores an optional [OpenAlex API key](https://openalex.org) — free registration, 100k credits/day, and anonymous access only gets a small trial quota. The key is saved to the data directory's `.env` and takes effect immediately; the panel never displays the saved value, only whether one exists (clear it by emptying the box and saving).
+**＋ New note** (left column) opens a modal editor: write Markdown on the left, see it rendered on the
+right, pick a folder, save. The note becomes an ordinary library document — it shows up in the tree,
+drags into folders like anything else, and is searchable/citable by the very next question. Notes are
+labelled **笔记** instead of `md` in the tree so they are distinguishable from files you uploaded, and
+their ⋯ menu gains **编辑笔记**.
+
+- **Editing** re-ingests automatically: the note is replaced in place (same row in the tree, same file in
+  uploads), so nothing is duplicated and your folder placement is kept. Pressing save without changing
+  anything is a no-op.
+- **Unsaved changes are protected**: `Esc`, 取消 or a click on the backdrop asks for confirmation before
+  discarding, and a failed save keeps the window and your text open so you can fix and retry.
+- **What gets searched**: the note's prose, headings and tables. **Fenced code blocks do not enter
+  retrieval** (the Markdown loader skips them so that a `#` inside code is not mistaken for a heading) —
+  which also means a note that is *only* a code block cannot be saved (400). If a snippet matters for
+  retrieval, add a sentence of prose describing it.
+- **The note file is the only copy.** Unlike an uploaded paper — where you still have your original —
+  a note exists only inside the library (`data/uploads/`). Back up `data/` before switching embedding
+  models or moving machines.
+
+## 6b. Find-Papers Page · Searching the literature and importing what you find
+
+The **找论文** page is its own tab (ADR-0020). Three free sources are queried at once — arXiv (preprints, all open access), OpenAlex (journal metadata including Chinese journals) and CORE (an open-access aggregator with full-text links) — and a result can be imported straight into your corpus, where it becomes askable like any other document.
+
+- **Left column — filters.** Year range, sort (relevance / most cited / newest), which sources to search, language, and "only open access". Options a selected source cannot honour are greyed out with an explanation: arXiv has no citation counts, so "most cited" is only offered while a source that has them is selected; CORE ignores year *parameters* upstream, so its year filtering runs through the query instead. When every selected source is entirely open access, "only open access" shows up checked and disabled — that condition is *already satisfied*, which is not the same as unsupported.
+- **Middle column — results.** Type a query in Chinese or English and search. Results from the three sources rotate, so a page always shows a mix rather than one source burying the others. Each row carries the title (links to the paper's page), source badge, authors, year, journal, citation count (or "该来源不提供" when the source has none — 0 citations and "unknown" are different things), and a two-line abstract preview. **加载更多** fetches the next page.
+- **Right column — details.** Click any result to read the full abstract and metadata, then **导入知识库** to download the PDF and ingest it. The row and the detail pane both switch to **已在库中** and offer **去提问** / **去知识库**; importing the same paper twice is skipped by content hash. Papers without an open-access full text have their import button disabled up front.
+- **Coverage, stated honestly**: this is a CNKI-like experience, not CNKI's data. CNKI/Wanfang/VIP exclusive full text is paywalled with no public API, so Chinese social-science coverage is near zero, while DOI-carrying Chinese science/engineering journals are covered. Some CORE records point at `http://` repository links, which the downloader's security policy refuses — those records cannot be imported.
+- **OpenAlex 密钥** (bottom of the left column) stores an optional [OpenAlex API key](https://openalex.org) — free registration, 100k credits/day, anonymous access only gets a small trial quota. It is written to the data directory's `.env` and takes effect immediately; the saved value is never displayed, only whether one exists (empty the box and save to clear it).
+
+---
 
 ---
 

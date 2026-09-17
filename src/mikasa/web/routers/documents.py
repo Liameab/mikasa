@@ -24,6 +24,11 @@ PATCH /api/documents 语义同 qa 的 PATCH /api/sessions：model_fields_set
   - `/file` 只在 uploads 目录内按白名单解析（`_resolve_upload_file`），
     媒体类型白名单禁 text/html 与 image/svg+xml（同源存储型 XSS 的唯一入口）；
   - 两个新端点都只按 doc_id 读库，不接收任何路径参数。
+
+**笔记（M6 ①，2026-09-16，ADR-0021）**：文件末尾的 `/api/notes` 三端点让
+用户在知识库页直接写 Markdown。笔记没有自己的表、没有自己的类型——它是
+`source_ref = "note:<key>"` 的**普通文档**，走的就是上面的上传入库链路。
+设计要点与三个坑见该段头注释。
 """
 
 from __future__ import annotations
@@ -38,7 +43,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
 from mikasa.config.settings import Settings
-from mikasa.errors import ZhiwenError, strip_paths
+from mikasa.errors import ProviderError, ZhiwenError, strip_paths
 from mikasa.ingest.pagelocate import locate_in_page
 from mikasa.ingest.stitch import stitch_chunks
 from mikasa.models.document import Document
@@ -46,8 +51,9 @@ from mikasa.storage import repo
 from mikasa.storage.db import open_db
 from mikasa.utils.hashing import sha256_file
 from mikasa.utils.logging import get_logger
+from mikasa.utils.text import decode_text
 from mikasa.web.deps import get_services, get_settings
-from mikasa.web.schemas import DocumentPatchIn, FolderIn, FolderPatchIn
+from mikasa.web.schemas import DocumentPatchIn, FolderIn, FolderPatchIn, NoteIn, NoteUpdateIn
 from mikasa.web.services import AppServices
 
 router = APIRouter(tags=["documents"])
@@ -69,7 +75,9 @@ def _public_document(doc: Document) -> dict:
     """Document → 浏览器可见子集（本地路径 / 内容哈希不外泄）。
 
     folder_id 随列表给到前端（语料页组树/详情卡需要），文档内容与
-    索引信息不出库。
+    索引信息不出库。source_ref 是**公开元数据**（同一个 arXiv id / DOI
+    本来就在检索结果里明文展示），故不属脱敏对象——但这是一次有意的
+    边界扩张，已记入 ADR-0020。
     """
     return {
         "id": doc.id,
@@ -80,6 +88,7 @@ def _public_document(doc: Document) -> dict:
         "ingest_status": doc.ingest_status,
         "error_message": doc.error_message,
         "folder_id": doc.folder_id,
+        "source_ref": doc.source_ref,
         "created_at": doc.created_at,
         "updated_at": doc.updated_at,
     }
@@ -510,20 +519,45 @@ def ingest_web_file(
     file_sha: str,
     services: AppServices,
     settings: Settings,
+    source_ref: str | None = None,
+    force: bool = False,
+    title: str | None = None,
+    folder_id: int | None = None,
 ) -> JSONResponse:
-    """web-tmp 文件 → 入库 → 201/200/409 响应（上传与论文导入共用同一尾链）。
+    """web-tmp 文件 → 入库 → 201/200/409 响应（上传、论文导入、笔记共用尾链）。
 
-    论文导入端点（papers.py）下载完 PDF 后走这里，产出与上传**逐字节同形**
-    的响应：前端树刷新/toast 判定零改动。入口契约：tmp_path 是 web-tmp 下
-    本次操作独占子目录里的文件，safe_name 是净化后的文件名（ingest 以其
-    basename 决定 uploads 副本名与标题）。
+    论文导入端点（papers.py）下载完 PDF 后走这里，产出与上传**同形**的响应
+    （同一个 `_public_document` + 同类文案，前端树刷新/toast 判定零改动；
+    "同形"指三条链路彼此一致，不指与历史版本逐字节相同——响应体会随公开
+    字段的扩张而新增键，例如 ADR-0020 起多出的 `source_ref`）。
+    入口契约：tmp_path 是 web-tmp 下本次操作独占子目录里的文件，safe_name
+    是净化后的文件名（ingest 以其 basename 决定 uploads 副本名与标题）。
+
+    source_ref：论文导入传 "arxiv:2401.12345"，笔记链路传 "note:<key>"，
+    上传/CLI 恒为 None。
+
+    force/title 只由笔记链路使用（见 notes 段）：
+      - force=True 绕过 sha 内容去重——否则"第二条内容相同的笔记"会被静默
+        跳过（用户以为存了、树里没有），编辑到与另一条笔记同内容时响应还会
+        指到别人那行。同名替换（编辑笔记）在 force 下照常原地更新。
+      - title 是编辑器里写的标题，优先级高于继承来的旧标题（见 IngestService）。
+      - folder_id 只在"新建笔记"时给（上传/论文导入都落根级）：落夹必须在
+        入库后、**同一把锁内**完成，否则会出现"入库成功但没落到指定文件夹"
+        的中间态（调用方传它时已持有 services.ingest.exclusive()）。
     """
     try:
         # 入库失败（空文档/解析错误）→ 业务 400，文案即 exc 消息
-        status, added_chunks, added_chars = services.ingest.ingest_one(tmp_path)
+        status, added_chunks, added_chars = services.ingest.ingest_one(
+            tmp_path, force=force, source_ref=source_ref, title=title
+        )
     except (ZhiwenError, OSError) as exc:
+        # 嵌入/模型服务失败（密钥、额度、网络）是服务端问题 → 502，与 app 层
+        # 处理器对 ProviderError 的判定一致；此前一律 400，把"上游额度用尽"
+        # 报成客户端错误（2026-09-16 记录、2026-09-17 修复）。其余（空文档/
+        # 解析错误/文件锁）仍是业务 400。
         raise HTTPException(
-            status_code=400, detail=f"入库失败：{type(exc).__name__}: {strip_paths(str(exc))}"
+            status_code=502 if isinstance(exc, ProviderError) else 400,
+            detail=f"入库失败：{type(exc).__name__}: {strip_paths(str(exc))}",
         ) from exc
     finally:
         try:
@@ -545,6 +579,16 @@ def ingest_web_file(
         # （2026-09-11 审查指出）。
         if duplicate is None:
             raise HTTPException(status_code=409, detail="该内容对应的文档刚被删除，请重新上传")
+        # 来源回填：用户自己拖过这篇 PDF（source_ref 为 NULL）之后又在
+        # 「找论文」页导入同一篇，sha256 会在这里直接跳过——不回填的话
+        # 这行永远是 NULL，搜索结果会一直显示"未在库中"，而字节明明在库里。
+        # 只在原本没有来源时写（有来源的不覆盖：先来的更权威）。
+        if source_ref and duplicate.source_ref is None and duplicate.id is not None:
+            with open_db(settings.db_path) as conn:
+                repo.set_document_source_ref(conn, duplicate.id, source_ref)
+                conn.commit()
+                refreshed = repo.get_document(conn, duplicate.id)
+            duplicate = refreshed or duplicate
         return JSONResponse(
             status_code=200,
             content={
@@ -556,6 +600,12 @@ def ingest_web_file(
     # ingested：uploads 副本路径确定（uploads/<净化名>），直接按路径查行
     with open_db(settings.db_path) as conn:
         row = repo.get_document_by_path(conn, str(settings.uploads_dir / safe_name))
+        if row is not None and folder_id is not None and row.id is not None:
+            # 落夹：与入库同一个连接、同一把锁内补一次 UPDATE（见 docstring）。
+            # 不走 PATCH 端点是为了避免"入库成功、落夹 404/失败"的半拉子状态。
+            repo.move_document(conn, row.id, folder_id)
+            conn.commit()
+            row = repo.get_document(conn, row.id)
     # 同上：入库刚成功、这一行也可能被并发删除请求清掉，assert 会变成 500
     if row is None:
         raise HTTPException(status_code=409, detail="文档刚被删除，请刷新列表确认")
@@ -597,7 +647,18 @@ def delete_document(
             # is_relative_to 永远为假 → 副本静默不删 → 下次 reindex 把它"复活"
             copy = _inside_uploads(Path(doc.file_path), settings.uploads_dir.resolve())
             if copy is not None:
-                copy.unlink(missing_ok=True)
+                try:
+                    copy.unlink(missing_ok=True)
+                except OSError:
+                    # 只读/被别的程序占着（Windows 文件锁）：行已经删了，再抛就是
+                    # 500——而用户看到的"删除失败"其实只差一个文件（2026-09-16
+                    # 对抗性实测）。如实记日志；这条副本仍是 reindex 的复活隐患，
+                    # 所以日志要说清楚怎么收拾。
+                    logger.warning(
+                        "文档已从库中删除，但 uploads 副本删不掉（可能被占用或只读），"
+                        "下次全量重建会把它当新文档扫回来，请手工删除：%s",
+                        copy,
+                    )
     services.ask.invalidate_index()
     return {"deleted": doc_id, "title": doc.title}
 
@@ -650,11 +711,16 @@ def create_kb_folder(
 def patch_kb_folder(
     folder_id: int,
     body: FolderPatchIn,
+    services: AppServices = Depends(get_services),
     settings: Settings = Depends(get_settings),
 ) -> dict:
     """语料文件夹改名/移动（可只带其一）。防环：新父 ∈ 自身∪后代 → 409；
-    移回根（显式 null）恒允许。"""
-    with open_db(settings.db_path) as conn:
+    移回根（显式 null）恒允许。
+
+    持 ingest 锁（同 DELETE，见那边的理由）：文件夹的存在性是入库链路
+    在锁内校验过的前提，锁外改它会让"校验通过 → 落夹"之间出现空档。
+    """
+    with services.ingest.exclusive(), open_db(settings.db_path) as conn:
         folder = repo.get_kb_folder(conn, folder_id)
         if folder is None:
             raise HTTPException(status_code=404, detail="文件夹不存在")
@@ -676,11 +742,18 @@ def patch_kb_folder(
 @router.delete("/api/kb-folders/{folder_id}")
 def delete_kb_folder(
     folder_id: int,
+    services: AppServices = Depends(get_services),
     settings: Settings = Depends(get_settings),
 ) -> dict:
     """删除**空**语料文件夹：直接含子文件夹或文档 → 409 带计数文案（先移出）。
-    容器不连坐内容，绝不级联删除用户文档（kb_folders 外键 NO ACTION 兜底）。"""
-    with open_db(settings.db_path) as conn:
+    容器不连坐内容，绝不级联删除用户文档（kb_folders 外键 NO ACTION 兜底）。
+
+    持 ingest 锁（同 delete_document）：新建笔记是"锁内校验文件夹存在 →
+    入库（可能十几秒）→ 落夹"，文件夹若能在锁外被删掉，落夹的 UPDATE 会撞
+    外键 → 全局处理器翻成 409，而**笔记其实已经入库成功**——用户看到"保存
+    失败"再重试，就多出一篇重复笔记（2026-09-16 审查实测）。
+    """
+    with services.ingest.exclusive(), open_db(settings.db_path) as conn:
         folder = repo.get_kb_folder(conn, folder_id)
         if folder is None:
             raise HTTPException(status_code=404, detail="文件夹不存在")
@@ -719,3 +792,337 @@ def patch_document(
         updated = repo.get_document(conn, doc_id)
     assert updated is not None  # 上一步 404 已挡
     return {"document": _public_document(updated)}
+
+
+# ---------------------------------------------------------------------------
+# 笔记（M6 ①，2026-09-16）：知识库页直接写 Markdown → 保存即入库可检索
+# ---------------------------------------------------------------------------
+#
+# **笔记 = 带标记的普通文档**（ADR-0021）：标记是 `source_ref = "note:<key>"`，
+# 除此之外与上传的 .md 毫无区别——删除/改名/拖进文件夹/被提问引用/阅读视图
+# 全部复用既有链路，本段只有"新建 / 编辑 / 读原文"三个端点。
+#
+# 标记为什么复用 source_ref 而不加 schema 列：
+#   - `_KeptProps` 已把它列入 reindex 与同名替换的保留清单 → 标记天然活过
+#     全量重建，零额外改动；
+#   - `_public_document` 已暴露它（论文"已在库中"就是这么做的）；
+#   - 找论文页的 in_library 是精确匹配 `arxiv:<id>` / `core:<id>`，`note:`
+#     前缀不会误命中。
+# 代价是这一列语义要从"从哪个在线来源导入"泛化成"文档来源标识"（已同步
+# 改 db.py 的列注释）。
+#
+# 三个必须做对的地方（每条都对应一个"看着能跑、其实静默出错"的坑）：
+#   1) 入库必须 force=True：`_ingest_one` 的 sha 内容去重会让"第二条内容相同
+#      的笔记"直接 skipped 不落库（用户以为存上了、树里没有）；编辑到与另一条
+#      笔记同内容时，响应还会按 sha 查到**别人那行**上。
+#   2) 标题走 ingest 的显式 title 参数（分块前生效）：分块用标题构造索引词
+#      空间，入库后再补 set_document_title 会让"显示名"与"索引里的名字"漂移
+#      ——改完标题搜不到新名字。
+#   3) 整个保存流程套 services.ingest.exclusive()：否则"保存 vs 删除"会让刚被
+#      删掉的笔记以**没有标记的普通文档**复活（ingest 照 tmp 重建副本并插行）。
+#
+# 已知边界（另见 limitations-and-failures.md）：同名替换会重建行 → 笔记的
+# documents.id 每次保存都变（旧回答里引用 chip 指向的 chunk 随之失效）；
+# uploads 副本是笔记的**唯一权威副本**（没有"用户手里的原件"可回退）。
+
+NOTE_REF_PREFIX = "note:"
+"""笔记标记前缀，**跨端格式合同**：后端在这里生成，前端（kb-tree.js 判菜单项、
+note-editor.js 判可编辑性）用同一个前缀判定。改一处必须同步改另一处。"""
+
+_NOTE_STEM_MAX = 60
+"""笔记文件名里标题部分的长度上限。
+
+`sanitize_filename` 的主名上限是 115，笔记还要再追加 ` (note <key12>).md`
+（23 字符）——深数据目录下留足 MAX_PATH 余量，60 也远超正常标题长度。
+"""
+
+_NOTE_NAME_FALLBACK = "无标题"
+"""标题净化后没有可见字符时的文件名兜底。
+
+`sanitize_filename` 对 `"???"` / `"..."` / `"   "` 会直接抛 ValueError，
+而 `"\\u3000"`（全角空格）能通过它的 `strip(" .")` —— 不兜底会产出一个
+**看不见的文件名**（用户与排查者都无从辨认）。
+"""
+
+
+def _note_stem(title: str) -> str:
+    """标题 → 可用作文件名主名的形式（与 sanitize_filename 同一套字符规则）。"""
+    stem = _FILENAME_BAD.sub("", Path(title).name).strip(" .")
+    # **先截断再判可见性**：反过来的话，60 个零宽字符 + "abc" 这种标题会在
+    # 判定时被 "abc" 救活，截断后又把 "abc" 切掉 → 产出 60 个看不见的字符，
+    # 恰好是 _NOTE_NAME_FALLBACK 要防的那种文件名（2026-09-16 审查实测）
+    stem = stem[:_NOTE_STEM_MAX]
+    # 全角空格/零宽字符都算不可见：只按 str.strip() 判会漏掉它们
+    if not any(ch.isprintable() and ch != "　" and not ch.isspace() for ch in stem):
+        return _NOTE_NAME_FALLBACK
+    return stem
+
+
+def _note_name(conn, title: str, uploads: Path) -> tuple[str, str]:
+    """生成 (key, uploads 副本文件名)，避开既有来源与既有文件。
+
+    key 是 48 bit 随机（`uuid4().hex[:12]`），碰撞概率可忽略，但仍然显式查
+    一次：碰撞的后果不是报错而是**顶掉别人的行**（同名替换会继承旧行的标题与
+    标记），属于"低概率高后果"，检测成本只有一次集合查询。
+    """
+    taken = set(repo.list_source_refs(conn))
+    stem = _note_stem(title)
+    for _ in range(20):
+        key = uuid4().hex[:12]
+        name = f"{stem} (note {key}).md"
+        if f"{NOTE_REF_PREFIX}{key}" in taken:
+            continue
+        # 副本名与上传文件共用 uploads 这个扁平命名空间：重名会被同名替换
+        # 逻辑吃掉（上传件顶掉笔记，或反之）
+        if not (uploads / name).exists():
+            return key, name
+    raise HTTPException(status_code=500, detail="笔记标识生成失败，请重试")  # pragma: no cover
+
+
+def _note_payload(body: str) -> bytes:
+    """正文 → 落盘字节：换行统一成 LF，再按 UTF-8 编码。
+
+    浏览器 textarea 的 value 已按 HTML 规范把 CRLF 规范成 LF，但直连 API 的
+    调用方可能送 CRLF；不归一的话同一份内容会因换行风格不同算出不同 sha
+    （每次打开就保存 = 白重嵌一次），而 Windows 上文本模式写盘还会把 \\n 变
+    \\r\\n（写进去的和读出来的不是一份东西）。所以：**二进制写 + 显式归一**。
+
+    编码失败（正文含**孤立代理项**——粘贴自坏 UTF-16 来源）翻成 400：不接住
+    就是 UnicodeEncodeError → 500，用户正文里只有一个坏字符却反复"服务器
+    内部错误"，还要去翻日志才知道为什么（2026-09-16 审查实测）。
+    """
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    try:
+        return normalized.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="正文含无法保存的字符（不完整的代理项，通常来自粘贴），请检查后重试",
+        ) from exc
+
+
+def _is_note(doc: Document) -> bool:
+    """是不是笔记（前缀判定；NULL 与 `arxiv:` 都返回 False）。"""
+    ref = doc.source_ref
+    return ref is not None and ref.startswith(NOTE_REF_PREFIX)
+
+
+def _is_plain_filename(name: str) -> bool:
+    """是不是一个"干净的文件名"：非空、无目录成分、不是 `.` / `..`。
+
+    库里的 file_path 是不可信的历史值。脏到 basename 取成 `..` 时，
+    `web-tmp/<uuid>/..` 指向的是目录 → IsADirectoryError → 500（审查实测）。
+    POSIX 下反斜杠不是分隔符，所以必须显式再挡一次 `\\`。
+    """
+    return bool(name) and name not in {".", ".."} and Path(name).name == name and "\\" not in name
+
+
+def _get_note(conn, doc_id: int) -> Document:
+    """按 id 取笔记行；不存在或不是笔记 → 404（不泄露"这个 id 存在但不是笔记"）。"""
+    doc = repo.get_document(conn, doc_id)
+    if doc is None or not _is_note(doc):
+        raise HTTPException(status_code=404, detail="笔记不存在，或该文档不是笔记")
+    return doc
+
+
+def _write_note_tmp(settings: Settings, safe_name: str, payload: bytes) -> Path:
+    """正文落 web-tmp 独占子目录（与上传同款：唯一性加在目录上、文件名保持目标名）。
+
+    文件名必须逐字等于 uploads 副本名——ingest 以 basename 决定副本路径，
+    改一个字就变成"新建另一篇"而不是"更新这一篇"。
+    """
+    tmp_dir = settings.data_dir / "web-tmp"
+    tmp_path = tmp_dir / uuid4().hex / safe_name
+    tmp_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path.write_bytes(payload)  # 二进制写：不经过 Windows 的换行翻译
+    return tmp_path
+
+
+def _ingest_note_file(
+    tmp_path: Path,
+    safe_name: str,
+    payload: bytes,
+    services: AppServices,
+    settings: Settings,
+    *,
+    title: str,
+    source_ref: str | None = None,
+    folder_id: int | None = None,
+) -> JSONResponse:
+    """笔记入库的统一入口：复用上传尾链，只把"文档为空"翻成笔记用户看得懂的话。
+
+    整篇都是围栏代码块 / 只有标题时，loader 一个可检索段落都产不出来 →
+    尾链抛「入库失败：ZhiwenError: 文档为空（无任何可检索段落）」——对写笔记的
+    人这是天书：得知道"代码块不进检索"这条已知行为才看得懂。
+    """
+    try:
+        return ingest_web_file(
+            tmp_path,
+            safe_name,
+            hashlib.sha256(payload).hexdigest(),
+            services,
+            settings,
+            source_ref=source_ref,
+            force=True,
+            title=title,
+            folder_id=folder_id,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 400 and "文档为空" in str(exc.detail):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "正文里没有可被检索的段落——整篇都是代码块或标题吗？"
+                    "代码块不进检索（见使用说明 6c），补一段说明文字再保存"
+                ),
+            ) from exc
+        raise
+
+
+@router.post("/api/notes", status_code=201)
+def create_note(
+    body: NoteIn,
+    services: AppServices = Depends(get_services),
+    settings: Settings = Depends(get_settings),
+) -> JSONResponse:
+    """新建笔记：Markdown 正文落成 uploads 里的 .md 副本，再走既有入库尾链。
+
+    响应与上传**逐字节同形**（同一个 `ingest_web_file`），前端树刷新/toast
+    判定零改动。
+    """
+    title = _clean_doc_title(body.title)
+    if not body.body.strip():
+        raise HTTPException(status_code=400, detail="笔记正文不能为空")
+    payload = _note_payload(body.body)
+
+    with services.ingest.exclusive():  # 与删除/reindex 互斥：见本段头注释第 3 条
+        with open_db(settings.db_path) as conn:
+            # 文件夹先校验：ingest 里的 move_document 不做存在性检查，直接撞
+            # 外键会被全局处理器翻成 409「目标已被其他操作改动」，误导排查
+            if body.folder_id is not None and repo.get_kb_folder(conn, body.folder_id) is None:
+                raise HTTPException(status_code=404, detail="文件夹不存在")
+            key, safe_name = _note_name(conn, title, settings.uploads_dir)
+        tmp_path = _write_note_tmp(settings, safe_name, payload)
+        return _ingest_note_file(
+            tmp_path,
+            safe_name,
+            payload,
+            services,
+            settings,
+            title=title,
+            source_ref=f"{NOTE_REF_PREFIX}{key}",
+            folder_id=body.folder_id,
+        )
+
+
+@router.put("/api/notes/{doc_id}")
+def update_note(
+    doc_id: int,
+    body: NoteUpdateIn,
+    services: AppServices = Depends(get_services),
+    settings: Settings = Depends(get_settings),
+) -> JSONResponse:
+    """编辑笔记：**同名替换**既有 uploads 副本 → 行原地更新（不产生第二篇）。
+
+    复用 `ingest_web_file` 的同名替换语义：旧行的标题/文件夹/来源会被继承，
+    其中标题由显式 `title=` 压成新值（见 IngestService.ingest_one）。
+    副本文件名**永不重生成**——名字里的 key 是创建时定下的身份，改名不换文件
+    （与 set_document_title"upload 副本文件名不动"的既有政策一致）。
+    """
+    title = _clean_doc_title(body.title)
+    if not body.body.strip():
+        raise HTTPException(status_code=400, detail="笔记正文不能为空")
+    payload = _note_payload(body.body)
+    digest = hashlib.sha256(payload).hexdigest()
+
+    with services.ingest.exclusive():
+        uploads = settings.uploads_dir
+        with open_db(settings.db_path) as conn:
+            doc = _get_note(conn, doc_id)
+            safe_name = PureWindowsPath(doc.file_path or "").name
+            if not _is_plain_filename(safe_name):
+                raise HTTPException(
+                    status_code=409, detail="笔记的副本文件名异常（历史脏数据），无法编辑"
+                )
+            copy_path = uploads / safe_name
+            # 历史的脏 file_path 修回真实副本路径（见 repo.set_document_file_path）：
+            # 不修的话 ingest 的"同名替换"判定用全路径比对，脏路径会被判成
+            # "这是个新文件" → **插出第二行**（多一篇、丢标记、索引仍旧）。
+            if str(doc.file_path or "") != str(copy_path):
+                if repo.get_document_by_path(conn, str(copy_path)) is not None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="已存在同名的另一篇文档（可能来自历史重复行），请先删除后重试",
+                    )
+                repo.set_document_file_path(conn, doc_id, str(copy_path))
+                conn.commit()
+                logger.info("笔记 #%s 的副本路径已修复为 %s", doc_id, safe_name)
+            # 无改动短路：正文 sha 与标题都没变就直接返回，不动库。
+            # 没有它，"打开编辑器随手点保存"= 删旧行插新行（id 变、重嵌入、
+            # 树里的选中态被打断），纯属白付代价。**短路要求副本真的在**：
+            # 副本被手工删掉时还回"内容没有变化"是谎报（PUT 本来能自愈）。
+            still_there = _inside_uploads(copy_path, uploads.resolve()) is not None
+            if (
+                still_there
+                and doc.title == title
+                and doc.file_sha256 == digest
+                and sha256_file(copy_path) == doc.file_sha256  # 副本没被外部改坏
+                and str(doc.file_path or "") == str(copy_path)
+            ):
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "document": _public_document(doc),
+                        "message": "内容没有变化，无需保存",
+                    },
+                )
+        tmp_path = _write_note_tmp(settings, safe_name, payload)
+        return _ingest_note_file(
+            tmp_path,
+            safe_name,
+            payload,
+            services,
+            settings,
+            title=title,
+            # **显式带上标记**，不指望同名替换从旧行继承：另一个进程的
+            # `mikasa ingest --reindex` 能在这两句之间清空全部行（进程内锁管不到
+            # 别的进程），那样新行会落成没有标记的普通文档——笔记**永久**降级成
+            # 普通文档（文件名里还留着 (note …)）（2026-09-16 对抗性实测命中）。
+            source_ref=doc.source_ref,
+        )
+
+
+@router.get("/api/notes/{doc_id}")
+def get_note(
+    doc_id: int,
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """读回笔记正文（编辑器的回填数据源）。
+
+    **不能复用 `/content`**：那是按 seq 拼接 chunk 的阅读视图正文，会丢掉
+    `#` 标题行、代码围栏、引用标记等 Markdown 语法（chunk 只保留正文），
+    而编辑器回填必须与用户写下的**逐字节一致**，否则"打开→保存"就会静默
+    重写用户的笔记。这里直接读 uploads 副本原始字节。
+    """
+    with open_db(settings.db_path) as conn:
+        doc = _get_note(conn, doc_id)
+
+    uploads = settings.uploads_dir.resolve()
+    hit = _inside_uploads(uploads / PureWindowsPath(doc.file_path or "").name, uploads)
+    if hit is None:
+        # 只读侧救不了：副本没了，正文只剩索引里的分块（阅读视图的"文本"能给，
+        # 但会丢 Markdown 语法）。如实告诉用户去哪儿捞，不劝人"删了重写"。
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "笔记的副本文件在 uploads 里找不到了——可在阅读视图里查看并复制正文，"
+                "或删除这篇后用「新建笔记」另存"
+            ),
+        )
+    try:
+        raw = hit.read_bytes()
+    except OSError as exc:  # 句柄被外部程序占用等：404 优于 500，前端有明确文案
+        raise HTTPException(
+            status_code=404, detail="笔记副本暂时读不到（可能被其他程序占用），请稍后重试"
+        ) from exc
+    return {"document": _public_document(doc), "body": decode_text(raw)}

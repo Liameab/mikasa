@@ -106,3 +106,56 @@ export function displayTitle(session) {
   const title = String(session.title || "").trim();
   return title || `新会话 #${session.id}`;
 }
+
+/**
+ * 文档行是不是笔记（M6 ①）。
+ *
+ * 判据是 `source_ref` 的 `note:` 前缀——它与后端 documents.py 的
+ * NOTE_REF_PREFIX 是**跨端格式合同**，改一处必须同步改另一处。
+ * NULL（上传件）与 `arxiv:` / `core:`（论文导入）都返回 false。
+ */
+export function isNote(doc) {
+  return typeof doc?.source_ref === "string" && doc.source_ref.startsWith("note:");
+}
+
+/**
+ * 平铺文件夹 → 下拉选项（笔记编辑器"保存到"用）。
+ *
+ * 每项 {id, name, depth, label}：深度优先、父在子前；下拉里层级只能靠文本
+ * 表达，故 label 用全角空格按 depth 缩进（半角空格在中文界面里几乎看不出）。
+ * 脏数据兜底与 group() 同口径：父不存在的当根级挂出；成环或落单的（从根
+ * 走不到）补在末尾——宁可位置不完美，也不能让用户在列表里找不到文件夹。
+ */
+export function folderOptions(folders) {
+  const byId = new Map(folders.map((f) => [f.id, f]));
+  const childrenOf = new Map(); // parent_id(null=根) → 子文件夹数组
+  for (const folder of folders) {
+    const parentId =
+      folder.parent_id !== null && byId.has(folder.parent_id) ? folder.parent_id : null;
+    if (!childrenOf.has(parentId)) childrenOf.set(parentId, []);
+    childrenOf.get(parentId).push(folder);
+  }
+  const out = [];
+  const seen = new Set();
+  const walk = (parentId, depth) => {
+    for (const folder of childrenOf.get(parentId) || []) {
+      if (seen.has(folder.id)) continue; // 成环脏数据：第二次遇到即止
+      seen.add(folder.id);
+      out.push({
+        id: folder.id,
+        name: folder.name,
+        depth,
+        label: "　".repeat(depth) + folder.name,
+      });
+      walk(folder.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  for (const folder of folders) {
+    if (seen.has(folder.id)) continue; // 成环孤岛兜底（正常库中不可达）
+    seen.add(folder.id);
+    out.push({ id: folder.id, name: folder.name, depth: 0, label: folder.name });
+    walk(folder.id, 1);
+  }
+  return out;
+}

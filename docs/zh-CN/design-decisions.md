@@ -37,6 +37,9 @@
 | ADR-0016 | 阅读视图：去接缝在后端 + 原文件白名单 + 正文开口的边界 | Accepted |
 | ADR-0017 | 合并「页面」视图 + 页码对齐 + Ollama 上下文窗口 | Accepted |
 | ADR-0018 | 设置面板配置模型：用户配置覆盖层 + 免重启热生效 | Accepted |
+| ADR-0019 | 在线找论文：双免费源 + 交错分页 + 有防线的下载器 | Accepted（第 8 点被 ADR-0020 部分取代） |
+| ADR-0020 | 「找论文」独立成页：三源 + 能力声明 + 诚实的翻页契约 | Accepted |
+| ADR-0021 | 笔记 = 带标记的普通文档：复用 source_ref、不加 schema 列、force 绕过内容去重 | Accepted |
 
 ---
 
@@ -705,8 +708,11 @@ E2E `tools/chrome_reader.py`。
 ## ADR-0019 在线找论文：双免费源 + 交错分页 + 有防线的下载器
 
 - 状态：Accepted ｜ M7（2026-09-15/16，用户提出"在知识库里能搜到别的论文，像知网那样"）
+  —— **第 8 点已被 ADR-0020 部分取代**（M8，2026-09-16）："面板落在知识库页"不再成立，
+  该功能成了独立一页（`/papers`）并扩到三源。其余各点（来源/交错分页/降级/防线下载器/
+  导入尾链/密钥纪律）仍然有效。
 - 关联：ADR-0002（密钥只经环境变量）、ADR-0016（阅读视图与原文件白名单）、
-  ADR-0018（本面板沿用的密钥纪律）
+  ADR-0018（本面板沿用的密钥纪律）、ADR-0020（后继）
 
 **背景**：用户想在知识库里做知网式检索——搜到自己没上传的论文，导进来立刻能提问。
 2026-09-11 的勘验结论是硬约束：知网/万方/维普的全文在付费墙后，无公开 API、有反爬，
@@ -750,6 +756,8 @@ E2E `tools/chrome_reader.py`。
    给出反馈。设置面板只在问答页，所以密钥行由面板自带。结果行渲染标题/作者/年份/
    来源 + 可展开摘要；无开放获取的那条**提前禁用**导入按钮，让 409 退化成安全网
    而不是交互本身。
+   *（M8 注：被 ADR-0020 反转——面板挤不下筛选器与详情面板，改成了 `/papers` 独立页；
+   它让出的"导入后立刻看得见"反馈由 `documents.source_ref` 的"已在库中"标记补回。）*
 
 **被否方案**：爬知网/万方/维普（付费墙 + 反爬 + 无 API = 法律问题，文档里也这么写）；
 把 Semantic Scholar 当第三源（能用，但 429 限流，暂时不值第三个解析器）；
@@ -769,3 +777,166 @@ CORE/ChinaXiv 作中文 OA 补充（留在 backlog）；允许客户端直接给
 `static/documents.html`、`static/js/documents.js`、`css/style.css`；测试
 `tests/unit/papers/`（sources/service/download 三份）与 `tests/unit/web/test_papers_api.py`；
 E2E `tools/chrome_papers.py`。
+
+## ADR-0020 「找论文」独立成页：三源 + 能力声明 + 诚实的翻页契约
+
+- 状态：Accepted ｜ M8（2026-09-16，用户用了一天 M7 后提出："这个搜索太简陋了，单独放一页"）
+- 关联：ADR-0019（第 8 点被本篇取代）、ADR-0004（迁移纪律）、ADR-0016（阅读器只能看已入库文档）
+
+**背景**：M7 把在线找论文做成了知识库页右栏的一个面板。用户用过后的判断是"太挤了"：
+一个搜索框、一列结果、没有筛选。要求提成**独立一页**（与「问答/知识库/评测」并列），
+并在四个方向上做丰富：每条结果信息更全、筛选与排序、更多来源、阅读与状态体验
+（点一条看完整摘要，并且能看出哪些已经在库里）。
+
+**决策**：
+
+1. **第四页（`/papers`），不是更大的面板**：三栏布局（筛选 300px / 结果 / 详情 340-440px）
+   需要的横向空间，知识库页给不出来——它右栏是上传区与语料区。导航在四个 HTML 里硬编码，
+   加一项每处一行，外加 `_PAGES` 一条；**同一改动里删掉知识库页的面板**，不留两套会漂移的逻辑。
+2. **第三个来源 CORE，靠实测选出来的**：CORE v3 works API 匿名可用（免密钥）、连打几次能撑住、
+   `downloadUrl` 实测下到真 PDF（`%PDF-1.5`）。Semantic Scholar 暂缓（匿名池连试两次都 HTTP 429）；
+   ChinaXiv 直接否掉——它的 `/api/search` 存在但契约猜不出（GET 与两种 POST 编码一律回
+   "请求方法应为POST"，`/oai` 又拒绝匿名），要接只能 HTML 抓取，而那是不做的（ADR-0019 关于
+   中文付费全文的判断依然成立）。
+3. **来源声明自己的能力，界面禁用做不到的选项**：`SourceCaps(year, cited_sort, recent_sort,
+   language, oa)` 是 `PaperSource` 协议的一部分，`GET /api/papers/sources` 把目录交给前端，
+   前端据此置灰并说明原因。这条来自一次实测的**"假支持"**：CORE 的 `yearFrom`/`yearTo`
+   **参数**返回 200 却被静默忽略（要 2020+，给回 2012/2018/2010 的论文）——它的年份过滤
+   只能走查询语法（`... AND yearPublished>=2020`），现在的实现就是发这个。摆一个悄悄不生效的
+   选项，比不提供更坏。
+4. **`notes` 与 `errors` 是两回事**：errors = 失败（来源抛错），notes = 降级（来源答了但没法
+   满足某个筛选：arXiv 没有被引数据，"按被引排序"就回落相关度）。两者都以各自的措辞出现在界面上。
+   一个必须写清的细节：`oa: "always"` 是**已满足**而不是降级——天然全 OA 的来源本身就兑现了
+   "只看开放获取"，所以它不产生 note；前端把它渲染成"已勾选且禁用 + 已自动满足"，与"不支持"
+   的文案刻意分开。
+5. **交错分页从两源推广到 N 源**：全局位置 `p` 归来源 `p % n`、是该源的第 `p // n` 条，
+   窗口换算 `k ∈ [max(0, ceil((offset-i)/n)), floor((offset+limit-1-i)/n)]`。代回 `n=2`
+   与旧的奇偶算术逐位相同（有单测钉住等价性）。合并**按全局位置装填、缺位留洞、不补位**：
+   旧的 `zip + 尾巴补位` 会在某源提前耗尽时让第二页重复（首页拿到 `[a0, o0, o1, o2]`，
+   客户端按收到的 4 条推进 offset，`o2` 在第二页又出现一次）。
+6. **翻页契约按窗口推进，不按收到的条数**：页面上有空洞时，"按收到条数推进 offset"是错的；
+   客户端按 `limit` 推进。两半都有回归锁——只改一半仍然会重复。
+7. **OpenAlex 的窗口对齐得单独修**：它只有 `page`/`per-page`，页边界固定在 `per-page` 的
+   整数倍上，问不出任意 offset。旧实现 `page = start // count + 1` 只在 `start` 是 `count`
+   整数倍时侥幸正确（两源对半分 20 条时成立，N 源轮转一开始就不成立）。第一版修法
+   （按 count 对齐、按 per_page 取页）依然错——两个倍数不是一回事。最终实现：**第 1 页带
+   `per-page = start + count` 取回再切片** `[start : start+count]`：一次请求、不做边界算术，
+   而 OpenAlex 按"每次查询 10 credits"计费、与页大小无关，多取不花钱。超过单页上限（200）
+   的深窗口取不满 → `has_more` 自然为假，该源如实停翻而不是假装还有。
+8. **"已在库中"要一列，不要标题后缀**：`documents` 加 `source_ref TEXT`
+   （`"arxiv:2401.12345"` / `"core:72543"`），由导入链路写入、搜索端点一次 `IS NOT NULL`
+   全表捞回。反查文件名后缀 `(arxiv 2401.12345)` 被否：用户会改名
+   （`PATCH /api/documents/{id}` 只动 `title`）、改名会被重灌继承（永远不会自愈）、标题在 80 字
+   处被截断后才拼后缀、唯一稳定载体（uploads 副本名）只能经已知脏字段 `file_path` 取到。
+   加列完全照 v3 `folder_id` 的先例——**包括两处 reindex 保留清单**，遗漏它正是当年丢
+   `folder_id` 的原因。
+9. **sha256 跳过路径要回填来源**：用户手拖过这篇 PDF、之后又点导入同一篇，会命中内容哈希跳过；
+   不回填的话那一行永远 `source_ref = NULL`，搜索页对一篇明明在库里的文档永远显示"未在库中"。
+   跳过分支在（且仅在）原有行没有来源时补写。
+10. **来源标识是公开元数据**：它经 `_public_document` 暴露，这是对脱敏边界的一次有意放宽——
+    `file_path` 与 `file_sha256` 继续不外泄（本地文件系统事实），而 arXiv id / DOI 本来就
+    印在每条检索结果上。
+11. **公网 `http://` 全文重新放行**（实测后由用户拍板，2026-09-16）。ADR-0019 曾把 http 限死在
+    回环——这条恰好挡住了本功能最主要的用例：三条查询抽样显示**中文开放获取链接里 5/7 与 3/6
+    是明文 `http://`**（国内期刊与仓储普遍没上 https），而英文样本是 0/15，等于"中文论文搜得到、
+    导不进来"。链接始终来自来源 API 的记录（不是用户输入——ADR-0019 在入口就把这条关死了）、
+    下的是公开论文、不带任何凭据，所以"必须 https"在这里的传输安全论据很弱。**SSRF 防线一条没少**：
+    只放行公网地址，外加 http 的回环例外（E2E 假源与本地服务），私网/保留/链路本地地址照旧一律拒。
+    改动后实测：一条中文 `http://` 全文干净导入（138 块）；另一台主机无论怎么换浏览器式请求头
+    都回 403（上游在拦，如实报 502，非我们可控）。残余风险是完整性——明文传输理论上可被中途
+    替换成别的 PDF——对本地单用户工具，这个风险接受。
+
+**被否方案**：留着面板把它做大（没有横向空间；语料树是知识库页的活）；为了凑数硬加第四个来源
+（S2/ChinaXiv 是证据不足，不是口味问题）；允许客户端给任意 PDF 链接（ADR-0019 第 4 点——
+SSRF 防线收在 `{source, id}` 上）；交错里补位（见第 5 点）；单开 `document_sources` 表
+（一对一的事实多一套外键面）；把能力标记硬编码在前端（能力属于来源；硬编码正是"选项不生效"
+的产生方式）。
+
+**局限**：CORE 不支持按被引排序（`sort=citationCount` 回 HTTP 500）且连打会限流，自带 2 秒节流；
+它的 `downloadUrl` 有相当比例是仓储的 `http://` 地址，会被下载器的安全策略拒收（只放行公网
+https 或回环 http），这些记录导不进来；`yearPublished` 是脏的（实测见过 `710300`、`202022`），
+年份按前四位解析并做范围校验；arXiv 完全没有被引数据，所以"按被引排序"只在所选来源能兑现时
+才可用；OpenAlex 深翻页受 200 条单页上限约束；阅读器仍然无法预览未导入的论文（详情面板渲染
+的是检索响应）。
+
+**代码**：`papers/sources.py`（`SourceCaps`/`PaperFilters`/`PaperResult.cited_by`）、
+`papers/core.py`（新）、`papers/arxiv.py` 与 `papers/openalex.py`（筛选翻译、能力声明、窗口修复）、
+`papers/service.py`（N 源轮转、留洞合并、`attempted`/`notes`/`source_catalog`）、
+`storage/db.py` + `models/document.py` + `storage/repo.py` + `ingest/service.py`
+（`source_ref`、v4 迁移、reindex 保留清单）、`web/routers/papers.py`（含 `GET /api/papers/sources`
+与 `in_library`）、`web/routers/documents.py`（`ingest_web_file(source_ref=...)`、跳过路径回填）、
+`web/app.py`（`/papers`）；前端 `static/papers.html`、`static/js/{papers-page,papers-api,
+papers-filters,papers-detail}.js`、`css/style.css` 与四处导航；测试
+`tests/unit/papers/test_core.py`、`test_papers_service.py`、`test_sources.py`、
+`tests/unit/storage/test_db_migration.py`、`tests/unit/ingest/test_service.py`、
+`tests/unit/web/test_papers_api.py`；E2E `tools/chrome_papers.py`（三个假源）。
+
+---
+
+## ADR-0021 笔记 = 带标记的普通文档：复用 `source_ref`、不加 schema 列、force 绕过内容去重
+
+- 状态：Accepted ｜ M6 第 ① 期（2026-09-16，用户选"开工新功能"后确认两条产品决策：笔记必须**可编辑**
+  ——保存即自动重新入库；编辑器必须带 **Markdown 实时预览**）
+- 关联：ADR-0020（本条目把它的 `source_ref` 语义拓宽）、ADR-0004（schema 迁移纪律——**刻意没走**的路）、
+  ADR-0012（笔记原样复用的分块器）
+
+**问题**：产品的既定形态是"笔记 + AI 问答双翼"，但进入知识库的唯一方式是从外面带一个文件进来。
+想写一条笔记就得离开这个应用，而问问题时学到的东西无处沉淀。M6 第 ① 期是闭合这个环的最小一步：
+在知识库页写 Markdown → 保存 → 立刻可被检索、可被引用。
+
+**决策**：
+
+1. **笔记是"带标记的普通文档"，不是新实体。** 标记 = `source_ref = "note:<key>"`。除此之外的一切
+   ——文件夹树、拖拽、改名、删除、检索、引用、阅读视图——本来就在文档上工作，现在原样作用在笔记上。
+   为什么不加列 / 不加表：`_KeptProps` 已经把它列入 reindex 与同名替换的保留清单，标记因此**一行代码
+   不加**就能活过全量重建；`_public_document` 已经暴露该字段；而「找论文」页是**精确匹配** `arxiv:` /
+   `core:`，`note:` 前缀不可能被误认成"这篇论文已在库中"。代价是这一列的含义从"来自哪个在线记录"
+   拓宽为"文档来源标识"——四处在注释里断言过旧含义的地方在同一次改动里改掉了，否则那就是一条会慢慢
+   变成谎话的注释。
+2. **笔记是 `uploads/` 里一个真实的 `.md` 文件**，名字 `<净化标题> (note <key12>).md`。这是 ingest
+   契约推出来的：uploads 副本的主名**就是**文档身份，所以名字由服务端生成一次、**永不更换**——给笔记
+   改名只改显示标题，正是 `set_document_title` 对上传件早已承诺的语义。正文逐字节保存（二进制写 +
+   LF 归一），编辑器往返无损。`<key>` 是 48 位随机数，使用前会同时查既有路径与既有标记：撞了不会报错，
+   而是**顶掉别人的行**。
+3. **笔记用 `force=True` 入库，这不是优化。** `_ingest_one` 的字节级内容去重对语料是对的（同一份字节
+   的备份副本不该污染检索），对笔记是**静默错**：第二条同内容的笔记会返回成功却从未落库；把一条笔记
+   编辑成与另一条同内容，响应还会指向**别人那行**。force 在两处去重判断上都放行，同时仍走同名替换路径
+   → 编辑依旧是原地更新。两条笔记的块内容相同没问题——`chunks` 只对 `(document_id, seq)` 唯一。
+4. **标题交给 ingest，而不是入库后再补。** `ingest_one(title=...)`，优先级：显式标题 > 继承标题 >
+   loader 推导标题。两个彼此独立的理由：分块器把每块的索引文本构造成 `《标题》｜标题路径`，事后改标题
+   会把旧名字留在 BM25 与向量**真正检索的那份表示**里——改完名就搜不到新名字；而同名替换会继承**旧行**
+   的标题，没有显式覆盖的话，编辑时改标题根本不生效。
+5. **编辑 = 同名替换，因此每次保存 `documents.id` 都会变。** 原地更新就是"删旧行 + 插新行"。所以响应
+   一律**按 uploads 路径**查回来构造（绝不用请求里的 id），页面也用响应回传的新 id 重新选中——不这么做，
+   刷新会判定"选中行已被删除"，把用户正在读的阅读区一起收掉。正文哈希与标题都没变的保存会短路成 200、
+   一个字节都不动，于是"打开编辑器随手点保存"的代价是零。
+6. **整段保存持有 ingest 锁**（`services.ingest.exclusive()`），与 DELETE 同一套纪律。没有它，
+   "保存 vs 删除"会让被删掉的笔记以**没有标记的普通文档**复活：ingest 会照 web-tmp 文件重建副本并插一行。
+7. **回填读的是 uploads 副本原文。** 编辑器必须拿用户真正写下的内容回填，故 `GET /api/notes/{id}` 返回
+   文件字节解码后的正文。不能用 `/content`：那是拼接 chunk 的阅读正文，按构造已经丢掉了 `#` 标题行、
+   代码围栏与引用标记——拿它回填，下次保存就会静默重写用户的笔记。
+8. **端点拒绝触碰任何非笔记文档。** PUT 与 GET 都检查 `note:` 前缀，不符一律 404（不是 403：不存在性
+   不构成信息），因此上传件与导入的论文永远不可能被笔记 API 覆盖。
+9. **被否决的替代方案**：新增 `is_note` 列（v5 迁移 + 保留清单 + repo/API 全链改造，只为换一个"能从
+   活过重建的字段推导出来"的布尔值）；独立的 `notes` 表（会一并失去文件夹树、检索、引用、阅读与删除
+   这五条路，全都得重写重测）；以及用 `PATCH /api/documents` + `/content` 做编辑（见第 7 点）。
+
+**后果**：**围栏代码块不进检索**——markdown loader 会整块跳过它（防代码里的 `#` 被读成标题），因此
+"整篇只有代码"的笔记会被 400 拒绝，文案必须解释这一点；uploads 副本是笔记**唯一**的权威副本（没有
+"用户手里的原件"可回退），所以任何 re-index 前都要备份 `data/`；解析后的文本仍会过
+`strip_repeated_lines`（≥3 次重复行）与 Setext `---` 判定，故**索引表示**可能与文件不同（文件本身不动）；
+两个标签页同时编辑同一条笔记是最后写入者胜（没做乐观锁——SQLite 的 `datetime('now')` 只有秒级精度，
+当版本号没有意义）；每次保存都会重建 chunk，所以旧回答里的引用 chip 指向的是已删除的 chunk id——这与
+重新上传一个文件本就有的后果相同。另一个**既有**风险（同名替换时 uploads 副本被外部程序占用 → 改名
+那步在旧行已删之后才失败）同样适用于笔记，本期只记录不修：它位于语料库依赖的 ingest 回滚路径上。
+
+**代码**：`web/routers/documents.py`（notes 段：`NOTE_REF_PREFIX`、`_note_stem`、`_note_name`、
+`_note_payload`、`_get_note`、`_write_note_tmp`、`create_note` / `update_note` / `get_note`；
+`ingest_web_file` 新增 `force` / `title` / `folder_id`）、`web/schemas.py`（`NoteIn`、`NoteUpdateIn`、
+`NOTE_BODY_MAX`）、`ingest/service.py`（`ingest_one(title=...)` 与优先级规则）、`storage/db.py` +
+`storage/repo.py`（`source_ref` 语义拓宽的注释层）；前端 `static/js/note-editor.js`（新）、
+`static/js/tree.js`（`isNote`、`folderOptions`）、`static/js/kb-tree.js`（`onEditNote`、
+`selectDocById`、meta 显示「笔记」）、`static/js/documents.js`、`static/documents.html`、
+`css/style.css`、`DESIGN.md` + `docs/zh-CN/DESIGN.md`（`note-editor: 70` 层级）；测试
+`tests/unit/web/test_notes_api.py`（新）、`tests/unit/ingest/test_service.py`；冒烟
+`tools/smoke_tree.mjs`；E2E `tools/chrome_notes.py`（新）。

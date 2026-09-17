@@ -113,15 +113,21 @@ mikasa serve --profile offline    # zero-key demo
 # Options: --host 0.0.0.0 (LAN access) / --port 9000 / --reload (dev)
 ```
 
-Open http://127.0.0.1:8000/ — three pages:
+Open http://127.0.0.1:8000/ — four pages:
 
 - **Chat** — SSE streaming, clickable citation markers, multi-turn sessions, and a KB / free-chat
   mode switch (KB mode is strict RAG with citations and refusals; free-chat mode talks to the model
   directly without retrieval or citations).
 - **Library** — upload and delete documents in the browser; a folder tree organizes the corpus;
-  newly ingested documents are searchable immediately. An **online paper search** panel queries
-  arXiv and OpenAlex and imports an open-access PDF straight into the corpus (import, then ask
-  about it right away) — a CNKI-like experience, not CNKI's data: paywalled full text stays out.
+  newly ingested documents are searchable immediately. You can also **write Markdown notes right
+  here** — type on the left, watch it render on the right, save, and the note is citable by the next
+  question (and editable later).
+- **Find papers** — search arXiv, OpenAlex and CORE at once with year/language/open-access filters
+  and citation- or date-sorting, read a result's full abstract in the detail pane, and import its
+  open-access PDF straight into the corpus (import, then ask about it right away). Results you have
+  already imported are marked "already in your library". Each source declares what it supports, so
+  options it cannot honour are disabled with a reason rather than silently ignored — a CNKI-like
+  experience, not CNKI's data: paywalled full text stays out.
 - **Evaluation** — run the golden-set evaluation in the background, poll progress, and read the
   generated report.
 

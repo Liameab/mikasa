@@ -15,7 +15,7 @@ import pytest
 
 import mikasa.papers.service as papers_service
 from mikasa.papers.errors import PaperError
-from mikasa.papers.sources import PaperResult
+from mikasa.papers.sources import PaperFilters, PaperResult, SourceCaps
 from mikasa.web.routers import papers as papers_router
 from tests.unit.web.test_documents_api import _mk_folder
 
@@ -61,13 +61,21 @@ def _paper(
 class _FakeSource:
     """可编排假源：search 返回固定结果，fetch 按 id 返回。"""
 
-    def __init__(self, name: str, results: list[PaperResult] | None = None) -> None:
+    def __init__(
+        self, name: str, results: list[PaperResult] | None = None, caps: SourceCaps | None = None
+    ) -> None:
         self.name = name
+        self.label = name
+        self.caps = caps or SourceCaps()
         self.results = results or []
         self.fetch_map: dict[str, PaperResult] = {}
         self.fetch_error: PaperError | None = None
+        self.last_filters: PaperFilters | None = None
 
-    def search(self, q: str, start: int, count: int) -> tuple[list[PaperResult], bool]:
+    def search(
+        self, q: str, start: int, count: int, *, filters: PaperFilters | None = None
+    ) -> tuple[list[PaperResult], bool]:
+        self.last_filters = filters
         return list(self.results[start : start + count]), False
 
     def fetch(self, paper_id: str) -> PaperResult:
@@ -99,14 +107,21 @@ def fake_downloader(monkeypatch):
     state = {"error": None, "writes": []}
     cache: dict[str, bytes] = {}
 
+    def bytes_for(url: str) -> bytes:
+        """该 URL 的固定字节（同 URL 恒定）。**测试若需要"手工入库一份同内容
+        文件"，必须走这里拿字节**——自己调 `_pdf_bytes(...)` 会得到另一份
+        （pymupdf 的 tobytes 带创建时间/document id），sha 对不上。"""
+        return cache.setdefault(url, _pdf_bytes(f"论文正文（{url}）。"))
+
     def fake(url: str, dest: Path) -> int:
         if state["error"]:
             raise state["error"]
-        data = cache.setdefault(url, _pdf_bytes(f"论文正文（{url}）。"))
+        data = bytes_for(url)
         dest.write_bytes(data)
         state["writes"].append((url, dest.name))
         return len(data)
 
+    state["bytes_for"] = bytes_for
     monkeypatch.setattr(papers_router, "download_pdf", fake)
     return state
 
@@ -122,33 +137,40 @@ def test_search_returns_normalized_shape(client, fake_sources):
     fake_sources("arxiv", src)
     fake_sources("openalex", _FakeSource("openalex"))
 
-    resp = c.post("/api/papers/search", json={"q": "retrieval", "source": "arxiv"})
+    resp = c.post("/api/papers/search", json={"q": "retrieval", "sources": ["arxiv"]})
     assert resp.status_code == 200
     body = resp.json()
-    assert body["errors"] == {} and body["has_more"] is False
+    assert body["errors"] == {} and body["has_more"] is False and body["notes"] == {}
     assert len(body["results"]) == 1
     r = body["results"][0]
     assert r["source"] == "arxiv" and r["id"] == "2401.12345"
     assert r["title"] == "测试论文"
     assert r["authors"] == ["作者甲", "作者乙"]  # tuple 序列化后是数组
     assert r["pdf_url"] == "http://127.0.0.1:9/pdf/x"
+    assert r["in_library"] is False  # 未导入过 → 不在库
     assert "api_key" not in r  # 无密钥字段可泄
+
+
+class _Boom:
+    """必失败的假源（能力声明齐全，否则编排层读 caps 会 AttributeError）。"""
+
+    def __init__(self, name: str, message: str) -> None:
+        self.name = name
+        self.label = name
+        self.caps = SourceCaps()
+        self.message = message
+
+    def search(self, q, start, count, *, filters=None):
+        raise PaperError(self.message)
+
+    def fetch(self, paper_id):
+        raise AssertionError
 
 
 def test_search_partial_failure_degrades(client, fake_sources):
     """单源失败 → 200 + errors 里带中文消息，另一源结果照常。"""
     c, _settings = client
-
-    class _Boom:
-        name = "arxiv"
-
-        def search(self, q, start, count):
-            raise PaperError("无法连接 arXiv（网络不可达或超时），请稍后重试")
-
-        def fetch(self, paper_id):
-            raise AssertionError
-
-    fake_sources("arxiv", _Boom())
+    fake_sources("arxiv", _Boom("arxiv", "无法连接 arXiv（网络不可达或超时），请稍后重试"))
     fake_sources("openalex", _FakeSource("openalex", [_paper("openalex", "W3160856016")]))
 
     resp = c.post("/api/papers/search", json={"q": "水库坝"})
@@ -161,21 +183,62 @@ def test_search_partial_failure_degrades(client, fake_sources):
 
 def test_search_all_sources_fail_502(client, fake_sources):
     c, _settings = client
-
-    class _Boom:
-        name = "x"
-
-        def search(self, q, start, count):
-            raise PaperError("挂了")
-
-        def fetch(self, paper_id):
-            raise AssertionError
-
-    fake_sources("arxiv", _Boom())
-    fake_sources("openalex", _Boom())
+    fake_sources("arxiv", _Boom("arxiv", "挂了"))
+    fake_sources("openalex", _Boom("openalex", "也挂了"))
     resp = c.post("/api/papers/search", json={"q": "x"})
     assert resp.status_code == 502
     assert "论文检索暂时不可用" in resp.json()["detail"]
+
+
+def test_search_filters_translated_and_notes(client, fake_sources):
+    """筛选透传到来源；不支持的能力在响应 notes 里如实说明（不假装生效）。"""
+    c, _settings = client
+    src = _FakeSource("arxiv", [_paper("arxiv", "2401.12345")], caps=SourceCaps(year=True))
+    fake_sources("arxiv", src)
+    fake_sources("openalex", _FakeSource("openalex"))
+
+    resp = c.post(
+        "/api/papers/search",
+        json={
+            "q": "x",
+            "sources": ["arxiv"],
+            "filters": {"date_from": "2020-01-01", "sort": "cited", "oa_only": True},
+        },
+    )
+    assert resp.status_code == 200
+    assert isinstance(src.last_filters, PaperFilters)
+    assert src.last_filters.date_from == "2020-01-01" and src.last_filters.sort == "cited"
+    assert src.last_filters.oa_only is True
+    assert "被引" in resp.json()["notes"]["arxiv"]  # arxiv 无被引数据 → 降级说明
+
+
+def test_search_marks_in_library(client, fake_sources, fake_downloader):
+    """导入过的论文在后续检索里标 in_library=True（source_ref 反查）。"""
+    c, _settings = client
+    src = _FakeSource("arxiv")
+    src.fetch_map["2401.12345"] = _paper("arxiv", "2401.12345")
+    fake_sources("arxiv", src)
+    fake_sources("openalex", _FakeSource("openalex"))
+    assert (
+        c.post("/api/papers/import", json={"source": "arxiv", "id": "2401.12345"}).status_code
+        == 201
+    )
+
+    hits = _FakeSource("arxiv", [_paper("arxiv", "2401.12345"), _paper("arxiv", "2401.99999")])
+    fake_sources("arxiv", hits)
+    body = c.post("/api/papers/search", json={"q": "x", "sources": ["arxiv"]}).json()
+    assert [r["in_library"] for r in body["results"]] == [True, False]
+
+
+def test_sources_catalog(client, fake_sources):
+    """来源目录：名字/展示名/能力齐备（前端据此渲染筛选器）。"""
+    c, _settings = client
+    fake_sources("arxiv", _FakeSource("arxiv", caps=SourceCaps(year=True, oa="always")))
+    resp = c.get("/api/papers/sources")
+    assert resp.status_code == 200
+    item = resp.json()["sources"][0]
+    assert item["name"] == "arxiv" and item["label"] == "arxiv"
+    assert item["caps"]["year"] is True and item["caps"]["oa"] == "always"
 
 
 @pytest.mark.parametrize(
@@ -186,7 +249,11 @@ def test_search_all_sources_fail_502(client, fake_sources):
         {"q": "x", "limit": 51},
         {"q": "x", "limit": 0},
         {"q": "x", "offset": -1},
-        {"q": "x", "source": "google"},
+        {"q": "x", "sources": ["google"]},
+        {"q": "x", "sources": []},  # 空选择集：不能是"没有来源"的静默合法态
+        {"q": "x", "filters": {"sort": "whatever"}},
+        {"q": "x", "filters": {"date_from": "2024-01-01", "date_to": "2020-01-01"}},  # 倒置
+        {"q": "x", "filters": {"date_from": "2020-13-45"}},  # 非法日期
     ],
 )
 def test_search_422_matrix(client, payload):
@@ -245,6 +312,39 @@ def test_import_same_title_different_ids_no_collision(client, fake_sources, fake
     assert "已跳过重复导入" in r3.json()["message"]
     docs = c.get("/api/documents").json()["documents"]
     assert len(docs) == 2  # 仍只有两篇
+
+
+def test_import_backfills_source_ref_on_sha_skip(client, fake_sources, fake_downloader):
+    """手拖入库的同内容论文被导入时：200 跳过 + **回填来源标记**。
+
+    这是「已在库中」标记的兜底路径（此前零覆盖，2026-09-16 审查点名）：
+    用户先把 PDF 拖进知识库（source_ref=NULL），之后又在「找论文」页导入同一篇
+    —— sha256 会直接跳过，不回填的话这行永远显示"未在库中"，而字节明明在库里。
+    只在原本没有来源时写：有来源的不覆盖（先来的更权威）。
+    """
+    c, settings = client
+    src = _FakeSource("arxiv")
+    paper = _paper("arxiv", "2401.99999", pdf_url="http://127.0.0.1:9/手工.pdf")
+    src.fetch_map["2401.99999"] = paper
+    fake_sources("arxiv", src)
+    fake_sources("openalex", _FakeSource("openalex"))
+
+    # 先"手工"入库：字节必须取自假下载器的缓存，**逐字节相同**才会走 sha 跳过
+    same_bytes = fake_downloader["bytes_for"]("http://127.0.0.1:9/手工.pdf")
+    uploaded = c.post("/api/documents", files={"file": ("手工下载的论文.pdf", same_bytes)}).json()[
+        "document"
+    ]
+    assert uploaded["source_ref"] is None
+
+    resp = c.post("/api/papers/import", json={"source": "arxiv", "id": "2401.99999"})
+    assert resp.status_code == 200, resp.text
+    assert "已跳过重复导入" in resp.json()["message"]
+    assert resp.json()["document"]["id"] == uploaded["id"], "不该新建第二篇"
+    assert resp.json()["document"]["source_ref"] == "arxiv:2401.99999"
+
+    docs = c.get("/api/documents").json()["documents"]
+    assert len(docs) == 1
+    assert docs[0]["source_ref"] == "arxiv:2401.99999"
 
 
 def test_import_no_open_access_409(client, fake_sources):

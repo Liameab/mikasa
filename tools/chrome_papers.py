@@ -1,23 +1,22 @@
 #!/usr/bin/env python
-"""无头 Chrome「在线找论文」E2E 验收（知识库页面板，M7 / ADR-0019）。
+"""无头 Chrome「找论文」页 E2E 验收（M8，独立页 + 多源 + 筛选 + 详情）。
 
 自起一台隔离服务器（offline profile + MIKASA_DATA_DIR 指向临时目录），
-论文的两个来源用**本地假源**整体替换（环境变量后门：arxiv.py 与
-openalex.py 的 base URL 都是调用时读环境变量），假源同时扮 arXiv（Atom
-XML）、OpenAlex（works JSON）与论文 PDF 主机（回环 http —— 正是
-papers/download.py 给 E2E 留的逃生门）。真实 Web 进程 + 真实浏览器走一遍
-用户流程：
+三个来源全部用**本地假源**替换（arXiv/OpenAlex/CORE 的 base URL 都是调用
+时读环境变量），假源同时扮三家的检索 API、单条查询与 PDF 主机（回环 http
+——正是 papers/download.py 给 E2E 留的逃生门）。真实 Web 进程 + 真实浏览器
+走一遍用户流程：
 
-  1. 检索 → 结果行（标题/作者/年份/来源徽标）渲染，交错分页；
-  2. 「加载更多」→ 第二页追加（offset 前进，不重置列表）；
-  3. **逐源降级**：让 OpenAlex 假源对特定词回 500 → 结果照出、顶部出现
-     "部分来源暂时不可用"提示（200 而不是整单失败）；
-  4. 点「导入」→ 下载 PDF → 入库 → 树里出现该文档（宿主机侧核对
-     /api/documents 与上传目录落盘）；再点一次走 sha256 跳过（200 文案）；
-  5. 无开放获取的那条：导入按钮禁用（提前告知，不让用户点了才吃 409）；
-  6. OpenAlex 密钥：展开 → 粘贴 → 保存 → .env 落盘 + has_api_key 变真；
-     清空保存 → 清除；
-  7. 布局：点文档行进阅读视图时论文面板收起，关闭阅读后回来；
+  1. 三栏布局齐备；来源列表由 `/api/papers/sources` 渲染（三个复选框）；
+  2. 检索 → 结果按**三源轮转**出现（arXiv/OpenAlex/CORE 各一）；
+  3. **筛选真的发出去了**：改年份/换排序后，从假源的 `/__recorded` 断言
+     该源收到的查询里确实带上了条件（不靠脆弱的 DOM 反推）；
+  4. **能力对齐**：只勾 arXiv 时"被引最多"排序整项禁用（它没有被引数据），
+     并给出说明文案；
+  5. 「加载更多」按**窗口大小**推进 offset → 两页零重复；
+  6. 点结果 → 右侧详情出现完整摘要/被引/来源；点「导入知识库」→ 入库 →
+     结果行与详情面板同时转「已在库中」+ 去提问/去知识库出口；
+  7. 无开放获取的那条：导入按钮提前禁用；重复导入走 sha256 跳过；
   8. 全程收集 console 错误与未捕获异常，有错退出码 1。
 
 用法：
@@ -50,9 +49,8 @@ REPO_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MIKASA_EXE = REPO_ROOT / ".venv" / "Scripts" / "mikasa.exe"
 
 FAKE_KEY = "sk-papers-e2e-0001"  # 只写进临时数据目录，不可能是真密钥
-BOOM_WORD = "boom"  # 含此词的检索让 OpenAlex 假源回 500（降级路径开关）
-CORPUS = 30  # 每个源的假结果条数（≥ 两页，翻页路径才走得到）
-PAGE_SIZE = 20  # 与 papers.js 的 PAGE_SIZE 一致
+CORPUS = 30  # 假源每个源的条数（≥ 两页，翻页路径才走得到）
+PAGE_SIZE = 20  # 与 papers-page.js 的 PAGE_SIZE 一致
 # 最后一条 toast 的文本（带外括号，可直接 .includes）。toast 存活 3.6s，
 # 连续两次导入时 querySelector 会取到**上一条**——2026-09-16 实测踩过。
 LAST_TOAST = "([...document.querySelectorAll('#toast .toast-msg')].at(-1)?.textContent || '')"
@@ -77,7 +75,7 @@ def _pdf_bytes() -> bytes:
     page = pdf.new_page()
     page.insert_text(
         (72, 96),
-        "这是一篇用于在线找论文 E2E 验收的测试论文正文：检索增强生成把外部知识引入生成过程。",
+        "这是一篇用于找论文 E2E 验收的测试论文正文：检索增强生成把外部知识引入生成过程。",
         fontname="china-s",
         fontsize=12,
     )
@@ -85,14 +83,20 @@ def _pdf_bytes() -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# 本地假源（扮 arXiv + OpenAlex + PDF 主机）
+# 本地假源（扮 arXiv + OpenAlex + CORE + PDF 主机）
 # ---------------------------------------------------------------------------
 
 
 class _FakeSources(BaseHTTPRequestHandler):
-    """假源 HTTP 服务（回环 http；下载侧只放行回环，见 download.py 模块头）。"""
+    """假源 HTTP 服务（回环 http；下载侧只放行回环，见 download.py 模块头）。
+
+    **记录每个来源收到的查询串**（`/__recorded` 可读）：筛选参数有没有真的
+    发出去，只能从上游这一侧断言——前端 DOM 说不了实话。
+    """
 
     pdf = b""
+    pdf_base = ""
+    recorded: dict[str, list[str]] = {}
 
     def log_message(self, *args):  # noqa: ANN002 - 静音 BaseHTTPRequestHandler 日志
         pass
@@ -114,14 +118,30 @@ class _FakeSources(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler 约定
         parts = urllib.parse.urlsplit(self.path)
         query = urllib.parse.parse_qs(parts.query)
+        if parts.path == "/__recorded":
+            body = json.dumps(self.recorded).encode("utf-8")
+            self._send(body, "application/json")
+            return
         if parts.path == "/arxiv":
+            self._record("arxiv", parts.query)
             self._arxiv(query)
         elif parts.path.startswith("/openalex/works"):
+            self._record("openalex", parts.query)
             self._openalex(parts.path, query)
+        elif parts.path.startswith("/core/search"):
+            self._record("core", parts.query)
+            self._core_search(query)
+        elif parts.path.startswith("/core/works/"):
+            self._record("core", parts.query)
+            self._core_fetch(parts.path)
         elif parts.path.startswith("/pdf/"):
             self._send_pdf()
         else:
             self._send(b"not found", "text/plain", 404)
+
+    @classmethod
+    def _record(cls, source: str, query: str) -> None:
+        cls.recorded.setdefault(source, []).append(query)
 
     # ---- arXiv：Atom XML ----
 
@@ -133,7 +153,7 @@ class _FakeSources(BaseHTTPRequestHandler):
             f"<title>arXiv 测试论文 {n}：检索增强生成综述</title>"
             f"<published>2024-01-{(n % 28) + 1:02d}T00:00:00Z</published>"
             f"<author><name>作者甲{n}</name></author><author><name>作者乙{n}</name></author>"
-            f"<summary>这是第 {n} 篇假论文的摘要，用于验收摘要展开交互。</summary>"
+            f"<summary>这是第 {n} 篇假论文的摘要，用于验收摘要与详情面板。</summary>"
             f'<link rel="alternate" href="https://example.org/abs/{pid}"/>'
             "</entry>"
         )
@@ -163,26 +183,15 @@ class _FakeSources(BaseHTTPRequestHandler):
             "doi": f"https://doi.org/10.1000/e2e-{n}",
             "display_name": f"中文期刊测试论文 {n}：水库坝体稳定性分析",
             "publication_year": 2023,
+            "cited_by_count": n * 3,
             "authorships": [{"author": {"display_name": f"中文作者{n}"}}],
             "primary_location": {"source": {"display_name": "某某学报"}},
-            # 倒排索引：词 → 位置（中文按单字拆，重建后是空格分隔的文本）
-            "abstract_inverted_index": {
-                "本文": [0],
-                "研究": [1],
-                f"第{n}篇": [2],
-                "假论文": [3],
-            },
-            "open_access": {
-                "is_oa": oa,
-                "oa_url": f"{self.pdf_base}/{wid}.pdf" if oa else None,
-            },
+            "abstract_inverted_index": {"本文": [0], "研究": [1], f"第{n}篇": [2], "假论文": [3]},
+            "open_access": {"is_oa": oa, "oa_url": f"{self.pdf_base}/{wid}.pdf" if oa else None},
+            "language": "zh",
         }
 
     def _openalex(self, path: str, query: dict) -> None:
-        # 降级开关：特定检索词让这一源整体 500（另一源照常）
-        if BOOM_WORD in (query.get("search", [""])[0]):
-            self._send(b'{"error": "boom"}', "application/json", 500)
-            return
         if path.startswith("/openalex/works/"):
             wid = path.rsplit("/", 1)[-1]
             n = int(wid.lstrip("W").lstrip("2"))
@@ -191,7 +200,6 @@ class _FakeSources(BaseHTTPRequestHandler):
             page = int(query.get("page", ["1"])[0])
             per_page = int(query.get("per-page", ["10"])[0])
             start = (page - 1) * per_page
-            # 全局第 1 条永远是"无开放获取"那条（交错后落在第 2 行）
             payload = {
                 "results": [
                     self._work(n, oa=n != 1)
@@ -199,6 +207,40 @@ class _FakeSources(BaseHTTPRequestHandler):
                 ]
             }
         self._send(json.dumps(payload).encode("utf-8"), "application/json")
+
+    # ---- CORE：works JSON（注意路径带尾斜杠，与 core.py 的实现一致）----
+
+    def _core_work(self, n: int, *, pdf: bool) -> dict:
+        return {
+            "id": 7000 + n,
+            "title": f"CORE 测试论文 {n}：开放获取仓储里的研究",
+            "authors": [{"name": f"CORE 作者{n}"}],
+            "yearPublished": 2022,
+            "citationCount": n * 5,
+            "abstract": f"这是 CORE 第 {n} 条假记录的摘要。",
+            "doi": f"https://doi.org/10.1000/core-{n}",
+            "downloadUrl": f"{self.pdf_base}/core-{n}.pdf" if pdf else "",
+            "journals": [],
+            "publisher": "CORE 出版社",
+            "language": {"code": "en", "name": "English"},
+            "links": [{"type": "reader", "url": f"https://core.ac.uk/reader/{7000 + n}"}],
+        }
+
+    def _core_search(self, query: dict) -> None:
+        offset = int(query.get("offset", ["0"])[0])
+        limit = int(query.get("limit", ["10"])[0])
+        # 第 1 条无 downloadUrl：证明"CORE 全 OA"没有被写死（导入按钮应禁用）
+        payload = {
+            "results": [
+                self._core_work(n, pdf=n != 1)
+                for n in range(offset + 1, min(offset + limit, CORPUS) + 1)
+            ]
+        }
+        self._send(json.dumps(payload).encode("utf-8"), "application/json")
+
+    def _core_fetch(self, path: str) -> None:
+        n = int(path.rsplit("/", 1)[-1]) - 7000
+        self._send(json.dumps(self._core_work(n, pdf=n != 1)).encode("utf-8"), "application/json")
 
 
 class FakeSources:
@@ -213,10 +255,10 @@ class FakeSources:
     def start(self) -> None:
         self.port = free_port()
         self.pdf_base = f"http://127.0.0.1:{self.port}/pdf"
-        handler = type(
-            "_Handler", (_FakeSources,), {"pdf": _pdf_bytes(), "pdf_base": self.pdf_base}
-        )
-        self._httpd = ThreadingHTTPServer(("127.0.0.1", self.port), handler)
+        self._httpd = ThreadingHTTPServer(("127.0.0.1", self.port), _FakeSources)
+        _FakeSources.pdf = _pdf_bytes()
+        _FakeSources.pdf_base = self.pdf_base
+        _FakeSources.recorded = {}
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
         self._thread.start()
 
@@ -226,13 +268,17 @@ class FakeSources:
             self._httpd.server_close()
 
     def env(self) -> dict:
-        """两个来源的 base URL 覆盖（调用时读取，见 arxiv.py/openalex.py）。"""
+        """三个来源的 base URL 覆盖（调用时读取，见各来源模块头）。"""
         base = f"http://127.0.0.1:{self.port}"
         return {
             "MIKASA_PAPERS_ARXIV_BASE": f"{base}/arxiv",
             "MIKASA_PAPERS_ARXIV_PDF_BASE": self.pdf_base,
             "MIKASA_PAPERS_OPENALEX_BASE": f"{base}/openalex",
+            "MIKASA_PAPERS_CORE_BASE": f"{base}/core",
         }
+
+    def recorded(self) -> dict:
+        return _FakeSources.recorded
 
 
 # ---------------------------------------------------------------------------
@@ -269,12 +315,12 @@ def stop_server(server: subprocess.Popen) -> None:
 
 
 def wait_server(port: int, timeout: float = 30.0) -> None:
-    """等 uvicorn 起来（就绪判定用只有本次构建才有的 papers 端点）。"""
+    """等 uvicorn 起来（就绪判定用只有本次构建才有的来源目录端点）。"""
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            body = api_get(port, "/api/papers/settings")
-            if "has_api_key" in body:
+            body = api_get(port, "/api/papers/sources")
+            if body.get("sources"):
                 return
         except (urllib.error.URLError, OSError, json.JSONDecodeError):
             pass
@@ -283,18 +329,19 @@ def wait_server(port: int, timeout: float = 30.0) -> None:
 
 
 async def set_input(cdp, selector: str, value: str) -> None:
-    """设 input 值并派发 input 事件（keyDirty 跟踪挂在 input 上）。"""
+    """设 input 值并派发 input/change 事件（前端 onchange 挂在 change 上）。"""
     await cdp.evaluate(
         f"(() => {{ const i = document.querySelector({js_quote(selector)}); "
         f"i.value = {js_quote(value)}; "
-        f"i.dispatchEvent(new Event('input', {{bubbles: true}})); return true; }})()"
+        f"i.dispatchEvent(new Event('input', {{bubbles: true}})); "
+        f"i.dispatchEvent(new Event('change', {{bubbles: true}})); return true; }})()"
     )
 
 
 async def wait_until(cdp, expr: str, what: str, timeout: float = 40.0) -> None:
     """轮询页面表达式直到真值；超时抛错（失败信息带轮询目标）。
 
-    超时给得宽：arXiv 来源自带 3 秒节流（成功一次后补睡），一次检索
+    超时给得宽：arXiv 来源自带 3 秒节流、CORE 自持 2 秒节流，一次检索
     可能要多等几秒。
     """
     deadline = time.time() + timeout
@@ -305,15 +352,32 @@ async def wait_until(cdp, expr: str, what: str, timeout: float = 40.0) -> None:
     raise RuntimeError(f"超时等不到：{what}")
 
 
-async def search(cdp, q: str) -> None:
-    """填词 → 点搜索 → 等结果行（或空态）出现。"""
-    await set_input(cdp, "#paper-q", q)
-    await cdp.evaluate("document.querySelector('#paper-search-btn').click(); true")
+async def wait_idle(cdp, timeout: float = 40.0) -> None:
+    """等"没有在途检索"（前端 busy 期间搜索按钮禁用）。
+
+    **不做这一步会让整条验收失真**（2026-09-16 踩过）：点完搜索就去点
+    「加载更多」，新检索还没落地，翻页接在**上一次检索**的结果后面 →
+    列表混着两套窗口，看起来像"翻页重复"，其实是测试自己抢跑。
+    """
     await wait_until(
         cdp,
-        "(() => { const s = document.querySelector('#paper-search-btn');"
-        " return !s.disabled && (document.querySelectorAll('.paper-item').length > 0"
-        " || document.querySelector('#paper-results .empty')); })()",
+        "!document.querySelector('#paper-search-btn').disabled",
+        "检索空闲（无在途请求）",
+        timeout,
+    )
+
+
+async def search(cdp, q: str) -> None:
+    """填词 → 点搜索 → **等这一轮真的跑完**再返回。"""
+    await wait_idle(cdp)
+    await set_input(cdp, "#paper-q", q)
+    await cdp.evaluate("document.querySelector('#paper-search-btn').click(); true")
+    await asyncio.sleep(0.15)  # 让 busy 立起来（太快的话下面这步会立刻通过）
+    await wait_idle(cdp)
+    await wait_until(
+        cdp,
+        "document.querySelectorAll('.paper-item').length > 0"
+        " || document.querySelector('#paper-results .empty')",
         f"检索完成：{q}",
     )
 
@@ -355,8 +419,8 @@ async def run(args):
                 "--no-first-run",
                 f"--remote-debugging-port={args.cdp_port}",
                 f"--user-data-dir={profile}",
-                "--window-size=1400,900",
-                f"http://127.0.0.1:{port}/documents",
+                "--window-size=1600,900",
+                f"http://127.0.0.1:{port}/papers",
             ]
         )
         target = wait_json_list(args.cdp_port)
@@ -372,7 +436,7 @@ async def run(args):
                 await asyncio.sleep(0.25)
             await asyncio.sleep(0.8)
 
-            # ---- 0. 空库会弹首启引导，先关掉（否则挡着面板）----
+            # ---- 0. 空库会弹首启引导，先关掉（否则挡着页面）----
             await cdp.evaluate(
                 "(() => { const b = [...document.querySelectorAll('#onboard .btn')]"
                 ".find(x => x.textContent.includes('开始使用'));"
@@ -380,111 +444,158 @@ async def run(args):
             )
             await asyncio.sleep(0.3)
 
-            # ---- 1. 检索：结果行渲染 ----
-            await search(cdp, "检索增强")
+            # ---- 1. 三栏布局 + 来源目录渲染 ----
+            await wait_until(
+                cdp,
+                "document.querySelectorAll('#p-sources input[data-source]').length === 3",
+                "来源复选框由目录渲染（3 个）",
+            )
+            layout = await cdp.evaluate("""(() => {
+              const main = document.querySelector('main.papers-layout');
+              const cols = getComputedStyle(main).gridTemplateColumns.split(' ').length;
+              return {
+                cols,
+                navActive: document.querySelector('nav.main a.active')?.dataset.page || '',
+                sourceLabels: [...document.querySelectorAll('#p-sources .p-check span')]
+                  .map(n => n.textContent),
+                checked: document.querySelectorAll('#p-sources input:checked').length,
+              };
+            })()""")
+
+            # ---- 2. 检索：三源轮转（arXiv/OpenAlex/CORE 各一）----
+            await search(cdp, "水库坝")
             page1 = await cdp.evaluate("""(() => {
               const rows = [...document.querySelectorAll('.paper-item')];
-              const first = rows[0];
               return {
                 count: rows.length,
-                title: first.querySelector('.paper-title').textContent,
-                titleHref: first.querySelector('.paper-title').getAttribute('href'),
-                src: first.querySelector('.paper-src').textContent,
-                meta: first.querySelector('.paper-meta').textContent,
+                sources: rows.slice(0, 3).map(r => r.querySelector('.paper-src').textContent),
+                firstTitle: rows[0]?.querySelector('.paper-title')?.textContent || '',
+                firstMeta: rows[0]?.querySelector('.paper-meta')?.textContent || '',
+                snippetShown: !!rows[0]?.querySelector('.paper-snippet'),
+                hasCites: (rows[0]?.querySelector('.paper-meta')?.textContent || '')
+                  .includes('被引'),
                 moreShown: !document.querySelector('#paper-more').classList.contains('hidden'),
-                status: document.querySelector('#paper-status').textContent,
-                disabledImports: rows.filter(r =>
-                  r.querySelector('.paper-actions .btn.primary').disabled).length,
               };
             })()""")
 
-            # ---- 2. 摘要开合（展开/收起文案互切）----
-            await cdp.evaluate(
-                "document.querySelector('.paper-item .paper-actions .btn.ghost').click(); true"
+            # ---- 3. 筛选真的发出去了（从假源侧断言，不看 DOM）----
+            await wait_idle(cdp)
+            recorded_before = len(fake.recorded().get("openalex", []))
+            await set_input(cdp, "#p-date-from", "2021-01-01")
+            await wait_idle(cdp)  # 改筛选会自动重搜：等它真的跑完
+            oa_queries = fake.recorded().get("openalex", [])[recorded_before:]
+            year_sent = any(
+                "from_publication_date%3A2021-01-01" in q or "from_publication_date:2021-01-01" in q
+                for q in oa_queries
             )
-            abstract_open = await cdp.evaluate("""(() => {
-              const row = document.querySelector('.paper-item');
+            if not year_sent:
+                log(f"DEBUG openalex 收到的查询（共 {len(oa_queries)} 条）：{oa_queries[-3:]}")
+
+            # ---- 4. 能力对齐：只勾 arXiv → "被引最多"禁用且有说明 ----
+            await cdp.evaluate("""(() => {
+              const boxes = [...document.querySelectorAll('#p-sources input[data-source]')];
+              for (const b of boxes) if (b.dataset.source !== 'arxiv') b.click();
+              return true;
+            })()""")
+            await wait_idle(cdp)
+            caps = await cdp.evaluate("""(() => {
+              const cited = document.querySelector('#p-sorts button[data-sort="cited"]');
               return {
-                shown: !row.querySelector('.paper-abstract').classList.contains('hidden'),
-                label: row.querySelector('.paper-actions .btn.ghost').textContent,
-                text: row.querySelector('.paper-abstract').textContent.slice(0, 12),
+                citedDisabled: cited.disabled,
+                sortNote: document.querySelector('#p-sort-note').textContent,
+                oaChecked: document.querySelector('#p-oa-only').checked,
+                oaDisabled: document.querySelector('#p-oa-only').disabled,
+                oaNote: document.querySelector('#p-oa-note').textContent,
               };
             })()""")
+            # 恢复全选，供后续用例
+            await cdp.evaluate("""(() => {
+              const boxes = [...document.querySelectorAll('#p-sources input[data-source]')];
+              for (const b of boxes) if (!b.checked) b.click();
+              return true;
+            })()""")
+            await wait_idle(cdp)
 
-            # ---- 3. 加载更多：第二页追加 ----
+            # ---- 5. 加载更多：按窗口大小推进 → 两页零重复 ----
+            await search(cdp, "水库坝")
             await cdp.evaluate("document.querySelector('#paper-more').click(); true")
             await wait_until(
                 cdp,
                 "document.querySelectorAll('.paper-item').length > 20",
                 "第二页追加",
             )
-            page2 = await cdp.evaluate("""(() => ({
-              count: document.querySelectorAll('.paper-item').length,
-              moreHidden: document.querySelector('#paper-more').classList.contains('hidden'),
-              status: document.querySelector('#paper-status').textContent,
-            }))()""")
-
-            # ---- 4. 逐源降级：OpenAlex 假源 500，arXiv 结果照常 ----
-            await search(cdp, f"水库坝 {BOOM_WORD}")
-            degrade = await cdp.evaluate("""(() => ({
-              count: document.querySelectorAll('.paper-item').length,
-              status: document.querySelector('#paper-status').textContent,
-            }))()""")
-            # 回到正常结果，供导入用
-            await search(cdp, "检索增强")
-
-            # ---- 5. 导入第一篇（arXiv）→ 入库 → 树里出现 ----
-            await cdp.evaluate(
-                "document.querySelector('.paper-item .paper-actions .btn.primary').click(); true"
-            )
-            await wait_until(
-                cdp,
-                "(() => { const b = document.querySelector("
-                "'.paper-item .paper-actions .btn.primary');"
-                " return b.textContent === '已导入'; })()",
-                "导入完成（按钮转为已导入）",
-            )
-            import1 = await cdp.evaluate("""(() => ({
-              label: document.querySelector('.paper-item .paper-actions .btn.primary').textContent,
-              status: document.querySelector('.paper-item .paper-status').textContent,
-              toast: [...document.querySelectorAll('#toast .toast-msg')].at(-1)?.textContent || '',
-              treeDocs: document.querySelectorAll('#kb-tree .doc-item').length,
-            }))()""")
-            docs_after_import = api_get(port, "/api/documents")["documents"]
-            uploads = sorted(p.name for p in (userdata / "uploads").glob("*"))
-            health_after_import = api_get(port, "/api/health")["documents"]
-
-            # ---- 6. 重复导入同一篇：sha256 跳过（200 文案）----
-            # 导入成功后按钮定格为禁用的「已导入」（防重复点击），所以跳过
-            # 路径按用户的真实走法验收：重新检索 → 新结果行 → 再点导入。
-            imported_btn_disabled = await cdp.evaluate(
-                "document.querySelector('.paper-item .paper-actions .btn.primary').disabled"
-            )
-            await search(cdp, "检索增强")
-            await cdp.evaluate(
-                "document.querySelector('.paper-item .paper-actions .btn.primary').click(); true"
-            )
-            await wait_until(
-                cdp,
-                f"({LAST_TOAST}).includes('跳过')",
-                "重复导入跳过提示",
-            )
-            import2 = await cdp.evaluate(LAST_TOAST)
-
-            # ---- 7. 无开放获取那条：导入按钮禁用 ----
-            no_oa = await cdp.evaluate("""(() => {
-              const row = [...document.querySelectorAll('.paper-item')]
-                .find(r => r.querySelector('.paper-src').textContent === 'OpenAlex');
-              const btn = row.querySelector('.paper-actions .btn.primary');
-              return {disabled: btn.disabled, title: btn.title,
-                      meta: row.querySelector('.paper-meta').textContent};
+            paging = await cdp.evaluate("""(() => {
+              const refs = [...document.querySelectorAll('.paper-item')]
+                .map(r => r.dataset.ref);
+              const uniq = new Set(refs);
+              const dup = refs.filter((r, i) => refs.indexOf(r) !== i);
+              return {count: refs.length, unique: uniq.size, dup: [...new Set(dup)].slice(0, 8),
+                      firstPageRefs: refs.slice(0, 4), secondPageRefs: refs.slice(20, 24)};
             })()""")
 
-            # ---- 8. OpenAlex 密钥：保存 → 热生效；清空 → 清除 ----
-            await cdp.evaluate("document.querySelector('#paper-key-toggle').click(); true")
-            key_row_shown = await cdp.evaluate(
-                "!document.querySelector('#paper-key-row').classList.contains('hidden')"
+            # 截图点：结果满屏、筛选栏完整（末尾那张会拍在在途检索的瞬间，是空列表）
+            shot = None
+            if args.out_shot:
+                await search(cdp, "水库坝")
+                await asyncio.sleep(0.3)
+                res = await cdp.call("Page.captureScreenshot", {"format": "png"})
+                shot = res["data"]
+
+            # ---- 6. 详情面板 + 导入 + 已在库中 + 出口 ----
+            await cdp.evaluate("document.querySelectorAll('.paper-item')[0].click(); true")
+            detail = await cdp.evaluate("""(() => ({
+              title: document.querySelector('#paper-detail .pd-title')?.textContent || '',
+              body: document.querySelector('#paper-detail .pd-body')?.textContent || '',
+              hasImport: !!document.querySelector('#paper-detail .btn.primary'),
+            }))()""")
+            await cdp.evaluate("document.querySelector('#paper-detail .btn.primary').click(); true")
+            await wait_until(
+                cdp,
+                "(() => { const p = document.querySelector('#paper-detail .paper-inlib');"
+                " return !!p; })()",
+                "导入后详情面板转为已入库",
             )
+            imported = await cdp.evaluate("""(() => ({
+              rowBadge: !!document.querySelector('.paper-item[data-ref]:first-child .paper-inlib'),
+              badges: document.querySelectorAll('.paper-item .paper-inlib').length,
+              exits: [...document.querySelectorAll('#paper-detail .pd-actions a')]
+                .map(a => a.textContent),
+              toast: [...document.querySelectorAll('#toast .toast-msg')].at(-1)?.textContent || '',
+            }))()""")
+            docs_after = api_get(port, "/api/documents")["documents"]
+            health = api_get(port, "/api/health")["documents"]
+
+            # ---- 7. 无开放获取那条：导入按钮提前禁用 ----
+            # 只看 CORE（它的第 1 条假记录故意不带 downloadUrl），点第一条
+            await cdp.evaluate("""(() => {
+              const boxes = [...document.querySelectorAll('#p-sources input[data-source]')];
+              for (const b of boxes) if (b.dataset.source !== 'core' && b.checked) b.click();
+              return true;
+            })()""")
+            await asyncio.sleep(0.4)
+            await search(cdp, "水库坝")
+            await cdp.evaluate("document.querySelectorAll('.paper-item')[0].click(); true")
+            await asyncio.sleep(0.3)
+            no_oa = await cdp.evaluate("""(() => {
+              const btn = document.querySelector('#paper-detail .btn.primary');
+              return {
+                src: document.querySelector('.paper-item .paper-src')?.textContent || '',
+                exists: !!btn,
+                disabled: btn ? btn.disabled : null,
+                title: btn ? btn.title : '',
+                cites: document.querySelector('#paper-detail .paper-cites')?.textContent || '',
+              };
+            })()""")
+            # 恢复全选
+            await cdp.evaluate("""(() => {
+              const boxes = [...document.querySelectorAll('#p-sources input[data-source]')];
+              for (const b of boxes) if (!b.checked) b.click();
+              return true;
+            })()""")
+            await asyncio.sleep(0.3)
+
+            # ---- 8. 密钥：保存 → 生效；清空 → 清除 ----
+            await cdp.evaluate("document.querySelector('#paper-key-toggle').click(); true")
             await set_input(cdp, "#paper-key-input", FAKE_KEY)
             await cdp.evaluate("document.querySelector('#paper-key-save').click(); true")
             await wait_until(
@@ -493,13 +604,6 @@ async def run(args):
                 "密钥保存成功",
             )
             key_saved = api_get(port, "/api/papers/settings")
-            env_file = (userdata / ".env").read_text(encoding="utf-8")
-            key_ui = await cdp.evaluate("""(() => ({
-              note: document.querySelector('#paper-key-note').textContent,
-              cleared: document.querySelector('#paper-key-input').value === '',
-              placeholder: document.querySelector('#paper-key-input').placeholder,
-            }))()""")
-            # 清空保存 = 清除（三段语义：动过且为空）
             await set_input(cdp, "#paper-key-input", "")
             await cdp.evaluate("document.querySelector('#paper-key-save').click(); true")
             await wait_until(
@@ -509,45 +613,19 @@ async def run(args):
             )
             key_cleared = api_get(port, "/api/papers/settings")
 
-            # ---- 9. 布局：进阅读视图面板收起，关闭后回来 ----
-            await cdp.evaluate("document.querySelector('#kb-tree .doc-item').click(); true")
-            await wait_until(
-                cdp,
-                "document.querySelector('#papers-card').classList.contains('hidden')",
-                "阅读视图下论文面板收起",
-            )
-            # 内嵌模式的关闭钮 = 阅读头的 ✕（aria-label「收起阅读区」）
-            await cdp.evaluate("document.querySelector('#rd-close').click(); true")
-            await asyncio.sleep(0.5)
-            panel_back = await cdp.evaluate(
-                "!document.querySelector('#papers-card').classList.contains('hidden')"
-            )
-
-            shot = None
-            if args.out_shot:
-                res = await cdp.call("Page.captureScreenshot", {"format": "png"})
-                shot = res["data"]
-
             report = {
+                "layout": layout,
                 "page1": page1,
-                "abstractOpen": abstract_open,
-                "page2": page2,
-                "degrade": degrade,
-                "import1": import1,
-                "importedBtnDisabled": imported_btn_disabled,
-                "docsAfterImport": len(docs_after_import),
-                "healthAfterImport": health_after_import,
-                "uploads": uploads,
-                "import2": import2,
+                "yearSent": year_sent,
+                "caps": caps,
+                "paging": paging,
+                "detail": detail,
+                "imported": imported,
+                "docsAfterImport": len(docs_after),
+                "healthAfterImport": health,
                 "noOa": no_oa,
-                "keyRowShown": key_row_shown,
                 "keySaved": key_saved,
-                "keyUi": key_ui,
-                "envHasKey": "OPENALEX_API_KEY" in env_file,
                 "keyCleared": key_cleared,
-                "envKeyGone": "OPENALEX_API_KEY"
-                not in (userdata / ".env").read_text(encoding="utf-8"),
-                "panelBack": panel_back,
                 "consoleErrors": cdp.errors,
             }
             print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -557,58 +635,52 @@ async def run(args):
                 log(f"截图已写: {args.out_shot}")
 
             bad = []
+            if layout["cols"] != 3:
+                bad.append(f"三栏布局没生效（grid 列数 {layout['cols']}）")
+            if layout["navActive"] != "papers":
+                bad.append(f"顶栏没有高亮「找论文」：{layout['navActive']}")
+            if layout["checked"] != 3 or layout["sourceLabels"] != ["arXiv", "OpenAlex", "CORE"]:
+                bad.append(f"来源目录渲染不对：{layout}")
             if page1["count"] != PAGE_SIZE:
                 bad.append(f"第一页应为 {PAGE_SIZE} 条，实际 {page1['count']}")
-            if "arXiv 测试论文" not in page1["title"]:
-                bad.append(f"首条标题不对：{page1['title']}")
-            if not page1["titleHref"].startswith("https://example.org/"):
-                bad.append(f"标题没链到详情页：{page1['titleHref']}")
-            if page1["src"] != "arXiv":
-                bad.append(f"首条来源徽标不对：{page1['src']}")
-            if "2024" not in page1["meta"] or "作者甲" not in page1["meta"]:
-                bad.append(f"元信息行缺年份/作者：{page1['meta']}")
+            if page1["sources"] != ["arXiv", "OpenAlex", "CORE"]:
+                bad.append(f"首三条不是三源轮转：{page1['sources']}")
+            if not page1["snippetShown"] or page1["firstMeta"].count("·") < 2:
+                bad.append(f"结果行信息不全：{page1}")
+            if not page1["hasCites"]:
+                bad.append("结果行没有显示被引数据")
             if not page1["moreShown"]:
                 bad.append("首屏应显示「加载更多」")
-            if page1["disabledImports"] != 1:
-                bad.append(f"应恰有 1 条禁用导入（无开放获取），实际 {page1['disabledImports']}")
-            if not abstract_open["shown"] or abstract_open["label"] != "收起":
-                bad.append(f"摘要展开失败：{abstract_open}")
-            if page2["count"] != PAGE_SIZE * 2:
-                bad.append(f"加载更多后应 {PAGE_SIZE * 2} 条，实际 {page2['count']}")
-            if page2["moreHidden"]:
-                bad.append("第二页取满后不应再显示「加载更多」")
-            if degrade["count"] == 0:
-                bad.append("单源失败时另一源的结果没出来")
-            if "部分来源暂时不可用" not in degrade["status"] or "OpenAlex" not in degrade["status"]:
-                bad.append(f"逐源降级提示缺失：{degrade['status']}")
-            if import1["label"] != "已导入":
-                bad.append(f"导入后按钮文案不对：{import1['label']}")
-            if "入库成功" not in import1["toast"]:
-                bad.append(f"导入 toast 不对：{import1['toast']}")
-            if len(docs_after_import) != 1:
-                bad.append(f"入库文档数应为 1，实际 {len(docs_after_import)}")
-            if health_after_import != 1:
-                bad.append(f"/api/health 文档数没跟上：{health_after_import}")
-            if len(uploads) != 1 or "(arxiv 2401." not in uploads[0]:
-                bad.append(f"uploads 落盘名不对：{uploads}")
-            if not imported_btn_disabled:
-                bad.append("导入成功后按钮没定格（防重复点的纪律）")
-            if "跳过" not in import2:
-                bad.append(f"重复导入没有跳过文案：{import2}")
-            if not no_oa["disabled"]:
-                bad.append("无开放获取那条的导入按钮没禁用")
-            if "无全文" not in no_oa["meta"]:
-                bad.append(f"无全文标记缺失：{no_oa['meta']}")
-            if not key_row_shown:
-                bad.append("密钥行没展开")
+            if not year_sent:
+                bad.append("年份筛选没有真的发到上游（openalex 收到的查询里没有该条件）")
+            if not caps["citedDisabled"]:
+                bad.append("只选 arXiv 时「被引最多」应整项禁用")
+            if "被引" not in caps["sortNote"]:
+                bad.append(f"禁用原因没有说明：{caps['sortNote']}")
+            if not caps["oaChecked"] or not caps["oaDisabled"]:
+                bad.append(f"全 OA 来源下「只看开放获取」应为已勾选且禁用：{caps}")
+            if "已自动满足" not in caps["oaNote"]:
+                bad.append(f"「已满足」与「不支持」的文案没分开：{caps['oaNote']}")
+            if paging["count"] != paging["unique"]:
+                bad.append(f"翻页出现重复结果：{paging}")
+            if not detail["title"] or not detail["body"] or not detail["hasImport"]:
+                bad.append(f"详情面板内容不全：{detail}")
+            if not imported["rowBadge"] or imported["badges"] < 1:
+                bad.append(f"导入后结果行没标「已在库中」：{imported}")
+            if "去提问" not in imported["exits"] or "去知识库" not in imported["exits"]:
+                bad.append(f"导入后没有出口：{imported['exits']}")
+            if "入库成功" not in imported["toast"]:
+                bad.append(f"导入 toast 不对：{imported['toast']}")
+            if len(docs_after) != 1 or health != 1:
+                bad.append(f"入库文档数不对：docs={len(docs_after)} health={health}")
+            if not no_oa["exists"] or not no_oa["disabled"]:
+                bad.append(f"无开放获取的 CORE 记录应禁用导入按钮：{no_oa}")
+            if "不提供" not in no_oa["cites"] and "被引" not in no_oa["cites"]:
+                bad.append(f"CORE 被引数据没显示：{no_oa['cites']}")
             if not key_saved.get("has_api_key"):
                 bad.append("密钥保存后 has_api_key 仍为假")
-            if not key_ui["cleared"] or "已保存" not in key_ui["placeholder"]:
-                bad.append(f"保存后密钥框状态不对：{key_ui}")
             if key_cleared.get("has_api_key"):
                 bad.append("清空保存后密钥没被清除")
-            if not panel_back:
-                bad.append("关闭阅读视图后论文面板没回来")
             if cdp.errors:
                 bad.append("console 有错误")
             if bad:
@@ -628,7 +700,7 @@ async def run(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="无头 Chrome 在线找论文验收")
+    parser = argparse.ArgumentParser(description="无头 Chrome 找论文页验收")
     parser.add_argument("--out-shot", default=None, help="截图输出路径（PNG）")
     parser.add_argument("--server-port", type=int, default=None, help="服务端口（缺省动态分配）")
     parser.add_argument("--cdp-port", type=int, default=None, help="CDP 端口（缺省动态分配）")

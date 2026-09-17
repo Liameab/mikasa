@@ -6,13 +6,14 @@
 from __future__ import annotations
 
 import urllib.error
+import urllib.parse
 
 import pytest
 
 import mikasa.papers.arxiv as arxiv
 import mikasa.papers.openalex as openalex
 from mikasa.papers.errors import PaperError
-from mikasa.papers.sources import PaperResult
+from mikasa.papers.sources import PaperFilters, PaperResult
 
 
 class _FakeUrlopen:
@@ -242,7 +243,31 @@ def test_reconstruct_abstract_exact():
     assert openalex.reconstruct_abstract({}) == ""
 
 
+def _paged_openalex_fake(total: int):
+    """按 page/per-page 真实切片的假 OpenAlex（id 里编上全局序号）。
+
+    窗口对齐的正确性只能这样验：假源必须真的按 page/per-page 切片，
+    否则"取错页"在上游看起来和"取对页"一样。
+    """
+    import json
+    import urllib.parse
+
+    def fake_get(url: str, timeout: float) -> bytes:
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+        page = int(query.get("page", ["1"])[0])
+        per_page = int(query.get("per-page", ["10"])[0])
+        start = (page - 1) * per_page
+        works = [
+            {"id": f"https://openalex.org/W{n:09d}", "display_name": f"w{n}"}
+            for n in range(start, min(start + per_page, total))
+        ]
+        return json.dumps({"meta": {"count": total}, "results": works}).encode("utf-8")
+
+    return fake_get
+
+
 def test_openalex_search_params_and_select(monkeypatch):
+    """请求参数与 select 瘦身列表（窗口切片的正确性由对齐测试覆盖）。"""
     captured: dict[str, str] = {}
 
     def fake_get(url: str, timeout: float) -> bytes:
@@ -250,14 +275,66 @@ def test_openalex_search_params_and_select(monkeypatch):
         return _fake_openalex_get({"meta": {"count": 1}, "results": [OPENALEX_WORK]})(url, timeout)
 
     monkeypatch.setattr(openalex, "_http_get", fake_get)
-    results, full = openalex.OpenAlexSource().search("水库坝", 20, 10)
+    results, full = openalex.OpenAlexSource().search("水库坝", 0, 10)
 
     assert captured["url"].startswith("https://api.openalex.org/works?")
     assert "search=%E6%B0%B4%E5%BA%93%E5%9D%9D" in captured["url"]
-    assert "per-page=10" in captured["url"] and "page=3" in captured["url"]  # 20//10+1
     assert "sort=relevance_score%3Adesc" in captured["url"]
     assert "abstract_inverted_index" in captured["url"]  # select 瘦身列表
+    assert "is_oa" not in captured["url"]  # 没要求"只看 OA"就不发该 filter
     assert len(results) == 1 and full is False
+
+
+def test_openalex_filter_translation(monkeypatch):
+    """年份 / 只看 OA / 语言合并进一个 filter 参数（逗号分隔的 OpenAlex 语法）。"""
+    captured: dict[str, str] = {}
+
+    def fake_get(url: str, timeout: float) -> bytes:
+        captured["url"] = url
+        return b'{"results": []}'
+
+    monkeypatch.setattr(openalex, "_http_get", fake_get)
+    openalex.OpenAlexSource().search(
+        "x",
+        0,
+        5,
+        filters=PaperFilters(
+            date_from="2020-01-01", date_to="2024-12-31", oa_only=True, language="zh", sort="cited"
+        ),
+    )
+    url = urllib.parse.unquote(captured["url"])
+    assert (
+        "filter=from_publication_date:2020-01-01,to_publication_date:2024-12-31,is_oa:true,language:zh"
+        in url
+    )
+    assert "sort=cited_by_count:desc" in url
+
+
+@pytest.mark.parametrize(("start", "count"), [(0, 7), (7, 6), (13, 7), (20, 6), (33, 10)])
+def test_openalex_window_alignment(monkeypatch, start, count):
+    """窗口对齐：请求的每页值与切片偏移必须同源于 per-page。
+
+    回归锁（2026-09-16 真踩过）：第一版按 count 对齐页号、却按 per-page
+    取页，两者不是同一倍数 → 翻页时结果重复（E2E 实测 40 条里 5 条重复）。
+    N 源轮转下 start 一般不是 count 的整数倍，只有这里能拦住。
+    """
+    monkeypatch.setattr(openalex, "_http_get", _paged_openalex_fake(100))
+    results, full = openalex.OpenAlexSource().search("x", start, count)
+    ids = [r.id for r in results]
+    expected = [f"W{n:09d}" for n in range(start, start + count)]
+    assert ids == expected
+    assert full is True  # 100 条足够，取满
+
+
+def test_openalex_window_alignment_no_duplicate_across_pages(monkeypatch):
+    """逐页取数零重复：模拟前端按窗口大小推进 offset 的真实翻页。"""
+    monkeypatch.setattr(openalex, "_http_get", _paged_openalex_fake(100))
+    src = openalex.OpenAlexSource()
+    seen: list[str] = []
+    for page_start in (0, 7, 14, 21, 28):  # count=7 的三源轮转窗口
+        results, _ = src.search("x", page_start, 7)
+        seen.extend(r.id for r in results)
+    assert len(seen) == len(set(seen)), f"翻页出现重复：{seen}"
 
 
 def test_openalex_missing_fields_defaults(monkeypatch):

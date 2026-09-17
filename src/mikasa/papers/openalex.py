@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 
 from mikasa.papers.errors import PaperError
-from mikasa.papers.sources import PaperResult
+from mikasa.papers.sources import PaperFilters, PaperResult, SourceCaps
 
 # OpenAlex id 形如 "W" + 数字（六位起）：解析与路由双重校验
 _OPENALEX_ID_RE = re.compile(r"^W\d{6,}$")
@@ -32,10 +32,42 @@ _OPENALEX_ID_RE = re.compile(r"^W\d{6,}$")
 # 只取用到的字段，payload 从 ~50KB 瘦到 ~10KB（额度不变，流量与解析更快）
 _SELECT = (
     "id,doi,display_name,publication_year,authorships,primary_location,"
-    "abstract_inverted_index,open_access,language"
+    "abstract_inverted_index,open_access,language,cited_by_count"
 )
 
 _USER_AGENT = "Mikasa/0.1 (local paper search)"
+
+# OpenAlex 单页上限（超出会 400）；深翻页时窗口可能取不满，has_more 自然为假
+_MAX_PER_PAGE = 200
+
+_SORT_PARAMS = {
+    "relevance": "relevance_score:desc",
+    "cited": "cited_by_count:desc",
+    "recent": "publication_date:desc",
+}
+
+
+def _sort_param(filters: PaperFilters | None) -> str:
+    """排序翻译；未知取值回落相关度（能力校验在服务层，这里只做翻译）。"""
+    key = filters.sort if filters is not None else "relevance"
+    return _SORT_PARAMS.get(key, _SORT_PARAMS["relevance"])
+
+
+def _filter_params(filters: PaperFilters | None) -> dict[str, str]:
+    """年份/开放获取/语言合并进一个 filter 参数（逗号分隔，OpenAlex 语法）。"""
+    if filters is None:
+        return {}
+    clauses = []
+    # 完整日期直传（OpenAlex 认 YYYY-MM-DD）——界面选的是日期，就按日期过滤
+    if filters.date_from is not None:
+        clauses.append(f"from_publication_date:{filters.date_from}")
+    if filters.date_to is not None:
+        clauses.append(f"to_publication_date:{filters.date_to}")
+    if filters.oa_only:
+        clauses.append("is_oa:true")
+    if filters.language:
+        clauses.append(f"language:{filters.language}")
+    return {"filter": ",".join(clauses)} if clauses else {}
 
 
 def _base_url() -> str:
@@ -130,6 +162,7 @@ def _normalize(work: dict) -> PaperResult:
         for a in (work.get("authorships") or [])
         if isinstance(a, dict) and a.get("author", {}).get("display_name")
     )
+    cited = work.get("cited_by_count")
     return PaperResult(
         source="openalex",
         id=short_id,
@@ -144,23 +177,53 @@ def _normalize(work: dict) -> PaperResult:
         if doi
         else work_id or f"https://openalex.org/{short_id}",
         oa=is_oa,
+        cited_by=int(cited) if isinstance(cited, int) else None,
+        language=str(work.get("language") or ""),
     )
 
 
 class OpenAlexSource:
-    """OpenAlex 来源：search 走 /works 检索，fetch 走 /works/{id} 反查。"""
+    """OpenAlex 来源：search 走 /works 检索，fetch 走 /works/{id} 反查。
+
+    能力（实测）：年份/开放获取/语言过滤与三种排序全部支持（被引数来自
+    `cited_by_count`）。
+    """
 
     name = "openalex"
+    label = "OpenAlex"
+    caps = SourceCaps(year=True, cited_sort=True, recent_sort=True, language=True, oa="filterable")
 
-    def search(self, q: str, start: int, count: int) -> tuple[list[PaperResult], bool]:
-        page = start // count + 1
+    def search(
+        self,
+        q: str,
+        start: int,
+        count: int,
+        *,
+        filters: PaperFilters | None = None,
+    ) -> tuple[list[PaperResult], bool]:
+        # **窗口对齐**（2026-09-16 两轮才修对，教训记在下面）：OpenAlex 只有
+        # page/per-page，没有原生 offset，而页边界固定在 per-page 的整数倍上
+        # ——凑不出"边界刚好落在 start"。
+        #   · 旧实现 `page = start // count + 1` 只在 start 是 count 整数倍时
+        #     成立（两源各拿一半、恒 10 条时侥幸正确）；N 源轮转后 start 一般
+        #     不是 count 的倍数，取回的窗口整体左移 → 翻页重复（E2E 实测
+        #     40 条里 5 条重复）。
+        #   · 第一版修法按 count 对齐页号、却按 per-page 取页，两者不是同一
+        #     倍数，照样错位。
+        # 最终：**从第 1 页一直取到 start+count 为止，再切片** —— 一次请求、
+        # 与页边界无关。OpenAlex 按"每次查询 10 credits"计费、与 per-page 无关，
+        # 多取不额外花钱；代价只是多传一点流量。
+        # 超过单页上限（200）的深翻页取不满 → has_more 自然为假，该源的深翻
+        # 到此为止（如实降级，不假装后面还有）。
+        per_page = min(_MAX_PER_PAGE, start + count)
         params = urllib.parse.urlencode(
             {
                 "search": q,
-                "per-page": count,
-                "page": page,
-                "sort": "relevance_score:desc",
+                "per-page": per_page,
+                "page": 1,
+                "sort": _sort_param(filters),
                 "select": _SELECT,
+                **_filter_params(filters),
             }
         )
         data = _load_json(_http_get(f"{_base_url()}/works?{params}", timeout=15.0))
@@ -168,7 +231,8 @@ class OpenAlexSource:
         if not isinstance(works, list):
             raise PaperError("OpenAlex 返回内容无法解析（缺少 results 列表）")
         results = [_normalize(w) for w in works if isinstance(w, dict)]
-        return results, len(results) == count
+        window = results[start : start + count]
+        return window, len(window) == count
 
     def fetch(self, paper_id: str) -> PaperResult:
         if not validate_id(paper_id):

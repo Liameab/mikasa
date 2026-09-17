@@ -6,6 +6,9 @@
     实现"改了笔记再导入 = 原地更新"的直觉语义——重建行**保留组织属性**
     （文件夹归属 + 手动改过的标题，v3）：原地更新不该把用户整理好的分类
     打散，reindex 全量重建同理（按 uploads 路径映射回写）；
+  - 顺序纪律（2026-09-17）：新副本**先在盘上就位**，旧行随后才删。文件操作
+    是整条链路唯一会撞外部锁的一步（Windows 文件锁/只读副本），排在删行之后
+    的话，失败就是"文档从界面消失、文件还在盘上"；
   - 嵌入失败：整个文档回滚并标记失败——保证向量矩阵与 chunk 表恒一致
     （IndexManager 对不一致直接报错，半成品会毒化全库，故宁回滚不残留）。
 
@@ -42,6 +45,19 @@ logger = get_logger("ingest")
 _EMBED_BATCH = 32  # bge 系列单批上限足够小，规避 API 单请求长度限制
 
 
+@dataclass(frozen=True)
+class _KeptProps:
+    """重建时要继承的组织属性（同名替换与 reindex 共用）。
+
+    用具名字段而不是元组：解包顺序写反是**静默错值**（标题和文件夹都是
+    "看起来像那么回事"的值），字段名自证。新增被保留的属性时只改这里。
+    """
+
+    title: str
+    folder_id: int | None
+    source_ref: str | None
+
+
 @dataclass
 class IngestSummary:
     """一次 ingest 运行的汇总（CLI 展示与测试断言用）。"""
@@ -64,7 +80,7 @@ class IngestService:
         self.settings = settings
         settings.ensure_dirs()
         self._tokenizer = get_tokenizer()
-        # reindex 的组织属性暂存：{uploads 副本文件名: (标题, 文件夹 id)}。
+        # reindex 的组织属性暂存：{uploads 副本文件名: _KeptProps(标题, 文件夹, 来源)}。
         # reindex 先清空行再全量重导，ingest_one 重建新行时按名查回写；
         # 常规路径为空 dict，查不到即根级/默认标题（无副作用）。
         # **键必须是文件名而不是 file_path**（2026-09-11 修复的真实 bug）：
@@ -73,7 +89,7 @@ class IngestService:
         # 必然不同 → 按完整路径做键永远查不到 → 每次 reindex 都把用户整理
         # 好的文件夹归属清成根级（用户实测"每次修改后文件夹都会变"）。
         # uploads 副本是扁平存放的（uploads_dir / file.name），文件名即稳定键。
-        self._reindex_keep: dict[str, tuple[str, int | None]] = {}
+        self._reindex_keep: dict[str, _KeptProps] = {}
         # 入库串行化：Web 上传是并发 POST（前端多选/重复选文件逐个 upload 不
         # await），而"查重 → 删旧行 → 插新行"在 SQLite 上不是原子链——2026-09-11
         # 实测并发同名上传撞 documents.file_path 唯一约束（IntegrityError → 500）。
@@ -114,16 +130,43 @@ class IngestService:
         self._sync_meta()
         return summary
 
-    def ingest_one(self, file: Path, *, force: bool = False) -> tuple[str, int, int]:
+    def ingest_one(
+        self,
+        file: Path,
+        *,
+        force: bool = False,
+        source_ref: str | None = None,
+        title: str | None = None,
+    ) -> tuple[str, int, int]:
         """处理单个文件（加锁串行，理由见 __init__ 的 _lock 注释）。
 
         返回 (状态, 新增块数, 新增字符数)：ingested（含 replaced）/ skipped。
         异常上抛（由调用方决定记录还是终止）。
+
+        source_ref 由论文导入（形如 "arxiv:2401.12345"）与笔记链路
+        （"note:<key>"）传入：它是四条入库链路里**唯一**知道"这个文件从哪来"
+        的地方，其余链路（上传/CLI/reindex）一律 None。
+
+        title 只由笔记链路传入（用户在编辑器里写的标题）：文件主名对笔记是
+        "标题-key"这种内部名，不能当显示标题；且正文首个 `#` 标题也不该劫持
+        用户填的标题。**它是"显式标题"层，优先级高于同名替换继承来的旧标题**
+        （否则编辑时改标题永远不生效）——见 _ingest_one 里的回填点。
+
+        注意 title 与 force 是**配套**的：内容未变时（同名同 sha）非 force 会
+        在 title 回填**之前**就返回 skipped，于是"只改标题"静默不生效。笔记
+        链路两处调用都同时传了 force=True。
         """
         with self._lock:
-            return self._ingest_one(file, force=force)
+            return self._ingest_one(file, force=force, source_ref=source_ref, title=title)
 
-    def _ingest_one(self, file: Path, *, force: bool) -> tuple[str, int, int]:
+    def _ingest_one(
+        self,
+        file: Path,
+        *,
+        force: bool,
+        source_ref: str | None = None,
+        title: str | None = None,
+    ) -> tuple[str, int, int]:
         if not file.is_file():
             raise FileNotFoundError(f"文件不存在：{file}")
         sha = sha256_file(file)
@@ -143,27 +186,48 @@ class IngestService:
         if not loaded.paragraphs:
             raise ZhiwenError("文档为空（无任何可检索段落）")
 
-        # 重建时的组织属性（文件夹归属 + 标题）：同名替换从被删行收走；
-        # reindex 场景行已整体清空，靠 uploads 路径映射取回。None = 保持
-        # 默认（根级 / 文件主名标题）。
+        # 重建时的组织属性（文件夹归属 + 标题）：同名替换从旧行收走（旧行本尊
+        # 要等文件就位后才删，见下）；reindex 场景行已整体清空，靠 uploads
+        # 路径映射取回。None = 保持默认（根级 / 文件主名标题）。
         keep_title: str | None = None
         keep_folder: int | None = None
+        keep_source: str | None = source_ref  # 本次显式带来的来源优先（导入链路）
+        replaced_id: int | None = None  # 同名替换待删的旧行（文件就位后才删，见下）
         with open_db(self.settings.db_path) as conn:
             existing = repo.get_document_by_path(conn, str(copy_path))
             if existing is not None:
                 if existing.file_sha256 == sha and not force:
                     return "skipped", 0, 0
-                # 同名更新：删行前先收走组织属性（文件夹 + 手动改过的标题）
+                # 同名更新：先收走组织属性（文件夹 + 手动改过的标题），**旧行
+                # 此刻不动**——它要等新副本在盘上就位之后才删。让位 rename 是
+                # 整条链路唯一会撞文件锁的一步（Windows 上任何打开着旧副本的
+                # 程序都能让 WinError 32），排在删行之后的话，失败就是"文档从
+                # 界面消失、文件还在盘上"，要等 reindex 才回得来（笔记还会降级
+                # 成普通文档）——2026-09-16 记录，2026-09-17 按此顺序修掉。
                 keep_title = existing.title
                 keep_folder = existing.folder_id
+                if keep_source is None:
+                    # 来源随文件一起继承：同名替换（用户重传同一份论文 PDF）
+                    # 不该把"它来自哪条在线记录"这条事实弄丢
+                    keep_source = existing.source_ref
                 logger.info("检测到同名更新：替换文档 #%s（%s）", existing.id, file.name)
-                if existing.id is not None:
-                    repo.delete_document(conn, existing.id)
-                    conn.commit()
+                replaced_id = existing.id
             else:
                 kept = self._reindex_keep.get(file.name)
                 if kept is not None:
-                    keep_title, keep_folder = kept
+                    keep_title, keep_folder, keep_source = (
+                        kept.title,
+                        kept.folder_id,
+                        kept.source_ref,
+                    )
+
+        # 显式标题优先级最高（笔记链路），必须压过同名替换继承来的旧标题，
+        # 否则"编辑笔记时改标题"永远不生效。放在这里而不是入库后补
+        # set_document_title：_chunk_and_persist 用 doc_title 构造索引词空间
+        # （《标题》｜标题路径），事后改标题会让"显示名"与"索引里的名字"漂移
+        # ——改完名搜不到新名字就是这么来的。
+        if title is not None:
+            keep_title = title
 
         copied = False
         displaced: Path | None = None  # 同名替换时被"让位"的旧副本
@@ -172,11 +236,11 @@ class IngestService:
             # 否则 shutil 会报"同一文件"（真实 bug 的回归见 test_service）
             copy_path.parent.mkdir(parents=True, exist_ok=True)
             # 同名替换：旧副本先**改名让位**（同目录 rename 瞬时完成、不复制
-            # 数据），入库成功后才真删。为什么不直接覆盖——旧行在上面已经
-            # 删掉并提交，若随后嵌入阶段失败（API 限流/超时/维度不符），
-            # 回滚会把新行和副本一起清掉，**旧文档在库与磁盘上同时消失**。
-            # 2026-09-11 打包前审查发现：当天"解析提前"只挡住了坏文件，
-            # 没挡住嵌入失败这条路径。
+            # 数据），入库成功后才真删。为什么不直接覆盖——旧行在文件就位后
+            # 就删掉并提交了，若随后嵌入阶段失败（API 限流/超时/维度不符），
+            # 回滚会把新副本清掉：直接覆盖 = **旧内容在磁盘上也不复存在**，
+            # 文档在库与磁盘上同时消失。2026-09-11 打包前审查发现：当天
+            # "解析提前"只挡住了坏文件，没挡住嵌入失败这条路径。
             if copy_path.is_file():
                 displaced = copy_path.with_name(f"{copy_path.name}.replacing")
                 displaced.unlink(missing_ok=True)
@@ -191,8 +255,20 @@ class IngestService:
 
         doc_id: int | None = None
         try:
+            if replaced_id is not None:
+                # 新副本已就位，这才删旧行（顺序纪律见上面"旧行此刻不动"）。
+                # 放进 try 是为了让下面的回滚把让位副本放回去：删除失败时
+                # 库与盘都得原样（这里是纯 DB 操作，失败基本只剩库损坏）
+                with open_db(self.settings.db_path) as conn:
+                    repo.delete_document(conn, replaced_id)
+                    conn.commit()
             doc_id, chunks, doc_title = self._chunk_and_persist(
-                loaded, copy_path, sha, title=keep_title, folder_id=keep_folder
+                loaded,
+                copy_path,
+                sha,
+                title=keep_title,
+                folder_id=keep_folder,
+                source_ref=keep_source,
             )
             self._embed_chunks(chunks, doc_title)
             self._mark_done(doc_id, len(chunks))
@@ -213,7 +289,16 @@ class IngestService:
                 displaced.rename(copy_path)
             raise
         if displaced is not None:
-            displaced.unlink(missing_ok=True)  # 成功：旧副本正式退役
+            # 成功之后的收尾：**绝不能让它把成功翻成失败**。旧副本若是只读或被别的
+            # 程序占着（Windows 文件锁），unlink 会抛 WinError 5/32 —— 原先它裸奔在
+            # try 之外，于是"新内容其实已经入库"的请求被翻成 400「入库失败」，用户
+            # 重试就多一篇（2026-09-16 对抗性实测）。
+            # 删不掉就留着：它是**旧正文**的副本、名字带 .replacing 后缀，
+            # 后缀过滤会让 reindex 永远看不到它（纯垃圾，不复活）。
+            try:
+                displaced.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("旧副本未能退役（不影响本次入库，可手工删除）：%s", displaced)
         return "ingested", len(chunks), loaded.char_count
 
     def exclusive(self) -> threading.RLock:
@@ -254,9 +339,10 @@ class IngestService:
             for doc in repo.list_documents(conn):
                 if doc.file_path:
                     # 用文件名做键：file_path 可能是脏历史值，但副本名稳定
-                    self._reindex_keep[PureWindowsPath(doc.file_path).name] = (
-                        doc.title,
-                        doc.folder_id,
+                    self._reindex_keep[PureWindowsPath(doc.file_path).name] = _KeptProps(
+                        title=doc.title,
+                        folder_id=doc.folder_id,
+                        source_ref=doc.source_ref,
                     )
                 if doc.id is not None:
                     repo.delete_document(conn, doc.id)
@@ -306,6 +392,7 @@ class IngestService:
         *,
         title: str | None = None,
         folder_id: int | None = None,
+        source_ref: str | None = None,
     ) -> tuple[int, list[Chunk], str]:
         """分块 + 落库。title/folder_id 是重建时的组织属性保留值（同名替换、
         reindex 场景由 ingest_one 传入）：title=None 用文件主名（默认语义），
@@ -345,6 +432,9 @@ class IngestService:
                 # 组织属性回写：insert 不落 folder_id 列（历史 schema 兼容，
                 # 见 repo.move_document），保留场景在同一事务内补 UPDATE
                 repo.move_document(conn, doc_id, folder_id)
+            if source_ref is not None:
+                # 同上（v4）：只有论文导入会带来源，"已在库中"标记靠它（ADR-0020）
+                repo.set_document_source_ref(conn, doc_id, source_ref)
             for chunk in chunks:
                 # frozen 模型的构造期改写：字段全量已知，仅差 document_id
                 object.__setattr__(chunk, "document_id", doc_id)

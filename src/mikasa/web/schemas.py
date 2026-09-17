@@ -5,9 +5,10 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from mikasa.pipeline.ask import AnswerMode
 
@@ -110,19 +111,55 @@ class ModelTestIn(BaseModel):
     api_key: str | None = Field(default=None, max_length=500, description="缺省=用已存密钥")
 
 
-class PaperSearchIn(BaseModel):
-    """在线论文检索请求体（POST /api/papers/search，见 ADR-0019）。
+class PaperFiltersIn(BaseModel):
+    """在线论文检索的筛选条件（能力对齐见 papers/sources.py 的 SourceCaps）。
 
-    offset/limit 是"全局交错窗口"（arxiv 占偶数位、openalex 占奇数位），
-    服务层换算成各源自己的 start/count；source=all 时两源合并。
+    各来源支持哪些只有它自己知道，**不支持的条件不会假装生效**：服务端
+    把降级说明放进取响应体的 notes（见 ADR-0020）。
+
+    日期是**完整 ISO 日期**而不是年份：界面给的是日期选择器，用户选了哪天
+    就用哪天（只取年份等于悄悄丢掉一半输入）。CORE 只支持到年，那属能力
+    边界、已在 caps 里声明。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    date_from: date | None = Field(default=None, description="起始日期（含）")
+    date_to: date | None = Field(default=None, description="结束日期（含）")
+    oa_only: bool = Field(default=False, description="只看开放获取全文")
+    language: str | None = Field(default=None, max_length=16, description="语言代码（zh/en）")
+    sort: Literal["relevance", "cited", "recent"] = Field(
+        default="relevance", description="排序：相关度 / 被引 / 时间"
+    )
+
+    @model_validator(mode="after")
+    def _check_date_range(self):
+        if self.date_from and self.date_to and self.date_from > self.date_to:
+            raise ValueError("起始日期不能晚于结束日期")
+        return self
+
+
+class PaperSearchIn(BaseModel):
+    """在线论文检索请求体（POST /api/papers/search，见 ADR-0019/0020）。
+
+    offset/limit 是"全局轮转窗口"（全局位置 p 归第 p % n 个来源），
+    服务层换算成各源自己的 start/count。
     """
 
     model_config = ConfigDict(frozen=True)
 
     q: str = Field(min_length=1, max_length=200, description="检索词（中文或英文）")
-    source: Literal["all", "arxiv", "openalex"] = Field(default="all", description="检索来源")
+    sources: list[Literal["arxiv", "openalex", "core"]] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=8,
+        description="来源选择集；缺省 = 全部来源",
+    )
     offset: int = Field(default=0, ge=0, le=100000, description="结果偏移（分页）")
     limit: int = Field(default=20, ge=1, le=50, description="每页条数")
+    filters: PaperFiltersIn = Field(
+        default_factory=PaperFiltersIn, description="筛选与排序（缺省 = 全默认）"
+    )
 
 
 class PaperImportIn(BaseModel):
@@ -134,8 +171,12 @@ class PaperImportIn(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    source: Literal["arxiv", "openalex"] = Field(description="来源（id 必属单一来源）")
-    id: str = Field(min_length=1, max_length=64, description="论文编号（arXiv id / OpenAlex W-id）")
+    source: Literal["arxiv", "openalex", "core"] = Field(description="来源（id 必属单一来源）")
+    id: str = Field(
+        min_length=1,
+        max_length=64,
+        description="论文编号（arXiv id / OpenAlex W-id / CORE 数字 id）",
+    )
 
 
 class PaperKeyIn(BaseModel):
@@ -162,3 +203,59 @@ class DocumentPatchIn(BaseModel):
 
     title: str | None = Field(default=None, max_length=120, description="新标题（非空）")
     folder_id: int | None = Field(default=None, description="目标文件夹；null=移回根")
+
+
+NOTE_BODY_MAX = 200_000
+"""笔记正文上限（字符数，≈200KB 文本 / 10 万字中文）。
+
+不是"能不能存下"的约束（SQLite 与 500MB 的上传上限都远大于此），而是
+**单次保存的嵌入耗时上界**：正文每次保存都要重新分块 + 重新嵌入，20 万字符
+≈ 500 块，本地 CPU 嵌入约 1-2 秒、远端嵌入接口约十几秒。笔记体裁远达不到
+这个量级，真到那个量级应该走"上传 .md 文件"（走同一条入库链路）。
+"""
+
+
+class NoteIn(BaseModel):
+    """新建笔记（POST /api/notes）：标题 + Markdown 正文 + 可选落夹。
+
+    title 的长度上限走 Pydantic（→422），空值判定走路由层（→400，
+    文案要面向笔记用户：空正文的 422 说不出"整篇都是代码块"这回事）。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    title: str = Field(max_length=120, description="笔记标题（非空）")
+    body: str = Field(description="Markdown 正文（见 _body_within_limit 的长度校验）")
+    folder_id: int | None = Field(default=None, description="落到哪个语料文件夹；null=根级")
+
+    @field_validator("body")
+    @classmethod
+    def _body_within_limit(cls, value: str) -> str:
+        """正文长度上限走校验器而不是 Field(max_length=…)：Pydantic 的默认文案是
+        英文（"String should have at most 200000 characters"），会原样弹到中文界面
+        上；而且默认约束错误会把整个正文回显进响应体（20 万字符 ≈ 600KB）。"""
+        if len(value) > NOTE_BODY_MAX:
+            raise ValueError(f"笔记正文过长（上限 {NOTE_BODY_MAX} 字符）")
+        return value
+
+
+class NoteUpdateIn(BaseModel):
+    """编辑笔记（PUT /api/notes/{id}）：标题与正文**全量**提交。
+
+    刻意不做"只传改动字段"的部分更新：编辑器的提交单位就是"这一屏内容"，
+    全量提交让"改标题不重入库"这类分支不存在。归属（folder_id）不在本模型里
+    ——移动是树的职责（拖拽/PATCH），编辑器的职责只有内容。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    title: str = Field(max_length=120, description="笔记标题（非空）")
+    body: str = Field(description="Markdown 正文（长度校验同 NoteIn）")
+
+    @field_validator("body")
+    @classmethod
+    def _body_within_limit(cls, value: str) -> str:
+        """同 NoteIn：中文文案 + 不回显正文。"""
+        if len(value) > NOTE_BODY_MAX:
+            raise ValueError(f"笔记正文过长（上限 {NOTE_BODY_MAX} 字符）")
+        return value

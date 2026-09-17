@@ -36,6 +36,19 @@ def _v2_conn(tmp_path, name: str = "mikasa.db") -> sqlite3.Connection:
     return conn
 
 
+def _v3_conn(tmp_path, name: str = "mikasa.db") -> sqlite3.Connection:
+    """按 v3 快照（M7 终态）建库并写版本行。
+
+    v3 的终态 = 快照 **+ folder_id 补列**（当时 init_db 全新库路径的两步
+    顺序）——只跑 executescript 造出来的是"缺 folder_id 的 v3"，不是真 v3。
+    """
+    conn = db.connect(tmp_path / name)
+    conn.executescript(db._SCHEMA_V3_SQL)
+    conn.execute(db._SCHEMA_DOC_FOLDER_ALTER)
+    conn.execute("INSERT INTO schema_version (version) VALUES (3)")
+    return conn
+
+
 def _table_names(conn: sqlite3.Connection) -> set[str]:
     rows = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     return {r["name"] for r in rows}
@@ -66,11 +79,12 @@ def test_fresh_db_builds_current_directly(tmp_path):
     conn.commit()
 
     version = int(conn.execute("SELECT version FROM schema_version").fetchone()["version"])
-    assert version == db.SCHEMA_VERSION == 3
+    assert version == db.SCHEMA_VERSION == 4
     tables = _table_names(conn)
     assert {"qa_folders", "kb_folders"} <= tables
     doc_cols = _columns(conn, "documents")
-    assert "folder_id" in doc_cols  # 补列覆层在全新库同样生效（与迁移库殊途同归）
+    # 补列覆层在全新库同样生效（与迁移库殊途同归）：逐版累加，一个都不少
+    assert {"folder_id", "source_ref"} <= doc_cols
     cols = _columns(conn, "qa_sessions")
     assert {"title", "title_manual", "folder_id"} <= cols
     assert cols >= {
@@ -144,10 +158,11 @@ def test_v1_db_migrates_preserving_data_and_backfills_titles(tmp_path):
     conn = db.connect(tmp_path / "mikasa.db")
     db.init_db(conn)
 
-    assert int(conn.execute("SELECT version FROM schema_version").fetchone()["version"]) == 3
+    assert int(conn.execute("SELECT version FROM schema_version").fetchone()["version"]) == 4
     tables = _table_names(conn)
     assert {"qa_folders", "kb_folders"} <= tables
-    assert "folder_id" in _columns(conn, "documents")  # v1 时代的文档行补列后 NULL=根
+    # v1 时代的文档行：逐版补列后 folder_id/source_ref 均为 NULL（根级/无来源）
+    assert {"folder_id", "source_ref"} <= _columns(conn, "documents")
     cols = _columns(conn, "qa_sessions")
     assert {"title", "title_manual", "folder_id"} <= cols
 
@@ -191,8 +206,8 @@ def test_migration_resumes_after_crash_before_version_row(tmp_path):
     repo.set_session_title(conn, sessions[0]["id"], "手动改名")
     conn.commit()
 
-    db.init_db(conn)  # 续跑：应无异常、版本回到 3
-    assert int(conn.execute("SELECT version FROM schema_version").fetchone()["version"]) == 3
+    db.init_db(conn)  # 续跑：应无异常、版本回到当前
+    assert int(conn.execute("SELECT version FROM schema_version").fetchone()["version"]) == 4
     after = repo.list_sessions(conn)
     # 已命名会话（无论手动与否）不被回填覆盖；未命名会话标题补回。
     # 注意 list_sessions 按 id 倒序，勿按位置对应会话。
@@ -281,7 +296,7 @@ def test_v2_db_migrates_v3_preserving_everything(tmp_path):
 
     conn = db.connect(tmp_path / "mikasa.db")
     db.init_db(conn)
-    assert int(conn.execute("SELECT version FROM schema_version").fetchone()["version"]) == 3
+    assert int(conn.execute("SELECT version FROM schema_version").fetchone()["version"]) == 4
     assert "kb_folders" in _table_names(conn)
     # documents 补列到位，存量行 folder_id = NULL（根级，不猜测归属）
     assert "folder_id" in _columns(conn, "documents")
@@ -301,19 +316,79 @@ def test_v2_db_migrates_v3_preserving_everything(tmp_path):
 
 
 def test_v2_to_v3_migration_resumes_after_crash(tmp_path):
-    """v2→v3 半途崩溃续跑：版本行回退到 2 时重跑不重列、版本回 3。"""
+    """v2 半途崩溃续跑：版本行回退到 2 时重跑不重列、逐级走到当前版本。"""
     conn = _v2_conn(tmp_path)
     _add_v2_doc(conn, "甲")
     conn.commit()
-    db.init_db(conn)  # 完整迁移到 v3
-    conn.execute("UPDATE schema_version SET version = 2 WHERE version = 3")
+    db.init_db(conn)  # 完整迁移到当前版本
+    conn.execute("UPDATE schema_version SET version = 2 WHERE version = 4")
     conn.commit()
 
-    db.init_db(conn)  # 续跑：kb_folders 已建、列已加 → 守卫下空操作
-    assert int(conn.execute("SELECT version FROM schema_version").fetchone()["version"]) == 3
-    # 补列只加过一次（列集合里 folder_id 只出现一次）
+    db.init_db(conn)  # 续跑：kb_folders 已建、两列都已加 → 守卫下空操作
+    assert int(conn.execute("SELECT version FROM schema_version").fetchone()["version"]) == 4
+    # 补列只加过一次（列集合里各自只出现一次）
     info = conn.execute("PRAGMA table_info(documents)").fetchall()
-    assert [r["name"] for r in info].count("folder_id") == 1
+    names = [r["name"] for r in info]
+    assert names.count("folder_id") == 1 and names.count("source_ref") == 1
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# v3 → v4（v4 = documents.source_ref 补列：论文在线来源标识）
+# ---------------------------------------------------------------------------
+
+
+def _add_v3_doc(conn: sqlite3.Connection, title: str, folder_id: int | None = None) -> int:
+    """v3 时代插入文档（v3 已有 folder_id、**无** source_ref——模拟当时
+    程序会写出的 SQL，不用现版 repo.insert_document 的列清单）。"""
+    cur = conn.execute(
+        """INSERT INTO documents (title, file_path, file_type, file_sha256, char_count, folder_id)
+           VALUES (?, ?, ?, ?, 0, ?)""",
+        (title, f"uploads/{title}.md", "md", "sha-" + title, folder_id),
+    )
+    return int(cur.lastrowid)
+
+
+def test_v3_db_migrates_v4_preserving_everything(tmp_path):
+    """v3 存量库：v4 迁移后数据原样、documents 补 source_ref 列且存量全 NULL。"""
+    conn = _v3_conn(tmp_path)
+    kb = repo.create_kb_folder(conn, "论文")
+    sid = repo.create_session(conn, "offline")
+    repo.set_session_title(conn, sid, "手动名")
+    d1 = _add_v3_doc(conn, "甲", folder_id=kb)
+    _add_v3_doc(conn, "乙")
+    conn.commit()
+    conn.close()
+
+    conn = db.connect(tmp_path / "mikasa.db")
+    db.init_db(conn)
+    assert int(conn.execute("SELECT version FROM schema_version").fetchone()["version"]) == 4
+    assert "source_ref" in _columns(conn, "documents")
+    docs = conn.execute("SELECT id, folder_id, source_ref FROM documents ORDER BY id").fetchall()
+    assert [r["id"] for r in docs] == [d1, d1 + 1]
+    assert docs[0]["folder_id"] == kb  # v3 整理好的归属不丢
+    # 存量行 source_ref 全 NULL：v4 之前导入的论文无从考证来源（不猜）
+    assert all(r["source_ref"] is None for r in docs)
+    assert repo.get_session(conn, sid)["title"] == "手动名"
+    # v4 新能力即刻可用：写来源 → 集合查询命中
+    repo.set_document_source_ref(conn, d1, "arxiv:2401.12345")
+    assert repo.list_source_refs(conn) == {"arxiv:2401.12345"}
+    conn.close()
+
+
+def test_v3_to_v4_migration_resumes_after_crash(tmp_path):
+    """v3→v4 半途崩溃续跑：版本行回退到 3 时重跑不重列、版本回 4。"""
+    conn = _v3_conn(tmp_path)
+    _add_v3_doc(conn, "甲")
+    conn.commit()
+    db.init_db(conn)  # 完整迁移到 v4
+    conn.execute("UPDATE schema_version SET version = 3 WHERE version = 4")
+    conn.commit()
+
+    db.init_db(conn)  # 续跑：列已加 → 守卫下空操作
+    assert int(conn.execute("SELECT version FROM schema_version").fetchone()["version"]) == 4
+    info = conn.execute("PRAGMA table_info(documents)").fetchall()
+    assert [r["name"] for r in info].count("source_ref") == 1
     conn.close()
 
 

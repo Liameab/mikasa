@@ -23,7 +23,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 from mikasa.papers.errors import PaperError
-from mikasa.papers.sources import PaperResult
+from mikasa.papers.sources import PaperFilters, PaperResult, SourceCaps
 
 # 官方建议的最低请求间隔（秒）：礼貌限速，别把公共 API 打爆
 _ARXIV_MIN_INTERVAL = 3.0
@@ -51,26 +51,32 @@ _last_ok = 0.0
 
 
 def _http_get(url: str, timeout: float) -> bytes:
-    """唯一网络缝：GET 并读全部字节；成功后按官方限速补睡。
+    """唯一网络缝：GET 并读全部字节；**发起前**按官方限速等够间隔。
 
-    单测/E2E 都从这里打桩（或覆盖 base URL），stdout 之外不再有第二处
-    联网。节流只对真实成功请求生效——失败重试不该再付等待成本。
+    单测/E2E 都从这里打桩（或覆盖 base URL），stdout 之外不再有第二处联网。
+
+    **节流记在发起前，成功失败都算一次请求**（2026-09-16 修正）：原实现
+    "成功后补睡"，理由是"失败重试不该再付等待成本"——实测站不住：连打几次
+    后 arXiv 回 429，而它恰恰把**失败请求也算进配额**，于是"越失败越猛打"
+    把额度越打越死（当天三个源里两个被自己打成 429）。发前节流才是正确的
+    礼貌客户端行为。
     """
     global _last_ok
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = resp.read()
-    except urllib.error.HTTPError as exc:
-        raise PaperError(f"arXiv 服务返回错误（HTTP {exc.code}），请稍后重试") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
-        raise PaperError("无法连接 arXiv（网络不可达或超时），请稍后重试") from exc
     with _throttle:
         wait = _last_ok + _ARXIV_MIN_INTERVAL - time.monotonic()
         if wait > 0:
             time.sleep(wait)
         _last_ok = time.monotonic()
-    return data
+    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code == 429:
+            raise PaperError("arXiv 请求过于频繁（HTTP 429），请等半分钟再试") from exc
+        raise PaperError(f"arXiv 服务返回错误（HTTP {exc.code}），请稍后重试") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise PaperError("无法连接 arXiv（网络不可达或超时），请稍后重试") from exc
 
 
 def _local(tag: str) -> str:
@@ -93,6 +99,11 @@ def _text(elem: ET.Element | None) -> str:
 def validate_id(paper_id: str) -> bool:
     """id 形状校验（解析与路由双重调用；拼接 PDF URL 前的卫生检查）。"""
     return bool(_ARXIV_ID_RE.fullmatch(paper_id))
+
+
+def _compact(date_iso: str | None, fallback: str) -> str:
+    """ISO 日期 "2021-03-15" → "20210315"（arXiv 的 submittedDate 格式）。"""
+    return (date_iso or fallback).replace("-", "")
 
 
 def _normalize_id(raw: str) -> str:
@@ -162,19 +173,43 @@ def _parse_feed(data: bytes) -> list[PaperResult]:
 
 
 class ArxivSource:
-    """arXiv 来源：search 走 all: 检索，fetch 走 id_list 反查。"""
+    """arXiv 来源：search 走 all: 检索，fetch 走 id_list 反查。
+
+    能力（实测）：年份区间与"按时间排序"都支持（前者走查询语法
+    `submittedDate:[…]`，后者走 sortBy/sortOrder）；**没有被引数据**，
+    所以 cited_sort=False、results 的 cited_by 恒为 None；全部开放获取。
+    """
 
     name = "arxiv"
+    label = "arXiv"
+    caps = SourceCaps(year=True, cited_sort=False, recent_sort=True, language=False, oa="always")
 
-    def search(self, q: str, start: int, count: int) -> tuple[list[PaperResult], bool]:
+    def search(
+        self,
+        q: str,
+        start: int,
+        count: int,
+        *,
+        filters: PaperFilters | None = None,
+    ) -> tuple[list[PaperResult], bool]:
         # 引号会改变 arXiv 的查询语义（精确短语），用户输入不该有这种权力
         query = " ".join(q.replace('"', " ").split())
+        # 日期区间：arXiv 只认查询语法里的 submittedDate，格式 YYYYMMDDHHMM
+        # （端点参数没有这一项）——完整日期直接进，不做"只取年份"的暗改
+        if filters is not None and (filters.date_from or filters.date_to):
+            low = f"{_compact(filters.date_from, '1900-01-01')}0000"
+            high = f"{_compact(filters.date_to, '2100-12-31')}2359"
+            query = f"{query} AND submittedDate:[{low} TO {high}]"
+        sort_by, sort_order = "relevance", "descending"
+        if filters is not None and filters.sort == "recent":
+            sort_by = "submittedDate"
         params = urllib.parse.urlencode(
             {
                 "search_query": f'all:"{query}"',
                 "start": start,
                 "max_results": count,
-                "sortBy": "relevance",
+                "sortBy": sort_by,
+                "sortOrder": sort_order,
             }
         )
         results = _parse_feed(_http_get(f"{_base_url()}?{params}", timeout=15.0))

@@ -86,6 +86,7 @@ z-index:
   settings-panel: 40
   reader-panel: 50
   ctx-menu: 60
+  note-editor: 70
   confirm: 90
   toast: 100
   onboard: 200
@@ -308,8 +309,8 @@ components:
 
 ## Overview
 
-Mikasa's UI is a **dense, dark, single-user workbench**: three pages (ask / library /
-evaluation) inside one window, driven with a mouse and a keyboard, largely offline.
+Mikasa's UI is a **dense, dark, single-user workbench**: four pages (ask / library /
+find-papers / evaluation) inside one window, driven with a mouse and a keyboard, largely offline.
 
 - **Desktop window first**; the layout is built for a packaged desktop app and a browser
   tab on the same machine, not for phones. There is exactly **one** responsive rule in
@@ -423,7 +424,7 @@ the browser's default 13.3px Times.
 | `{typography.row-strong}` | 13px | 600 | Tree row names, primary buttons, selected/current emphasis. |
 | `{typography.row}` | 13px | 400 | Tree rows, table cells, menu items, citation cards. |
 | `{typography.caption}` | 12px | 400 | `.small`, `.pill`, hints, meta lines. |
-| chip / mode label | 12.5px | 400 | `.s-chip`, `.mode-btn`, `.to-bottom`, `.paper-abstract` — the half-step between caption and row. |
+| chip / mode label | 12.5px | 400 | `.s-chip`, `.mode-btn`, `.to-bottom` — the half-step between caption and row. |
 | `{typography.micro}` | 11px | 400 | Badges, `.s-meta`, code language labels, msg `who`. |
 | `{typography.stat-value}` | 20px | 700 | Eval metric values (with `tabular-nums`). |
 
@@ -503,7 +504,11 @@ The z-index ladder is part of this system and must not be improvised:
 10  topbar (sticky)      40  settings panel     90  confirm backdrop
 30  to-bottom button     50  reader panel      100  toast
                          60  ctx menu          200  onboard mask (covers everything)
+                         70  note editor
 ```
+
+The note editor sits between the context menu and the confirm dialog on purpose: the
+"discard unsaved changes?" confirmation has to cover the editor it is asking about.
 
 Toast sits above the confirm dialog on purpose (an action's result should be visible after
 the dialog closes); the on-boarding mask covers everything because it is the product's first
@@ -579,9 +584,18 @@ Evaluation：`.run-list` / `.run-item`（`.active`）· `.progress-track` / `.pr
 `.md`（报告渲染）· `.stat-grid`
 
 Library：`.dropzone`（`.drag`）· `.doc-item`（`.meta-bad` / `.meta-busy`）· `.dd-grid` ·
-`.dd-open` · `.paper-*`（在线找论文：`.paper-form` / `.paper-bar` / `.paper-results` /
-`.paper-item` / `.paper-title` / `.paper-src` / `.paper-meta` / `.paper-actions` /
-`.paper-abstract` / `.paper-status` / `.paper-key-row`）
+`.dd-open`
+
+Find-papers page (ADR-0020)：`.papers-layout`（grid 三栏）· sidebar `.p-filter` /
+`.p-filter-label` / `.p-check` / `.p-year` / `.p-note` / `.p-sorts` · results
+`.paper-form` / `.paper-bar` / `.paper-results` / `.paper-item`（`.on` = selected）/
+`.paper-head` / `.paper-title` / `.paper-src` / `.paper-meta` / `.paper-cites` /
+`.paper-snippet` / `.paper-inlib` / `.paper-actions` / `.paper-status` / `.paper-key-row` ·
+detail `.pd-title` / `.pd-meta` / `.pd-body` / `.pd-actions` / `.pd-exits`
+
+Note editor (M6 ①)：`.note-backdrop` · `.note-box` / `.note-head` / `.note-title` ·
+`.note-split` / `.note-input` / `.note-preview` · `.note-foot` / `.note-folder-wrap` /
+`.note-folder` / `.note-hint`
 
 Reader：`.reader-panel` / `.reader-inline` · `.rd-head`（`.rd-title` / `.rd-tabs` / `.rd-zoom`）·
 `.rd-body` / `.rd-text` / `.rd-orig` / `.rd-frame` · `.rd-chunk`（`.lit`）· `.rd-page-*`

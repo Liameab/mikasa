@@ -27,12 +27,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
 from mikasa.config.settings import Settings, clear_api_key, write_api_key
-from mikasa.papers import PaperError, fetch_paper
+from mikasa.papers import PaperError, PaperFilters, fetch_paper, source_catalog
 from mikasa.papers import search as papers_search
 from mikasa.papers.arxiv import validate_id as validate_arxiv_id
+from mikasa.papers.core import validate_id as validate_core_id
 from mikasa.papers.download import download_pdf
 from mikasa.papers.openalex import validate_id as validate_openalex_id
-from mikasa.papers.service import SOURCES
+from mikasa.storage import repo
+from mikasa.storage.db import open_db
 from mikasa.utils.hashing import sha256_file
 from mikasa.utils.logging import get_logger
 from mikasa.web.deps import get_services, get_settings
@@ -50,10 +52,17 @@ _KEY_LOCK = threading.Lock()
 _TITLE_CAP = 80
 
 
+_ID_VALIDATORS = {
+    "arxiv": validate_arxiv_id,
+    "openalex": validate_openalex_id,
+    "core": validate_core_id,
+}
+
+
 def _validate_source_id(source: str, paper_id: str) -> None:
     """id 白名单（客户端输入，双重校验：正则过了才进来源 API 的拼接 URL）。"""
-    valid = validate_arxiv_id(paper_id) if source == "arxiv" else validate_openalex_id(paper_id)
-    if not valid:
+    validator = _ID_VALIDATORS.get(source)
+    if validator is None or not validator(paper_id):
         raise HTTPException(status_code=422, detail=f"非法的论文编号：{paper_id}")
 
 
@@ -69,22 +78,48 @@ def _discard_tmp(tmp_path: Path) -> None:
         logger.warning("web-tmp 临时目录未能清理：%s", tmp_path.parent)
 
 
-def _search_source_names(body: PaperSearchIn) -> int:
-    """本次请求实际打几个源（用于"全灭才 502"的判定）。"""
-    return len(SOURCES) if body.source == "all" else 1
+@router.get("/api/papers/sources")
+def list_paper_sources() -> dict:
+    """来源目录与能力声明（前端据此渲染来源多选与筛选器的可用性）。
+
+    能力值来自各来源类的 `caps`（只以实测为准，见 ADR-0020）——前端
+    **不硬编码任何来源名或能力**。
+    """
+    return {"sources": source_catalog()}
 
 
 @router.post("/api/papers/search")
-def search_papers(body: PaperSearchIn) -> dict:
-    """检索一页。逐源降级：单源失败进 errors 字典（照常 200），全灭才 502。"""
-    page = papers_search(body.q, body.source, body.offset, body.limit)
-    if not page.results and len(page.errors) == _search_source_names(body):
+def search_papers(
+    body: PaperSearchIn,
+    services=Depends(get_services),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """检索一页。逐源降级：单源失败进 errors（照常 200），全灭才 502。"""
+    filters = PaperFilters(
+        date_from=body.filters.date_from.isoformat() if body.filters.date_from else None,
+        date_to=body.filters.date_to.isoformat() if body.filters.date_to else None,
+        oa_only=body.filters.oa_only,
+        language=body.filters.language,
+        sort=body.filters.sort,
+    )
+    page = papers_search(body.q, body.sources, body.offset, body.limit, filters)
+    # 502 判据看**实际发出请求**的来源（本页分配 0 个位、或选择集为空的源
+    # 不参与）——用"选中数"当分母会永远凑不齐，该 502 的场景会变成 200 空结果
+    if not page.results and page.attempted and set(page.errors) == set(page.attempted):
         raise HTTPException(
             status_code=502, detail="论文检索暂时不可用：" + "；".join(page.errors.values())
         )
+    with open_db(settings.db_path) as conn:
+        in_library = repo.list_source_refs(conn)
+    results = []
+    for paper in page.results:
+        item = dataclasses.asdict(paper)
+        item["in_library"] = f"{paper.source}:{paper.id}" in in_library
+        results.append(item)
     return {
-        "results": [dataclasses.asdict(r) for r in page.results],
+        "results": results,
         "errors": page.errors,
+        "notes": page.notes,
         "has_more": page.has_more,
     }
 
@@ -127,8 +162,17 @@ def import_paper(
             status_code=502, detail=f"论文下载失败：{type(exc).__name__}: {exc}"
         ) from exc
     file_sha = sha256_file(tmp_path)
-    # ingest_web_file 自带 ZhiwenError→400 翻译与 finally 清理，这里直接交棒
-    return ingest_web_file(tmp_path, safe_name, file_sha, services, settings)
+    # ingest_web_file 自带 ZhiwenError→400 翻译与 finally 清理，这里直接交棒。
+    # source_ref 是**唯一**知道"这篇文档来自哪条在线记录"的地方：入库后它
+    # 落进 documents.source_ref，「找论文」页据此标"已在库中"（ADR-0020）。
+    return ingest_web_file(
+        tmp_path,
+        safe_name,
+        file_sha,
+        services,
+        settings,
+        source_ref=f"{body.source}:{body.id}",
+    )
 
 
 @router.get("/api/papers/settings")

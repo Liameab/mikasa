@@ -23,9 +23,9 @@ def test_health_counts_corpus_after_seed(seeded_client):
 
 
 def test_pages_served(client):
-    """三页 + 首页：浏览器直开的入口。"""
+    """四页 + 首页：浏览器直开的入口（找论文页见 ADR-0020）。"""
     c, _ = client
-    for path in ("/", "/documents", "/eval"):
+    for path in ("/", "/documents", "/papers", "/eval"):
         resp = c.get(path)
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/html")

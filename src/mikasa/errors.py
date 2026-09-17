@@ -11,10 +11,20 @@ import re
 # 段内**允许空格**（`C:\Program Files\...` 是常态，按空白切会把路径截成两半，
 # 留下 "Program Files\Mikasa\..." 这种既泄漏又看不懂的残渣）；段边界用 Windows
 # 文件名的非法字符集划，不用空白划。
+#
+# 分隔符写作 `\\+`（**一个或多个**反斜杠）而不是单个：Windows 上 `str(OSError)`
+# 会用 repr() 拼文件名，里面的反斜杠被转义成两个——
+# `[WinError 32] 另一个程序正在使用此文件: 'C:\\Users\\…\\a.md'`。
+# 只认单反斜杠的版本对这类消息**完全失配**，路径原样进响应体（2026-09-16
+# 对抗性实测：只读/被占用的 uploads 副本触发 PermissionError 就能复现）。
+#
+# 已知的过度匹配（cosmetic，不修）：POSIX 分支会把
+# `（支持：.docx/.markdown/.md/.pdf/.txt）` 这种"斜杠分隔的扩展名清单"当成
+# 路径、只留最后一段。它只影响文案，不影响脱敏目标。
 _WIN_SEG = r"[^\\/:*?\"<>|\r\n]+"
 _ABS_PATH = re.compile(
-    rf"[A-Za-z]:\\(?:{_WIN_SEG}\\)*{_WIN_SEG}"
-    rf"|\\\\{_WIN_SEG}\\{_WIN_SEG}(?:\\{_WIN_SEG})*"
+    rf"[A-Za-z]:\\+(?:{_WIN_SEG}\\+){{0,}}{_WIN_SEG}"
+    rf"|\\+{_WIN_SEG}\\+(?:{_WIN_SEG}\\+){{0,}}{_WIN_SEG}"
     r"|/(?:[^\s'\"<>|:]+/)+[^\s'\"<>|:]*"
 )
 
@@ -29,7 +39,7 @@ def strip_paths(text: str) -> str:
 
     只留最后一段：报错仍然指得出是哪个文件，但看不出服务器装在哪儿。
     """
-    return _ABS_PATH.sub(lambda m: re.split(r"[\\/]", m.group(0))[-1] or m.group(0), text)
+    return _ABS_PATH.sub(lambda m: re.split(r"[\\/]+", m.group(0))[-1] or m.group(0), text)
 
 
 class ZhiwenError(Exception):

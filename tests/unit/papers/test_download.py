@@ -42,14 +42,28 @@ def test_https_mixed_public_private_rejected():
         dl._check_host("x", 443, resolve=lambda h, p, **k: _addrinfo("93.184.216.34", "10.0.0.1"))
 
 
-def test_http_loopback_allowed_only():
+def test_http_public_and_loopback_allowed():
+    """http：公网与回环都放行（2026-09-16 放宽，理由见 download.py 模块头）。
+
+    实测中文开放获取论文约六成全文链接是明文 http（国内期刊/仓储普遍没上
+    https），只收 https 等于"搜得到、导不进来"。链接来自上游记录而非用户
+    输入、下的是公开论文、不带凭据，故放行公网 http；SSRF 防线（打不到内网）
+    与协议无关，保持不变。
+    """
     dl._validate_url("http://127.0.0.1:8080/pdf", resolve=lambda h, p, **k: _addrinfo("127.0.0.1"))
-    with pytest.raises(PaperError, match="本地回环"):
+    dl._validate_url("http://example.com/x", resolve=lambda h, p, **k: _addrinfo("93.184.216.34"))
+
+
+def test_http_private_still_rejected():
+    """内网/保留地址在 http 下同样一律拒——这条是 SSRF 防线的本体。"""
+    for ip in ("192.168.1.1", "10.0.0.1", "172.16.0.1", "169.254.1.1"):
+        with pytest.raises(PaperError, match="安全策略"):
+            dl._validate_url("http://intranet/x", resolve=lambda h, p, ip=ip, **k: _addrinfo(ip))
+    # 双栈混合：任一地址落到内网即拒
+    with pytest.raises(PaperError, match="安全策略"):
         dl._validate_url(
-            "http://example.com/x", resolve=lambda h, p, **k: _addrinfo("93.184.216.34")
+            "http://x/y", resolve=lambda h, p, **k: _addrinfo("93.184.216.34", "10.0.0.1")
         )
-    with pytest.raises(PaperError, match="本地回环"):
-        dl._validate_url("http://192.168.1.1/x", resolve=lambda h, p, **k: _addrinfo("192.168.1.1"))
 
 
 def test_validate_url_scheme_and_credentials():

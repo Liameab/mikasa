@@ -86,6 +86,7 @@ z-index:
   settings-panel: 40
   reader-panel: 50
   ctx-menu: 60
+  note-editor: 70
   confirm: 90
   toast: 100
   onboard: 200
@@ -308,7 +309,7 @@ components:
 
 ## 总览
 
-Mikasa 的界面是一个**紧凑、暗色、单用户的桌面工作台**：三页（问答 / 知识库 / 评测）装在
+Mikasa 的界面是一个**紧凑、暗色、单用户的桌面工作台**：四页（问答 / 知识库 / 找论文 / 评测）装在
 一个窗口里，用鼠标与键盘操作，大量时间离线运行。
 
 - **桌面窗口优先**：整套样式是按"打包成桌面应用"和"本机浏览器标签页"来写的，不是给手机的。
@@ -413,7 +414,7 @@ Consolas, "Courier New", monospace                                    /* 代码 
 | `{typography.row-strong}` | 13px | 600 | 树行名、主按钮、选中/当前强调。 |
 | `{typography.row}` | 13px | 400 | 树行、表格单元、菜单项、引用卡。 |
 | `{typography.caption}` | 12px | 400 | `.small`、`.pill`、提示、元信息行。 |
-| chip / 模式标签 | 12.5px | 400 | `.s-chip`、`.mode-btn`、`.to-bottom`、`.paper-abstract`——处于 caption 与 row 之间的半档。 |
+| chip / 模式标签 | 12.5px | 400 | `.s-chip`、`.mode-btn`、`.to-bottom`——处于 caption 与 row 之间的半档。 |
 | `{typography.micro}` | 11px | 400 | 徽标、`.s-meta`、代码语言标签、消息署名。 |
 | `{typography.stat-value}` | 20px | 700 | 评测指标数值（配 `tabular-nums`）。 |
 
@@ -484,7 +485,11 @@ z-index 阶梯是这套系统的一部分，不许临时发明：
 10  顶栏（sticky）        40  设置面板        90  确认框遮罩
 30  回到底部按钮         50  阅读面板       100  toast
                          60  ⋯ 菜单         200  首启引导遮罩（盖住一切）
+                         70  笔记编辑器
 ```
+
+笔记编辑器刻意夹在 ⋯ 菜单与确认框之间：「放弃未保存的修改？」必须能盖住它正在问的
+那个编辑器。
 
 toast 刻意压在确认框之上（动作结果要在弹窗关掉后仍看得见）；首启引导盖住一切，因为它
 是产品的第一句话。`#toast` 容器自身 `pointer-events: none`、子元素可点——落在面板头部上方
@@ -558,9 +563,18 @@ toast 刻意压在确认框之上（动作结果要在弹窗关掉后仍看得�
 `.md`（报告渲染）· `.stat-grid`
 
 知识库：`.dropzone`（`.drag`）· `.doc-item`（`.meta-bad` / `.meta-busy`）· `.dd-grid` ·
-`.dd-open` · `.paper-*`（在线找论文：`.paper-form` / `.paper-bar` / `.paper-results` /
-`.paper-item` / `.paper-title` / `.paper-src` / `.paper-meta` / `.paper-actions` /
-`.paper-abstract` / `.paper-status` / `.paper-key-row`）
+`.dd-open`
+
+找论文页（ADR-0020）：`.papers-layout`（三栏网格）· 筛选栏 `.p-filter` / `.p-filter-label` /
+`.p-check` / `.p-year` / `.p-note` / `.p-sorts` · 结果 `.paper-form` / `.paper-bar` /
+`.paper-results` / `.paper-item`（`.on` = 选中）/ `.paper-head` / `.paper-title` / `.paper-src` /
+`.paper-meta` / `.paper-cites` / `.paper-snippet` / `.paper-inlib` ·
+`.paper-actions` / `.paper-status` / `.paper-key-row` · 详情
+`.pd-title` / `.pd-meta` / `.pd-body` / `.pd-actions` / `.pd-exits`
+
+笔记编辑器（M6 ①）：`.note-backdrop` · `.note-box` / `.note-head` / `.note-title` ·
+`.note-split` / `.note-input` / `.note-preview` · `.note-foot` / `.note-folder-wrap` /
+`.note-folder` / `.note-hint`
 
 阅读器：`.reader-panel` / `.reader-inline` · `.rd-head`（`.rd-title` / `.rd-tabs` / `.rd-zoom`）·
 `.rd-body` / `.rd-text` / `.rd-orig` / `.rd-frame` · `.rd-chunk`（`.lit`）· `.rd-page-*`

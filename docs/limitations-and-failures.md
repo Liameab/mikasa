@@ -145,8 +145,8 @@ migration (v1→v2) is in the ADR-0004 revision section.
   VIP exclusive full text is unreachable (paywall, no public API); the panel and the docs say
   "CNKI-like experience, not CNKI's data" in as many words, and a paper without open-access full
   text offers a DOI landing-page jump instead of an import;
-- **Paging is forward-only**: the interleaved window advances by the number of results received
-  (arXiv takes the even global positions, OpenAlex the odd ones), so there is no "jump to page N"
+- **Paging is forward-only**: the rotating window advances by `limit` per page (source order comes
+  from the registry, global position `p` belongs to source `p % n`), so there is no "jump to page N"
   and no reliable total; each page costs one upstream request per source;
 - **arXiv's politeness throttle (~1 request/3 s) is felt by the user**: a single search can be two
   upstream calls, and back-to-back searches wait out the interval — a deliberate trade against
@@ -159,6 +159,110 @@ migration (v1→v2) is in the ADR-0004 revision section.
 - **The API key is a quota knob, not a requirement**: anonymous OpenAlex access only has a small
   trial quota, so heavy use wants the free key in the panel; the service still works without one
   until the quota runs out (the error message says what to do).
+
+### Per-source capability gaps (M8, ADR-0020)
+
+Each of these was measured on 2026-09-16, and each is why the search page disables an option rather
+than offering one that quietly does nothing:
+
+- **CORE has no citation sort**: `sort=citationCount` answers HTTP 500, so the source declares
+  `cited_sort=False` and falls back to relevance (the response says so in `notes`);
+- **CORE rate-limits hard**: five or six quick requests are enough to earn a 429, so the source
+  carries its own 2-second throttle (arXiv's is 3);
+- **Many Chinese open-access links are `http://`, and some hosts block programmatic downloads.**
+  Measured 2026-09-16: 5/7 and 3/6 of the Chinese sample's full-text links were plain http (English:
+  0/15), so the downloader now accepts public http as well (ADR-0020 point 11, SSRF checks unchanged).
+  That closed the self-inflicted half of the gap — a Chinese http full text imports fine — but a
+  second host answered **403 no matter what headers were sent** (browser UA, `Accept`, `Referer`), so
+  a share of Chinese records stay unimportable because the upstream blocks automated clients. The
+  error surfaces as a 502 carrying the upstream status; downloading those manually and uploading them
+  through the library page works;
+- **CORE's `yearPublished` is dirty**: observed values include `710300` and `202022` (the latter is
+  a YYYYMM), so years are read as the first four digits and range-checked to 1900–2100, and
+  anything else becomes "year unknown";
+- **CORE's year filter only works through query syntax.** The `yearFrom`/`yearTo` parameters return
+  HTTP 200 while being silently ignored — asking for 2020+ returned papers from 2012/2018/2010.
+  The source therefore appends `AND yearPublished>=YYYY` to the query. This is the canonical
+  example of "false support";
+- **arXiv has no citation data at all**, so "sort by most cited" is offered only while a source
+  that has citations is selected, and arXiv rows read "被引数据：该来源不提供" — 0 citations and
+  "unknown" are deliberately worded differently;
+- **OpenAlex's deep paging is capped** by its 200-record page size: a window that cannot fit comes
+  back short, `has_more` turns false and that source stops paging rather than pretending;
+- **Two candidates were rejected on evidence**: Semantic Scholar answers 429 on its anonymous pool
+  (twice, ~2s apart) so it would need a free key before it can be a source at all; ChinaXiv's
+  `/api/search` returns "请求方法应为POST" for GET and for two POST encodings alike, and `/oai`
+  refuses anonymous access — reaching it would mean scraping HTML, which is out of bounds.
+
+### Notes: what the editor shows is not always what retrieval sees (M6 ①, ADR-0021)
+
+A note is stored byte-exact, but the *parsed* text that becomes chunks passes through the same
+Markdown pipeline as any uploaded `.md` — with the following consequences, all accepted rather than
+worked around (each fix would change the loader for **every** Markdown document in every corpus):
+
+- **Fenced code blocks never enter retrieval.** The loader skips them wholesale so that a `#` inside a
+  code sample is not read as a heading. A note that is *only* a code block therefore produces zero
+  paragraphs and is rejected with `400 笔记正文不能为空`-class wording; a mixed note is searchable by its
+  prose, not by its code.
+- **`strip_repeated_lines` (≥3 identical lines) runs on md/txt.** Blank lines are preserved (they carry
+  paragraph structure) and a line appearing once or twice is kept, but a line appearing three or more
+  times survives only at its first occurrence — a note with three structurally identical tables loses
+  the later `| --- | --- |` separators *in the index*, though the file itself is untouched.
+- **Setext still applies.** A `---` line directly under a text line (no blank line between) makes that
+  text an H2 heading rather than a paragraph.
+- **`Cf` characters (zero-width spaces, ZWJ sequences in emoji) are dropped from the index text** by
+  `normalize_text`, again only in the indexed copy.
+- **Every save rebuilds the row.** Same-name replacement deletes the old document row and inserts a new
+  one, so `documents.id` changes and older answers' citation chips point at chunk ids that no longer
+  exist (the chip still opens, the lookup 404s). This is the same consequence re-uploading a file has.
+- **Two tabs editing one note is last-write-wins.** There is no optimistic locking; SQLite's
+  `datetime('now')` has second granularity and would be a useless version stamp.
+- **The uploads copy is the only copy.** Unlike an imported paper, a note has no user-side original to
+  fall back on. Deleting `data/uploads/`, clearing `data/`, or re-indexing with the copy missing loses
+  the note permanently — back up `data/` first.
+- **A locked uploads copy used to cost you the row (fixed 2026-09-17).** The old order was: ingest
+  deletes and commits the old row, and only *then* touches the file — the "make way for the new copy"
+  rename happened outside the rollback block. So if another program held the copy open (a Windows file
+  lock) — or the copy was read-only — that rename failed with the row already gone: the document
+  disappeared from the UI while its file stayed on disk, and a re-index or `mikasa ingest` brought it
+  back (for a note, that comeback was a *plain* document: the marker lives in the row that was lost).
+  The fix **reverses the order**: the new copy is arranged on disk first, and the old row is deleted
+  only after every file operation succeeded — a failure at that point leaves both the library and the
+  disk untouched, and surfaces as an error the user can simply retry. The ordering rule ("arrange the
+  files first, mutate the row after — the file step is the only one that can hit a lock") is stated at
+  the reorder site in `ingest/service.py`. Two adjacent symptoms were **already** fixed earlier,
+  because they reported failure for work that had actually succeeded: retiring the old copy
+  (`displaced.unlink()`) no longer fails the request — it logs, and leaves a `.replacing` file behind
+  (pure garbage; the suffix filter keeps re-index from ever seeing it) — and deleting a document whose
+  copy cannot be unlinked answers 200 with a warning in the log instead of 500.
+- **Provenance inherits across a same-name replace.** Re-uploading a file under a name that is already
+  in the library keeps that row's `source_ref` (this is what makes "re-upload the same paper" not lose
+  its "already in your library" mark, and what keeps a note a note across edits). The flip side: if you
+  overwrite an imported paper with a *different* file that happens to share its name, the new row still
+  says `arxiv:…`. Harmless for single-user libraries, stated here so nobody is surprised by it.
+- **A stale `file_path` used to make editing insert a second row.** The library stores the uploads copy's
+  absolute path, and that path can go stale (a renamed repo, a moved `data/`, a copied `mikasa.db` — this
+  project has lived through all three: 21 of 23 rows pointed at a pre-rename directory at one point).
+  Read paths resolve such a row by *file name*, but ingest's same-name replace matches on the *full path*,
+  so editing a note whose path was stale produced a second document — one duplicate, no note marker, and
+  the old text still in the index. The note API now repairs the row's path before ingesting (and refuses
+  with a 409 if another row already owns that name). **Uploads still carry the same root cause**: dropping
+  a same-named file with new content onto a row with a stale path duplicates it as well. Notes were the
+  loud case because editing combines two things uploads rarely do — the content always changes, and
+  `force=True` disables the content-hash net that usually hides the problem.
+
+### Every ingest failure answered 400, including provider failures (recorded 2026-09-16, fixed 2026-09-17)
+
+`ingest_web_file` translated any `ZhiwenError` — and `ProviderError` is one — into `400 入库失败：…`, while
+the app-level handler answers `502` for a provider error raised anywhere else. So "the embedding API key is
+out of quota" reached the browser as a client error. The message still named the real cause, and nothing in
+the UI branches on the status code, so it was a semantic wart rather than a broken flow; it was noted here
+because the fix touches all three ingest paths (upload, paper import, notes) at once and nobody had needed
+it yet. **Fixed**: the tail chain now branches on the exception type — `ProviderError` → 502, everything
+else → 400 — the same rule the app-level handler uses. Regression tests lock the upload path
+(`test_upload_embedding_provider_failure_502`) and the note path
+(`test_note_embedding_provider_failure_502`), including "no half-finished state is left behind"
+(library, uploads, and web-tmp all clean).
 
 ## 4. Real Bug Cases from Development (Fixed, Archived)
 
@@ -184,6 +288,10 @@ migration (v1→v2) is in the ADR-0004 revision section.
 | The inline rename input closed on the first click (clicking to place the cursor exited editing instead, worse with longer text) | 2026-09-09, user feedback (during the second round of UI refinement) | During rename, the input replaces the **inline name span** (still a descendant of the clickable row); the row click delegation (two places each in qa-tree/kb-tree: folder toggle, session onOpenSession, document selectDoc) excluded only `button`, not `.tree-input` → a click inside the input meant to move the cursor bubbled to the row → toggle/select → `renderTree()` redrew the whole tree → the input was destroyed as innerHTML was cleared. The tree has no notion of an "editing state" at all, which is the blind spot of the "inline editing + event delegation" combination | All four delegation guards now use `closest("button, .tree-input")`; regression tool **tools/chrome_rename_check.py** (headless Chrome: enter rename → click inside the input → assert the input is still isConnected → Esc restores it with no residue) passes on both the Chat and Library pages. Lesson recorded: **if an inline-edit element is a descendant of a row, the row click delegation must explicitly let the edit element through** |
 | "Table tail fragments" polluted retrieval (the answer came back as "the parameter names aren't labelled") | 2026-09-10, a follow-up question after wrapping up table rendering (asked for the parameters of the cemented-backfill row; the LLM could not produce the column names) | Two links in the chain: ① the chunker's overlap tail is taken from the end of the window, so when a table chunk sits at the window's end it **copies the table's trailing data rows into the start of the next chunk** → a fragment with no header; ② when retrieval asks for "the parameters of a row", the fragment outranks the complete table — the fragment begins exactly at the matching row, is short, and scores high on similarity, while the complete table (header + all 7 rows, ~360 characters) is semantically diluted by the many irrelevant rows it carries and drops out of the fused top-10 → what gets injected is the fragment with no column names, and the LLM will only say "the values are 1.83, 0.38… but the names aren't labelled" (honest but useless). The root cause: **a table is a structural whole of "header + rows", and treating it as ordinary text lets it take part in overlap and dilution** | ① The overlap tail **does not cross a table segment** (if the start point falls inside a table segment, the whole segment is skipped — better to underlap; `_overlap_tail`); ② an oversized table segment (> size) is chunked by **packing rows** rather than by punctuation or hard cuts (`_pack` gained a sep parameter that preserves newlines between rows); ③ after the fix, the original question returns exactly 1 chunk containing that row in the whole corpus = the complete table chunk, and the LLM outputs all 7 columns as a table on its own (no "use a table" hint needed). Two regression tests landed in test_chunker.py (355 tests green). Blind-spot retrospective: the form markers do isolate tables into their own segments, but the chunker recognises "paragraphs", not "table semantics", so structural content is still split when it takes part in text-level overlap and punctuation splitting — **any structural marker (table/code/quotation) should be treated as indivisible before ingestion** |
 | The cross-lingual translation path failed silently (all 4 Chinese-against-English-corpus questions regressed to the "no translation" state) | 2026-09-10, first round of cross-lingual retrieval testing (no `translate` key in the latency of Q1–Q4, Q1 captured by a Chinese paper in the corpus, Q2 regressed from correct to refused) | **qwen3:8b has thinking built in**: on the OpenAI-compatible path the reasoning text exhausted `max_tokens` (96) first, so `content` came back as an **empty string**; `_translate_query`'s guard ("empty output → fall back to the single-path query") worked exactly as designed but left **zero log traces** (debug is off by default and nothing warns), so the server log looked as if the translation branch had never run — it took half a day of digging to reproduce by calling 11434 directly: empty with max_tokens=96, normal without it or with a larger value. The combination of "thinking eats the limit first" and "empty content stays silent" in small local models is an invisible trap for short-output calls (translation, titles) | TRANSLATE_MAX_TOKENS 96 → 512 (the incident chain recorded in a comment); lessons: ① for any "short output + local thinking model" combination, measure first and only then hardcode the limit; ② a defensive fallback must leave a debug-visible trace (one existed, but the default log level hides it — turn debug on temporarily while troubleshooting) |
+| Editing a note **inserted a second document** (duplicate row, no note marker, index still holding the old text) | 2026-09-16, a four-way code review of the notes feature — every reviewer reproduced it independently | Read paths had always resolved a row by *file name* (the two-hop fallback in `_resolve_upload_file` exists precisely because a stale absolute path is this project's normal state: 21 of 23 rows once pointed at a pre-rename directory), but ingest's same-name replace matches on the *full path* — so a stale path looked like "a brand-new file" and got inserted. Notes turned a latent uploads bug into a loud one: editing always changes the content, and `force=True` disables the content-hash net that otherwise hides it | The note API repairs the row's path before ingesting (`repo.set_document_file_path`, with a 409 when another row already owns that name); lesson: **when two sides of one invariant disagree about identity ("which row is this?"), the disagreement is invisible until something else removes the safety net** — and the fix belongs on the write side, where the stale key lives |
+| A save reported **400 "入库失败" for an ingest that had already succeeded** (and left a `.replacing` corpse holding the old text) | 2026-09-16, adversarial testing (a read-only uploads copy is enough) | Retiring the displaced old copy (`displaced.unlink()`) sat *outside* the try block, so a `PermissionError` there failed a request whose row and file were already committed; the user retries and ends up with a duplicate. The same shape appeared in DELETE: the row was gone, `unlink` threw, and the endpoint answered 500 | Both unlinks now degrade to a logged warning (the request reports what actually happened); lesson: **cleanup after success must never be able to turn success into failure** |
+| A lone surrogate anywhere in a validated string field turned **422 into 500** | 2026-09-16, adversarial testing (pasting a title from a bad UTF-16 source is the realistic trigger) | Pydantic rejects the value and FastAPI's default handler echoes the offending **original value** back in the response body — and re-encoding that value to UTF-8 raises `UnicodeEncodeError: surrogates not allowed`. So "the client sent a bad string" surfaced as "internal server error", with no way for the client to tell | An app-level `RequestValidationError` handler strips surrogates (→ U+FFFD) before rendering, keeping the standard `{"detail": [...]}` shape; the body path answers 400 with a note-flavoured Chinese message; lesson: **error responses are serialization too — a validator that accepts the value can still leave a payload that cannot be encoded** |
+| A cross-process `mikasa ingest --reindex` running during a note save **permanently demoted the note** to a plain document | 2026-09-16, adversarial testing (reproduced on the first try) | The in-process lock cannot exclude another process: reindex wipes every row between the note API's "read the row" and "ingest", so ingest took the "new file" branch; the marker had been relying on same-name *inheritance* from a row that no longer existed | The note endpoint now passes `source_ref` explicitly instead of relying on inheritance; lesson: **an identity that is only reconstructed from surviving state is lost exactly when the state doesn't survive** — the same reasoning that put `title=` on the explicit path earlier in this feature |
 
 ## 5. Evolution of What `doctor` Checks
 

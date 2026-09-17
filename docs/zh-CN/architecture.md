@@ -66,9 +66,14 @@
   全库；`mikasa ingest --reindex` 提供全量重建路径（重建后 chunk id 平移，
   黄金集指纹会显式失配——这是特性，见 evaluation.md §2 教训）。
 
-Web 上传端点与在线找论文的导入端点共用同一段入库尾链
-（`documents.ingest_web_file`）：两边都交给它一个位于 web-tmp 独占子目录
-里的文件 + sha256，拿回**逐字节同形**的 201/200/409 响应（ADR-0019）。
+Web 上传端点、在线找论文的导入端点、以及知识库页的笔记保存共用同一段
+入库尾链（`documents.ingest_web_file`）：三方都交给它一个位于 web-tmp
+独占子目录里的文件 + sha256，拿回**逐字节同形**的 201/200/409 响应
+（ADR-0019）。笔记走这条链时多带三个参数：`force=True`（绕过内容去重，
+否则第二条同内容笔记会被静默跳过）、`title=`（标题必须在分块前定下来，
+否则索引词空间里留的是旧名字）、`folder_id`（"保存到"要落在同一把锁内）。
+笔记不是新类型——它是 `source_ref = "note:<key>"` 的普通文档，因此检索、
+引用、文件夹树、阅读视图全部零特殊分支（ADR-0021）。
 
 ## 四、分块策略
 
@@ -192,13 +197,18 @@ EvalJobManager（单槽状态机，threading.Lock）都活在进程内——
 → 后缀白名单 415 → `read(max+1)` 超限 413 → 临时文件 finally unlink；
 DB 层 `file_path` 脱敏，杜绝路径探针。
 
-**在线找论文**（M7，ADR-0019）住在 `papers/`：双源检索服务（arXiv Atom +
-OpenAlex JSON，归一成一份 `PaperResult`）、奇偶交错的翻页与逐源降级、
+**在线找论文**（M7/M8，ADR-0019/0020）住在 `papers/`：三源检索服务（arXiv Atom +
+OpenAlex 与 CORE 的 JSON，归一成一份 `PaperResult`）、轮转交错的翻页与逐源降级、
 一个有防线的 PDF 下载器（逐跳复验公网地址、PDF 嗅探、50 MB 上限）。
-`web/routers/papers.py` 暴露四个端点——`POST /api/papers/search`、
-`POST /api/papers/import`、`GET/PUT /api/papers/settings`——导入路径按 id
-反查来源 API 自行推 PDF 地址、不信客户端，因此真正进入 URL 的用户输入只有
-一对正则校验过的 `{source, id}`。
+每个来源声明自己的能力（`SourceCaps`：年份过滤、被引排序、时间排序、语言过滤、
+开放获取处理方式），做不到的条件以 `notes` 如实回报——降级要说出来，绝不静默
+忽略（CORE 的年份**参数**会被上游收下后丢掉，所以那个来源改走查询语法）。
+`web/routers/papers.py` 暴露五个端点——`POST /api/papers/search`、
+`POST /api/papers/import`、`GET /api/papers/sources`、`GET/PUT /api/papers/settings`
+——导入路径按 id 反查来源 API 自行推 PDF 地址、不信客户端，因此真正进入 URL 的
+用户输入只有一对正则校验过的 `{source, id}`。导入同时写入 `documents.source_ref`
+（`"arxiv:2401.12345"`），搜索结果据此标"已在库中"；该列由 v4 迁移补上，并被
+两处 reindex 保留清单带过全量重建。
 
 ## 九、评测编排（CLI 与 Web 同一套）
 

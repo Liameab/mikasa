@@ -65,6 +65,25 @@ def test_strip_paths_keeps_only_the_file_name():
     assert strip_paths("FileNotFoundError: /var/log/mikasa.log") == "FileNotFoundError: mikasa.log"
 
 
+def test_strip_paths_handles_repr_escaped_windows_paths():
+    r"""Windows 的 `str(OSError)` 会把反斜杠**转义成两个**——单反斜杠版失配会漏。
+
+    实测来源：只读/被占用的 uploads 副本触发 PermissionError，消息是
+    `[WinError 32] … : 'C:\\Users\\…\\a.md'`（repr 形式）。原先的正则只认
+    `\`，整条消息原样进 400 响应体 —— 目录布局就漏出去了（2026-09-16 对抗性
+    实测）。这里直接喂 repr 形态，锁住"多反斜杠也算分隔符"。
+    """
+    from mikasa.errors import strip_paths
+
+    bs = chr(92)
+    path = f"C:{bs}Users{bs}张三{bs}AppData{bs}uploads{bs}笔记 (note a1b2).md"
+    escaped = repr(path)  # repr 会把每个 \ 变成 \\
+    assert bs + bs in escaped  # 前提：确实是转义形态（防止本用例自我欺骗）
+    assert strip_paths(f"PermissionError: [WinError 32] 被占用: {escaped}") == (
+        "PermissionError: [WinError 32] 被占用: '笔记 (note a1b2).md'"
+    )
+
+
 def test_strip_paths_leaves_ordinary_text_alone():
     """别把普通文本里的斜杠当路径剥掉——脱敏不能改语义。"""
     from mikasa.errors import strip_paths

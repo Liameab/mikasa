@@ -38,7 +38,7 @@
 | --- | --- | --- | --- | --- |
 | F1 | Automatic hybrid mode | When KB evidence is insufficient, fall back to free chat and say so, instead of only refusing | Reported study workflow (2026-09-09); ADR-0013 context | Unscheduled |
 | F2 | One-click ingest of a free-chat answer | Turn a good free-chat answer into a stored note | The loop the product is aiming at (2026-09-09) | Unscheduled |
-| F3 | M6: knowledge base → notes | Four stages: (1) write a note and have it searchable immediately (highest priority) → (2) photo upload converted to note text → (3) LLM-generated knowledge links (mind the schema-migration discipline) → (4) knowledge map | Project notes | Unscheduled; standalone milestone |
+| F3 | M6: knowledge base → notes | Four stages: **(1) write a note and have it searchable immediately — shipped 2026-09-16, ADR-0021** → (2) photo upload converted to note text → (3) LLM-generated knowledge links (mind the schema-migration discipline) → (4) knowledge map | Project notes | Stage 1 done; stages 2-4 unscheduled |
 | F4 | Query rewriting for multi-turn chat | Retrieval quality for follow-up questions that use pronouns or elide context; the deliberate omission and its v2 candidate are documented in limitations §3 | limitations-and-failures.md | Unscheduled |
 | F5 | Local reranker (local profile) | Enabling rerank requires a fastembed version survey first | ADR-0014 ②; the LocalReranker case in limitations §4 | Unscheduled |
 | F6 | Session-management follow-ups | Drag-and-drop moves, titles that keep updating as a thread grows, search / archive / pin, persisted expand state | The "explicitly out of scope" list from the M4.5 plan | Unscheduled |
