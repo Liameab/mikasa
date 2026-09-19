@@ -85,7 +85,9 @@ def append_checksum(path: Path) -> Path | None:
         if line.strip() and not line.endswith("  " + path.name)
     ]
     kept.append(f"{digest}  {path.name}")
-    sums.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    # newline="\n"：与 make_release.write_checksums 同一纪律（CRLF 会让
+    # Linux/macOS 上的 sha256sum -c 整份读不了），见那边的注释
+    sums.write_text("\n".join(kept) + "\n", encoding="utf-8", newline="\n")
     return sums
 
 

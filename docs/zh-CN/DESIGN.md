@@ -88,6 +88,7 @@ z-index:
   ctx-menu: 60
   note-editor: 70
   confirm: 90
+  update-dialog: 95
   toast: 100
   onboard: 200
 
@@ -338,7 +339,7 @@ Mikasa 的界面是一个**紧凑、暗色、单用户的桌面工作台**：四
 - 紧凑字阶：11/12/13/14/15/16/20/22px；正文 15px，阅读面 14px/1.8。
 - 五档圆角：6（控件）/ 8（行）/ 10（卡片）/ 12（模态）/ 999（胶囊）。
 - 浮层顺序是**固定阶梯**，不是随手写数字：顶栏 10 → 回底 30 → 设置面板 40 → 阅读器 50 →
-  菜单 60 → 确认框 90 → toast 100 → 首启引导 200。
+  菜单 60 → 确认框 90 → 更新弹窗 95 → toast 100 → 首启引导 200。
 - 交互状态是语言的一部分（hover / active / disabled / focus-visible / selected / drag-over /
   高亮）——应用内界面与营销页不同，**状态本身就是设计**。
 
@@ -470,7 +471,7 @@ Consolas, "Courier New", monospace                                    /* 代码 
 | 层级 | 处理 | 用途 |
 | --- | --- | --- |
 | 平铺 | 无阴影 | 页面、卡片、行、气泡、表格——全部在流内的界面 |
-| 浮层遮罩 | `rgba(0, 0, 0, 0.55)` | 确认框、首启引导 |
+| 浮层遮罩 | `rgba(0, 0, 0, 0.55)` | 确认框、更新弹窗、首启引导 |
 | 菜单 / toast | `0 6px 18px rgba(0,0,0,0.4)` · `0 8px 28px rgba(0,0,0,0.5)` | `#ctx-menu`、toast、设置面板（`0 8px 30px`） |
 | 对话框 | `0 18px 48px rgba(0, 0, 0, 0.55)` | 确认框（阅读面板用 `0 18px 60px`） |
 | 状态辉光 | `box-shadow: 0 0 6px rgba(63,185,80,0.8)` | 顶栏状态点，全站仅此一处 |
@@ -483,13 +484,16 @@ z-index 阶梯是这套系统的一部分，不许临时发明：
 
 ```
 10  顶栏（sticky）        40  设置面板        90  确认框遮罩
-30  回到底部按钮         50  阅读面板       100  toast
-                         60  ⋯ 菜单         200  首启引导遮罩（盖住一切）
-                         70  笔记编辑器
+30  回到底部按钮         50  阅读面板         95  更新弹窗
+                         60  ⋯ 菜单         100  toast
+                         70  笔记编辑器     200  首启引导遮罩（盖住一切）
 ```
 
 笔记编辑器刻意夹在 ⋯ 菜单与确认框之间：「放弃未保存的修改？」必须能盖住它正在问的
 那个编辑器。
+
+更新弹窗刻意夹在确认框与 toast 之间：它是启动时的模态（要盖住应用自己打开的一切），
+但「这个版本不再提示」的那颗 toast 必须能浮在它上面。
 
 toast 刻意压在确认框之上（动作结果要在弹窗关掉后仍看得见）；首启引导盖住一切，因为它
 是产品的第一句话。`#toast` 容器自身 `pointer-events: none`、子元素可点——落在面板头部上方
@@ -557,7 +561,9 @@ toast 刻意压在确认框之上（动作结果要在弹窗关掉后仍看得�
 浮层：`#ctx-menu`（`.ctx-item` / `.ctx-head` / `.ctx-sep`）· `.confirm-backdrop` /
 `.confirm-box`（`.cf-title` / `.cf-detail` / `.cf-actions`）· `#toast` / `.toast-msg`（`.ok` /
 `.warn` / `.error`）· `.settings-panel`（`.s-head` / `.s-body` / `.s-row` / `.s-name` /
-`.s-hint` / `.s-group`）· `.onboard-mask`（`.onboard-card` / `.ob-step`）
+`.s-hint` / `.s-group`）· `.onboard-mask`（`.onboard-card` / `.ob-step`）· `.upd-backdrop` /
+`.upd-card`（`.upd-head` / `.upd-sub` / `.upd-notes` / `.upd-progress` / `.upd-bar` /
+`.upd-progress-text` / `.upd-error` / `.upd-actions`）
 
 评测：`.run-list` / `.run-item`（`.active`）· `.progress-track` / `.progress-bar` ·
 `.md`（报告渲染）· `.stat-grid`

@@ -32,6 +32,7 @@ import { initSidebar, refreshSessions, setActiveSession } from "./qa-tree.js"; /
 import { initSettings, nickname } from "./settings.js"; // 聊天设置（昵称/字号/背景）
 import { initReader, openChunk } from "./reader.js"; // 阅读器（两页共用）
 import { initOnboard } from "./onboard.js"; // 首启引导（空库时弹一次）
+import { initUpdate } from "./update.js"; // 更新提示（启动静默检查，ADR-0022）
 
 /* ---------------- 状态与 DOM 引用 ---------------- */
 
@@ -417,6 +418,7 @@ questionInput.addEventListener("input", () => {
 initTopbar("qa").then((health) => {
   applyModeAvailability(health); // health 到达后置灰 offline 的 free
   void initOnboard(health); // 空库 + 首次打开 → 欢迎面板
+  initUpdate(health); // 版本号回填 + 启动静默查更新（失败不打扰）
 });
 initSettings(); // 聊天设置面板（昵称/字号/对话框背景，本地持久化）
 initReader(); // 阅读面板：点引用角标 → 打开并定位到原文块（js/reader.js）

@@ -210,6 +210,14 @@ OpenAlex 与 CORE 的 JSON，归一成一份 `PaperResult`）、轮转交错的�
 （`"arxiv:2401.12345"`），搜索结果据此标"已在库中"；该列由 v4 迁移补上，并被
 两处 reindex 保留清单带过全量重建。
 
+**应用内更新**（v0.1.1，ADR-0022）在 `update/` 包，由 `web/routers/update.py` 暴露四个端点：
+`GET /api/update/check`、`POST /api/update/download`、`GET /api/update/download/status`、
+`POST /api/update/install`。服务端自己去问 GitHub 的 `/releases/latest` 并从响应里挑出安装包
+资产——**客户端永远拿不到 URL**——然后在主机白名单（`github.com` / `*.githubusercontent.com`，
+http+回环是 E2E 逃生门）后面下载，与同一 release 的 `SHA256SUMS.txt` 逐字节核对 sha256，最后用
+双击语义（`os.startfile`）启动安装向导。检查失败保持静默（只进日志与状态端点），结果缓存 10
+分钟；前端提供「跳过此版本」与设置面板里的启动检查开关。
+
 ## 九、评测编排（CLI 与 Web 同一套）
 
 `eval/service.py::run_and_persist` 是 CLI 与 Web 后台任务共用的

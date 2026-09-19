@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 from mikasa.config.settings import Settings
 from mikasa.ingest.service import IngestService
 from mikasa.pipeline.ask import AskService
+from mikasa.update import UpdateChecker, UpdateManager
 
 if TYPE_CHECKING:
     from mikasa.eval.runner import ItemRecord
@@ -115,6 +116,9 @@ class AppServices:
         self.ask = AskService(settings)
         self.ingest = IngestService(settings)
         self.eval_jobs = EvalJobManager()
+        # 更新链路：检查器带 TTL 缓存、下载是单槽后台任务（见 update 包）
+        self.updates = UpdateChecker()
+        self.update_jobs = UpdateManager()
 
     def rebuild_ask(self) -> None:
         """测试替换 ask 服务用（保持 create_app 测试可注入性）。"""

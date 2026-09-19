@@ -40,6 +40,7 @@
 | ADR-0019 | 在线找论文：双免费源 + 交错分页 + 有防线的下载器 | Accepted（第 8 点被 ADR-0020 部分取代） |
 | ADR-0020 | 「找论文」独立成页：三源 + 能力声明 + 诚实的翻页契约 | Accepted |
 | ADR-0021 | 笔记 = 带标记的普通文档：复用 source_ref、不加 schema 列、force 绕过内容去重 | Accepted |
+| ADR-0022 | 应用内更新：客户端碰不到 URL + 与包同批的校验和 + 检查失败静默 | Accepted |
 
 ---
 
@@ -940,3 +941,58 @@ papers-filters,papers-detail}.js`、`css/style.css` 与四处导航；测试
 `css/style.css`、`DESIGN.md` + `docs/zh-CN/DESIGN.md`（`note-editor: 70` 层级）；测试
 `tests/unit/web/test_notes_api.py`（新）、`tests/unit/ingest/test_service.py`；冒烟
 `tools/smoke_tree.mjs`；E2E `tools/chrome_notes.py`（新）。
+
+---
+
+## ADR-0022 应用内更新：客户端碰不到 URL + 与包同批的校验和 + 检查失败静默
+
+- 状态：Accepted ｜ v0.1.1（2026-09-19，用户报"桌面快捷方式一直是老版本"后拍板「一键下载并安装」）
+- 关联：ADR-0019 / ADR-0020（下载防线与"回环逃生门"惯例，本条目沿用）、ADR-0018（设置面板——「关于」
+  段的落点）、ADR-0002（密钥纪律——更新链路全程无凭据）
+
+**问题**：安装版用户桌面上的快捷方式指向安装目录里的副本，而那个副本**只在跑安装包时才会变**。
+项目此前没有任何更新机制：改完代码我更新的是开发构建，用户那份永远是老版本（2026-09-11 起反复发生，
+2026-09-19 用户点名要求解决）。用户拍板的形态：打开应用时若有新版 → 弹窗告知 → 一键下载 → 自动安装。
+
+**决策**：
+
+1. **检查端点代客户端说话，响应里不含任何 URL。** `GET /api/update/check` 由服务端去问 GitHub 的
+   `/releases/latest`；下载地址永不出现在响应里，前端只会说"下载最新版"。客户端因此无从指定任何
+   地址，SSRF 面被收窄到"服务端自己挑出来的那一条链"——下载入口只需一件事：主机白名单
+   （`github.com` / `*.githubusercontent.com`，https）。
+2. **回环 http 是逃生门，且只对它开。** 与 `papers/download.py` 同一取舍：非白名单主机必须是
+   **http + 回环**（E2E 的本地假 GitHub 与假资产主机）。回环打不到内网，SSRF 保证不因它松动；
+   顺带挡住"API 响应被换成任意公网主机"。
+3. **下载完必须核对 sha256，校验和与包同批发布。** 安装包与同一 release 里的 `SHA256SUMS.txt`
+   一起下，逐字节比对通过才允许启动安装器；**没有校验和文件就不自动更新**（宁可让用户手动下）。
+   挡的是下载损坏 / 中途被替换；发布账号本身被攻破挡不住（校验和与包同源）——已接受的残差，记入
+   limitations。任何失败都删掉半成品，绝不留一个"看起来能装"的文件。
+4. **启动安装器 = 双击语义**（`os.startfile`），三道闸：文件在、文件在数据目录 `updates/` 下、
+   名字匹配 `Mikasa-Setup-*-win64.exe`。安装向导自己会先 `taskkill` 掉正在运行的 Mikasa，所以
+   "启动"之后本进程会死——前端在这之后不再期待任何响应。E2E 用 `MIKASA_UPDATE_SKIP_LAUNCH=1`
+   让这一步只记日志不启动（只**少做**一件事，是安全方向的开关）。
+5. **检查失败一律静默**：离线用户不该被网络错误打扰，错误只进日志与状态接口；只有用户主动点
+   「检查更新」才把失败说出来。检查结果 TTL 缓存 10 分钟（GitHub 匿名配额 60 次/小时/IP），
+   「立即检查」走 `force=1` 绕开。
+6. **「跳过此版本」存 localStorage，只在静默检查里生效**：手动检查会清掉该标记（主动问 = 现在就
+   想知道）。设置面板新增「关于」段：当前版本号 + 启动检查开关 + 手动检查按钮。
+7. **下载期间弹窗不可关闭**——否则用户看到的是"点了下载、窗口没了、什么都没发生"。下载中 Esc 与
+   点遮罩都不响应；失败时给出文案，并把「打开发布页」留在手边（手动下载是永远的兜底）。
+8. **这段代码必须随 v0.1.1 一起发**：老版本里没有它，它不会自己知道有新版——这一次仍要手动装一次，
+   之后才谈得上"打开就提示"。
+
+**后果**：应用启动会向 `api.github.com` 发一次只读请求（不带凭据、不带任何本地数据），可以关——
+本地优先的产品里这是一处**被明确披露的网络行为**，写进了使用说明；国内直连 github.com 的下载很慢
+（实测小文件 18 秒），大安装包可能要几分钟，进度条与"失败回退浏览器下载页"就是为它准备的；自动安装
+只覆盖 Windows（`os.startfile` 仅 Windows）；`updates/` 只保留最近一次下载的文件（旧残留在下一次
+下载开始时清理）；发布流程多了一条纪律：**每次发布必须带上 `SHA256SUMS.txt`**，否则老用户点不动
+自动更新。
+
+**代码**：`src/mikasa/update/`（`release.py` 版本比较 / 发布解析 / 资产挑选，`install.py` 白名单下载
++ 校验 + 启动 + 单槽任务管理器，`checker.py` TTL 缓存，`errors.py`）、`web/routers/update.py`
+（四个端点）、`web/services.py`（`updates` / `update_jobs`）、`web/app.py`（挂路由）；前端
+`static/js/update.js`（新）、`static/js/qa.js`（启动接线）、`static/index.html`（设置面板「关于」段）、
+`css/style.css`（`.upd-*`，z-index 95）、`DESIGN.md` + `docs/zh-CN/DESIGN.md`（新层级与新组件）；
+测试 `tests/unit/update/test_release.py`、`tests/unit/update/test_install.py`、
+`tests/unit/web/test_update_api.py`；E2E `tools/chrome_update.py`（新：假 GitHub + 节流假下载 +
+全程不启动任何可执行文件）。

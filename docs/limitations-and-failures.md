@@ -413,3 +413,29 @@ user was hitting, which lives in CSS; (2) an empty library pops the first-run on
 **covers the whole page**, so acceptance must wait for it to appear and dismiss it (it races: it is
 attached only after `/api/health` returns, later than "page ready"; a plain `if` misses it and every
 subsequent drag lands on the panel — the measurement in fact selected the panel's own text).
+
+### In-app updates: what the checksum does not cover, and the step no test performs (v0.1.1, ADR-0022)
+
+- **The checksum ships with the package it verifies.** The sha256 is compared against the
+  `SHA256SUMS.txt` from the *same release*: that defeats a corrupted, truncated, or in-transit-replaced
+  download, but **not a compromised release account** — whoever can swap the installer can swap the
+  checksum with it. This is the general ceiling of "publish checksums next to the artifact", written down
+  here rather than left to be assumed stronger. What the design adds on top is a narrow door: the
+  download URL is never accepted from the client, only picked out of the GitHub API response, and a
+  non-allowlisted host must be **http + loopback**, so even a swapped API response cannot point the app
+  at an arbitrary public host.
+- **The last step has no automated acceptance.** The E2E downloads, verifies, and reaches the launch
+  call, but `MIKASA_UPDATE_SKIP_LAUNCH=1` turns that call into a log line — **no test ever runs an
+  installer** (deliberately). "Double-click the setup and it upgrades in place" is verified by hand, not
+  by CI.
+- **Downloads from github.com are slow on some networks** (measured here: 18 seconds for a few KB).
+  Nothing in the code fixes that; the progress bar, the 30-minute timeout, and the fall-back to the
+  release page are the whole mitigation, and a browser (which resumes) is the better path when the
+  automatic download fails.
+- **The check is a startup network call.** It is disclosed, toggleable and silent on failure, but it is
+  also the only thing Mikasa does that reaches the internet on its own. Anyone who minds can turn it
+  off; nothing else changes.
+- **"Updates" only covers the Windows installer.** Non-Windows installs and source checkouts still
+  update by hand (`git pull` / `pip install -e .`). Those environments still see the dialog, but the
+  primary button becomes "Open release page": the automatic-install button is **absent** — not
+  failing-on-click — when `install_supported` is false or the release carries no installer asset.

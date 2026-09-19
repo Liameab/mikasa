@@ -88,6 +88,7 @@ z-index:
   ctx-menu: 60
   note-editor: 70
   confirm: 90
+  update-dialog: 95
   toast: 100
   onboard: 200
 
@@ -343,7 +344,7 @@ find-papers / evaluation) inside one window, driven with a mouse and a keyboard,
 - Compact scale — 11/12/13/14/15/16/20/22px, body at 15px, reading surfaces at 14px/1.8.
 - Radius grammar in five rungs: 6 (control) / 8 (row) / 10 (card) / 12 (modal) / 999 (pill).
 - Overlay order is a **fixed ladder**, not ad-hoc: topbar 10 → to-bottom 30 → settings 40 →
-  reader 50 → ctx-menu 60 → confirm 90 → toast 100 → onboard 200.
+  reader 50 → ctx-menu 60 → confirm 90 → update dialog 95 → toast 100 → onboard 200.
 - Interactive states are part of the language (hover / active / disabled / focus-visible /
   selected / drag-over / highlighted) — an in-app product UI, unlike a marketing page,
   is *defined* by them.
@@ -489,7 +490,7 @@ layout deliberately breathes.
 | Level | Treatment | Use |
 | --- | --- | --- |
 | Flat | No shadow | Page, cards, rows, bubbles, tables — the entire in-flow UI |
-| Overlay shade | `rgba(0, 0, 0, 0.55)` backdrop | Confirm dialog, on-boarding mask |
+| Overlay shade | `rgba(0, 0, 0, 0.55)` backdrop | Confirm dialog, update dialog, on-boarding mask |
 | Menu / toast | `0 6px 18px rgba(0,0,0,0.4)` · `0 8px 28px rgba(0,0,0,0.5)` | `#ctx-menu`, toast, settings panel (`0 8px 30px`) |
 | Dialog | `0 18px 48px rgba(0, 0, 0, 0.55)` | Confirm box (also `0 18px 60px` on the reader panel) |
 | Status glow | `box-shadow: 0 0 6px rgba(63,185,80,0.8)` | The health dot, once |
@@ -502,13 +503,17 @@ The z-index ladder is part of this system and must not be improvised:
 
 ```
 10  topbar (sticky)      40  settings panel     90  confirm backdrop
-30  to-bottom button     50  reader panel      100  toast
-                         60  ctx menu          200  onboard mask (covers everything)
-                         70  note editor
+30  to-bottom button     50  reader panel       95  update dialog
+                         60  ctx menu          100  toast
+                         70  note editor       200  onboard mask (covers everything)
 ```
 
 The note editor sits between the context menu and the confirm dialog on purpose: the
 "discard unsaved changes?" confirmation has to cover the editor it is asking about.
+
+The update dialog sits between the confirm dialog and the toast on purpose: it is a
+startup modal (above everything the app opens by itself) but the toast that confirms
+"this version won't be suggested again" has to stay visible on top of it.
 
 Toast sits above the confirm dialog on purpose (an action's result should be visible after
 the dialog closes); the on-boarding mask covers everything because it is the product's first
@@ -578,7 +583,9 @@ Chat：`.msg.user` / `.msg.assistant` · `.bubble` · `.who` · `.cite`（`.lit`
 Overlays：`#ctx-menu`（`.ctx-item` / `.ctx-head` / `.ctx-sep`）· `.confirm-backdrop` /
 `.confirm-box`（`.cf-title` / `.cf-detail` / `.cf-actions`）· `#toast` / `.toast-msg`（`.ok` /
 `.warn` / `.error`）· `.settings-panel`（`.s-head` / `.s-body` / `.s-row` / `.s-name` /
-`.s-hint` / `.s-group`）· `.onboard-mask`（`.onboard-card` / `.ob-step`）
+`.s-hint` / `.s-group`）· `.onboard-mask`（`.onboard-card` / `.ob-step`）· `.upd-backdrop` /
+`.upd-card`（`.upd-head` / `.upd-sub` / `.upd-notes` / `.upd-progress` / `.upd-bar` /
+`.upd-progress-text` / `.upd-error` / `.upd-actions`）
 
 Evaluation：`.run-list` / `.run-item`（`.active`）· `.progress-track` / `.progress-bar` ·
 `.md`（报告渲染）· `.stat-grid`

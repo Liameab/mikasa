@@ -3,7 +3,7 @@
 
 产物：dist/Mikasa-v<版本>-win64.zip，解压后的结构：
 
-    Mikasa-v0.1.0-win64/
+    Mikasa-v0.1.1-win64/
       Install.bat          ← 双击它安装（会问要不要建桌面快捷方式）
       install.ps1
       Uninstall.bat        ← 安装时也会被拷进安装目录
@@ -151,7 +151,7 @@ def build_release_dir(version: str) -> Path:
 
 def zip_dir(folder: Path) -> Path:
     """压缩。写入时把顶层目录一起带上——解压出来是一个文件夹而不是一堆散件。"""
-    # 不能用 with_suffix(".zip")：它替换**最后一个后缀**，而 "Mikasa-v0.1.0-win64"
+    # 不能用 with_suffix(".zip")：它替换**最后一个后缀**，而 "Mikasa-v0.1.1-win64"
     # 的 ".0-win64" 会被当成后缀 → 得到 "Mikasa-v0.1.zip"（2026-09-11 实测踩中）。
     zip_path = folder.parent / (folder.name + ".zip")
     if zip_path.exists():
@@ -168,13 +168,18 @@ def write_checksums(zip_path: Path, exe_path: Path) -> Path:
 
     企业发布的惯例是把校验和与包一起给出；没有它，用户遇到"下载不完整导致
     装不上"时无从判断，只能反复重下。
+
+    **行尾必须是 LF**（`newline="\n"`）：默认在 Windows 上会写成 CRLF，而
+    `sha256sum -c` 在 Linux/macOS 上读 CRLF 清单会**整份失败**
+    （`'name'$'\r': No such file or directory`）——2026-09-19 独立复算时实测
+    踩中。校验和文件是给跨平台下载者用的，行尾不能跟着构建机走。
     """
     lines = []
     for path in (zip_path, exe_path):
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         lines.append(f"{digest}  {path.name}")
     out = zip_path.parent / "SHA256SUMS.txt"
-    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     return out
 
 

@@ -190,6 +190,15 @@ directory), **Chat appearance** lives in the browser (localStorage, this browser
 - **Chat background color**: 6 presets + a custom color picker;
 - **Background image**: pick a local image → it is compressed automatically (JPEG, long edge 1600) and used as the chat background; removable at any time. The background applies only to the message area.
 
+### 8.3 About · version and updates (v0.1.1)
+
+- On startup the app **checks once for a newer version** (silently — a failure never nags you); if one exists, a dialog lists what changed;
+- **"Download and install"**: the app fetches the installer into `updates/` inside your data directory (with a progress bar), verifies its sha256 against the `SHA256SUMS.txt` published with the release, and then starts the wizard — the wizard closes Mikasa first and reopens the new version when it is done. Your data (library, uploads, settings) is untouched;
+- Slow network or a failed download: the dialog says so honestly and keeps "Open release page" within reach, so you can always download it in a browser instead;
+- **"Skip this version"** silences that version; to bring it back, press "Check for updates" in settings (a manual check ignores the skip marker);
+- **"Check for updates on startup"** can be turned off entirely — the app then makes no automatic check at all (the manual button still works);
+- The update dialog can only appear **in v0.1.1 and later**: older builds do not contain the code and cannot know a new release exists.
+
 ---
 
 ## 9. Evaluation Page
@@ -203,6 +212,7 @@ directory), **Chat appearance** lives in the browser (localStorage, this browser
 - **Everything is local**: data/mikasa.db (SQLite) + data/uploads (ingested copies) + data/indexes (index files) + data/logs; model configuration lives in `config.yaml` and `.env` inside the data directory (written by the settings panel); chat appearance lives in browser localStorage.
 - **Backup** = copy the whole `data/` directory (safest with the service stopped first); the database schema upgrades automatically (the v1→v2→v3 migration path has been rehearsed on a real database), so keep whole-directory backups to allow rollback.
 - API keys live only in `.env` (the data directory's `.env` when set from the panel; the repo-root `.env` in the api profile), never in the database and never uploaded; the key is never echoed back to the browser (the API answers with a yes/no flag only). The GitHub repository contains neither data/ nor .env.
+- **The one automatic outbound request is the startup update check** — it asks GitHub for the latest version number and nothing else: no local data, no credentials, and it can be switched off in settings (§8.3). Asking, retrieval and ingest all stay on this machine — unless you point the model provider at a cloud API yourself.
 - For known boundaries and the failure archive, see docs/known-issues.md and docs/limitations-and-failures.md.
 
 ---

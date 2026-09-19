@@ -47,6 +47,7 @@
 | ADR-0019 | Online paper search: two free sources, interleaved pagination, a defended downloader | Accepted (point 8 superseded by ADR-0020) |
 | ADR-0020 | "Find papers" becomes a page of its own: three sources, declared capabilities, an honest paging contract | Accepted |
 | ADR-0021 | Notes are ordinary documents: a `source_ref` marker, no schema change, force-ingest past content dedup | Accepted |
+| ADR-0022 | In-app updates: the client never sees a URL, checksums ship with the package, failed checks stay silent | Accepted |
 
 ---
 
@@ -1177,3 +1178,77 @@ because it lives on the ingest rollback path the corpus depends on.
 `css/style.css`, `DESIGN.md` + `docs/zh-CN/DESIGN.md` (the `note-editor: 70` rung); tests
 `tests/unit/web/test_notes_api.py` (new), `tests/unit/ingest/test_service.py`; smoke
 `tools/smoke_tree.mjs`; E2E `tools/chrome_notes.py` (new).
+
+---
+
+## ADR-0022 In-app updates: the client never sees a URL, checksums ship with the package, failed checks stay silent
+
+- Status: Accepted | v0.1.1 (2026-09-19, after the user reported "the desktop shortcut is always the old
+  version" and chose the one-click download-and-install flow)
+- Related: ADR-0019 / ADR-0020 (the download defence chain and the loopback escape-hatch convention,
+  reused here), ADR-0018 (the settings panel, where the "About" section lives), ADR-0002 (the update
+  chain carries no credentials at all)
+
+**Problem**: an installed copy is reached through a desktop shortcut that points into the install
+directory, and that directory only changes when the installer runs. There was no update mechanism at
+all: after every change I rebuilt the development bundle, and the user's copy stayed old (a recurring
+frustration from 2026-09-11 onward, called out explicitly on 2026-09-19). The flow the user chose: on
+startup, if a newer release exists, show a dialog → one click downloads it → the installer runs.
+
+**Decision**:
+
+1. **The check endpoint speaks for the client; the response contains no URL.** `GET /api/update/check`
+   asks GitHub's `/releases/latest` server-side; download URLs never appear in the response — the
+   frontend only ever says "download the latest". The client therefore cannot name any address, which
+   narrows the SSRF surface to "the one chain the server picked out itself". The download entry point
+   needs exactly one thing: a host allowlist (`github.com` / `*.githubusercontent.com`, https).
+2. **Loopback http is an escape hatch, and only that.** Same trade-off as `papers/download.py`: a
+   non-allowlisted host must be **http + loopback** (the E2E fake GitHub and fake asset host). Loopback
+   cannot reach the intranet, so the SSRF guarantee is untouched; it also blocks "the API response was
+   swapped for an arbitrary public host".
+3. **Every download is checked against a sha256, and the checksum ships with the package.** The
+   installer and the same release's `SHA256SUMS.txt` are fetched together and compared byte for byte
+   before the installer may start; **without a checksum file there is no automatic update** (the user
+   downloads manually instead). This defeats corrupted or in-flight-replaced downloads; a compromised
+   release account is not defeated (checksum and package share a source) — an accepted residual,
+   recorded in limitations. Any failure deletes the partial file: nothing that "looks installable" is
+   ever left behind.
+4. **Launching the installer is double-click semantics** (`os.startfile`) behind three gates: the file
+   exists, it sits inside the data directory's `updates/`, and its name matches
+   `Mikasa-Setup-*-win64.exe`. The wizard `taskkill`s the running Mikasa itself, so after "launch" this
+   process dies — the frontend expects no further response. E2E sets `MIKASA_UPDATE_SKIP_LAUNCH=1`,
+   which turns this step into a log line (it only makes the code do *less*, so the switch points in the
+   safe direction).
+5. **A failed check is always silent**: an offline user should not be nagged by a network error; the
+   error goes to the log and the status endpoint only. Only an explicit "Check for updates" click
+   surfaces a failure. Check results are cached for 10 minutes (GitHub's anonymous quota is 60/hour/IP);
+   the manual path passes `force=1`.
+6. **"Skip this version" lives in localStorage and only silences the silent check**: a manual check
+   clears the marker (asking means wanting to know now). The settings panel gained an "About" section:
+   current version, the startup-check toggle, and a manual check button.
+7. **The dialog cannot be closed while downloading** — otherwise the user sees "I clicked download, the
+   window vanished, nothing happened". Esc and backdrop clicks are ignored mid-download; on failure the
+   dialog explains itself and keeps "Open release page" within reach (manual download is the permanent
+   fallback).
+8. **This code has to ship in v0.1.1**: the old build does not contain it and cannot know a new release
+   exists — this one still has to be installed by hand, and only then does "it tells me on startup"
+   hold.
+
+**Consequences**: startup makes one read-only request to `api.github.com` (no credentials, no local
+data), and it can be turned off — in a local-first product this is a **disclosed network behaviour**,
+written into the usage guide; downloads from github.com are slow from mainland China (18 seconds
+measured for a small file), so a large installer can take minutes — the progress bar and the
+"fall back to the release page" path exist for that; automatic install covers Windows only
+(`os.startfile`); `updates/` keeps only the most recent file (older residue is cleaned when the next
+download starts); and the release process gains one rule: **every release must ship
+`SHA256SUMS.txt`**, or existing users cannot use the automatic update at all.
+
+**Code**: `src/mikasa/update/` (`release.py` version compare / release parsing / asset picking,
+`install.py` allowlisted download + verification + launch + single-slot job manager, `checker.py` TTL
+cache, `errors.py`), `web/routers/update.py` (four endpoints), `web/services.py` (`updates` /
+`update_jobs`), `web/app.py` (router); frontend `static/js/update.js` (new), `static/js/qa.js`
+(startup wiring), `static/index.html` (settings "About" section), `css/style.css` (`.upd-*`,
+z-index 95), `DESIGN.md` + `docs/zh-CN/DESIGN.md` (the new rung and components); tests
+`tests/unit/update/test_release.py`, `tests/unit/update/test_install.py`,
+`tests/unit/web/test_update_api.py`; E2E `tools/chrome_update.py` (new: a fake GitHub, a throttled fake
+download, and no executable ever launched).

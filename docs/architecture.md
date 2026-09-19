@@ -262,6 +262,16 @@ The import also records `documents.source_ref` (`"arxiv:2401.12345"`), which is
 what lets a search result say "already in your library"; the v4 migration adds
 that column, and the two re-index keep-lists carry it across a full rebuild.
 
+**In-app updates** (v0.1.1, ADR-0022) live in `update/` and are exposed by
+`web/routers/update.py`: `GET /api/update/check`, `POST /api/update/download`,
+`GET /api/update/download/status`, `POST /api/update/install`. The server asks GitHub's
+`/releases/latest` itself and picks the installer asset out of the API response — **the client
+never receives a URL** — then downloads it behind a host allowlist (`github.com` /
+`*.githubusercontent.com`; http+loopback is the E2E escape hatch), verifies the sha256 against the
+same release's `SHA256SUMS.txt`, and launches the wizard with double-click semantics
+(`os.startfile`). A failed check stays silent (log + status endpoint only), results are cached for
+10 minutes, and the frontend offers "skip this version" plus a startup-check toggle in settings.
+
 ## 9. Eval orchestration (one implementation for CLI and web)
 
 `eval/service.py::run_and_persist` is the shared "run it and persist it"
