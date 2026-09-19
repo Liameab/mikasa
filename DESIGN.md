@@ -1,37 +1,47 @@
 ---
 version: alpha
 name: Mikasa-design-system
-description: A dense dark-canvas product UI for a local RAG workbench. One green accent carries brand, selection and success; cyan carries information and citations; amber and red carry warning and danger. Compact system-sans type (11–22px, no web fonts), one 4px-based spacing scale, a five-rung radius grammar, and a fixed z-index ladder for overlays. Built for a desktop window first, with exactly one responsive breakpoint. Every color, radius and overlay level is a CSS custom property in style.css :root — that block is the source of truth this document describes.
+description: A warm-cream editorial product UI for a local RAG workbench, adapted from Anthropic's Claude surface system (2026-09-19). A tinted cream canvas carries every page; one coral accent carries brand, primary action and selection; teal carries information and citations; success green is deliberately *not* the brand color. Dark surfaces appear only where the product shows its machinery — code blocks and terminals. Humanist-sans body with serif display headings (no web fonts), one 4px-based spacing scale, a five-rung radius grammar, and a fixed z-index ladder for overlays. Built for a desktop window first, with exactly one responsive breakpoint. Every color, radius and overlay level is a CSS custom property in style.css :root — that block is the source of truth this document describes.
 
 colors:
-  bg: "#0f1117"            # var(--bg)       page canvas
-  bg-panel: "#161b22"      # var(--bg-panel) cards, panels, bubbles, menus
-  bg-inset: "#0d1117"      # var(--bg-inset) inputs, code, chip track, row hover
-  border: "#30363d"        # var(--border)   1px hairlines and control outlines
-  text: "#e6edf3"          # var(--text)     primary text
-  muted: "#8b949e"         # var(--muted)    secondary text, icons, hints
-  green: "#3fb950"         # var(--green)    brand + success + selection
-  cyan: "#39c5cf"          # var(--cyan)     information + citation
-  red: "#f85149"           # var(--red)      danger + error
-  yellow: "#d29922"        # var(--yellow)   warning + attention + highlight
-  focus: "#2f81f7"         # var(--focus)    keyboard focus ring only
+  bg: "#faf9f5"            # var(--bg)        page canvas — warm cream, never pure white
+  bg-panel: "#f5f0e8"      # var(--bg-panel)  cards, panels, bubbles, topbar (one step in)
+  bg-inset: "#efe9de"      # var(--bg-inset)  inputs, user bubble, chip track, row hover
+  bg-raised: "#ffffff"     # var(--bg-raised) floating surfaces only: modals, menus, toast
+  border: "#e6dfd8"        # var(--border)    1px hairlines and control outlines
+  text: "#141413"          # var(--text)      primary text (warm near-black)
+  muted: "#6c6a64"         # var(--muted)     secondary text, icons, hints
+  accent: "#cc785c"        # var(--accent)    brand + primary action + selection (coral)
+  accent-active: "#a9583e" # var(--accent-active) pressed/hover coral
+  teal: "#5db8a6"          # var(--teal)      information + citation
+  success: "#5db872"       # var(--success)   success + health — never brand
+  warning: "#d4a017"       # var(--warning)   warning + attention
+  danger: "#c64545"        # var(--danger)    danger + error
+  focus: "#cc785c"         # var(--focus)     keyboard focus ring (same as brand)
+  dark: "#181715"          # var(--dark)      code blocks and terminals only
+  dark-soft: "#1f1e1b"     # var(--dark-soft) code header inside a dark block
+  on-dark: "#faf9f5"       # var(--on-dark)   text on dark surfaces (canvas-toned)
+  on-dark-soft: "#a09d96"  # var(--on-dark-soft) secondary text on dark surfaces
   chat-font: "14.5px"      # var(--chat-font) user-overridable message size
   chat-bg: "transparent"   # var(--chat-bg)   user-overridable chat canvas color
   chat-img: "none"         # var(--chat-img)  user-overridable chat background image
 
 typography:
-  fontFamily: '"Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif'
-  mono: 'Consolas, "Courier New", monospace'
+  fontFamily: '"Inter", "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif'
+  display: 'Georgia, "Times New Roman", "Songti SC", "SimSun", "Source Han Serif SC", serif'
+  mono: '"JetBrains Mono", Consolas, "Courier New", monospace'
   base: 15px               # body
   lineHeight: 1.65         # body; long-form reading goes to 1.75–1.8
-  brand:
-    fontSize: 18px
-    fontWeight: 700
-    letterSpacing: 1px
-  page-title:
-    fontSize: 16px
-    fontWeight: 600
-  card-title:
+  brand:                   # the wordmark: serif, never bold
+    fontSize: 19px
+    fontWeight: 400
+    letterSpacing: 0.02em  # Latin only — CJK never gets tracking
+    fontFamily: '{typography.display}'
+  page-title:              # .card h2, welcome panel head, update dialog head
+    fontSize: 17px
+    fontWeight: 400
+    fontFamily: '{typography.display}'
+  card-title:              # dialog and card titles that stay UI (not editorial)
     fontSize: 16px
     fontWeight: 600
   section-label:           # .card h3 / panel group heading
@@ -58,9 +68,10 @@ typography:
   micro:                   # badges, meta lines, code language labels
     fontSize: 11px
     fontWeight: 400
-  stat-value:
-    fontSize: 20px
-    fontWeight: 700
+  stat-value:              # serif numerals: metrics read as a table in a magazine
+    fontSize: 22px
+    fontWeight: 400
+    fontFamily: '{typography.display}'
 
 rounded:
   control: 6px             # buttons, inputs, menu items, swatches
@@ -335,10 +346,17 @@ find-papers / evaluation) inside one window, driven with a mouse and a keyboard,
 
 **Key characteristics:**
 
-- Dark canvas (`{colors.bg}` #0f1117) with three surface steps: page → panel → inset. Depth
-  is expressed by *stepping down* into insets, not by shadows.
-- Single green accent (`{colors.green}` #3fb950) for brand, selection and success; tints are
-  the token's own RGB at a fixed alpha ladder.
+- Warm-cream canvas (`{colors.bg}` #faf9f5) with three surface steps: canvas → panel → inset,
+  plus pure white reserved for *floating* surfaces. Depth is expressed by stepping the
+  background, not by shadows. **The cream is the brand** — pure white reads as every other AI
+  tool (2026-09-19: the user brought Anthropic's own design system in and asked for this voice).
+- One coral accent (`{colors.accent}` #cc785c) for brand, primary action and selection; tints
+  are the token's own RGB at a fixed alpha ladder. Coral spreads exactly once — the primary
+  button fill; everywhere else it is a wash.
+- `{colors.success}` (#5db872) is **separate** from the brand: green means "healthy / done"
+  (the topbar dot, `.pill.ok`) and never means "this is Mikasa".
+- Dark surfaces (`{colors.dark}` #181715) are not a theme — they are where the product shows
+  its machinery: code blocks and terminals. Nothing else is dark.
 - CJK-first typography: **never negative letter-spacing** (CJK glyphs sit on a square
   grid); the only two `letter-spacing` declarations in the codebase are positive and Latin-only.
 - Compact scale — 11/12/13/14/15/16/20/22px, body at 15px, reading surfaces at 14px/1.8.
@@ -355,35 +373,38 @@ find-papers / evaluation) inside one window, driven with a mouse and a keyboard,
 
 | Token | Hex | Role |
 | --- | --- | --- |
-| `{colors.bg}` | #0f1117 | Page canvas (body background). |
-| `{colors.bg-panel}` | #161b22 | Cards, chat bubbles, menus, toast, topbar. One step above canvas. |
-| `{colors.bg-inset}` | #0d1117 | Inputs, code blocks, chip tracks, table headers, row hover. One step *below* canvas — recessed, not raised. |
-| `{colors.border}` | #30363d | The only hairline color: card outlines, control borders, dividers, scrollbar thumb. |
+| `{colors.bg}` | #faf9f5 | Page canvas (body background). Warm cream — the system's signature. |
+| `{colors.bg-panel}` | #f5f0e8 | Cards, chat bubbles, topbar, sidebar. One step *into* the surface. |
+| `{colors.bg-inset}` | #efe9de | Inputs, user bubble, chip tracks, row hover. Two steps in — recessed. |
+| `{colors.bg-raised}` | #ffffff | Floating surfaces only: modals, menus, toast, the reader panel. |
+| `{colors.border}` | #e6dfd8 | The only hairline color: card outlines, control borders, dividers, scrollbar thumb. |
+| `{colors.dark}` | #181715 | Code blocks and terminals — the product's machinery, never the page. |
 
-**Depth rule:** elevation is expressed by stepping the background (`panel` → `bg` → `inset`)
-and by tint, never by a shadow on a panel. Shadows exist only for *floating* things
-(menus, dialogs, toast, panels) — see Elevation.
+**Depth rule:** elevation is expressed by stepping the background (canvas `bg` → recessed
+`bg-panel` → deeper `bg-inset`), by tint, and — for anything that genuinely floats — by a
+white `bg-raised` surface. Shadows exist only for *floating* things (menus, dialogs, toast,
+panels) — see Elevation.
 
 ### Accent & semantics
 
 | Token | Hex | Means | Never means |
 | --- | --- | --- | --- |
-| `{colors.green}` | #3fb950 | Brand, selected/current, success, upload/positive action | Danger, plain information |
-| `{colors.cyan}` | #39c5cf | Information, citations, references, "back to bottom" | Success, selection |
-| `{colors.yellow}` | #d29922 | Warning, attention, in-text quote, "this is worth a look" | Error |
-| `{colors.red}` | #f85149 | Error, danger, destructive confirm, out-of-range citation | Warning |
-| `{colors.focus}` | #2f81f7 | Keyboard focus ring (`:focus-visible`, input focus border) | Brand, decoration |
+| `{colors.accent}` | #cc785c | Brand, selected/current, primary action | Success, danger, plain information |
+| `{colors.teal}` | #5db8a6 | Information, citations, references, "back to bottom" | Success, selection |
+| `{colors.success}` | #5db872 | Success, health, "already in the library" | Brand, selection |
+| `{colors.warning}` | #d4a017 | Warning, attention, in-text quote, page highlights | Error |
+| `{colors.danger}` | #c64545 | Error, danger, destructive confirm, out-of-range citation | Warning |
+| `{colors.focus}` | #cc785c | Keyboard focus ring (`:focus-visible`, input focus border) | Decoration |
 
-**The focus blue is the one deliberate exception to "one accent".** It appears only where
-the keyboard is talking to the app, and it is never used as a decorative or brand color.
-That is why it is allowed to sit outside the green family.
+**Focus is the brand color itself** — the former blue #2f81f7 was folded into the coral on
+2026-09-19, which removes the one accent the old dark system had to justify as an exception.
 
 ### The alpha ladder (tints)
 
 Tints are always `rgba(<token RGB>, α)` — never a new hand-picked hex. The RGB triples in
-use: green `63, 185, 80` · cyan `57, 197, 207` · amber `210, 153, 34` · red `248, 81, 73` ·
-focus `47, 129, 247` · border `48, 54, 61` · white `255, 255, 255` (for hover washes on
-tables, at 0.02–0.03).
+use: coral `204, 120, 92` · teal `93, 184, 166` · success `93, 184, 114` · warning
+`212, 160, 23` · amber-highlight `232, 165, 90` · danger `198, 69, 69` · ink `20, 20, 19`
+(hover washes on tables and code headers, at 0.02–0.03) · scrim `24, 23, 21`.
 
 The intended ladder, and the six rungs that carry 90% of the UI:
 
@@ -403,13 +424,17 @@ The intended ladder, and the six rungs that carry 90% of the UI:
 One stack, no downloads:
 
 ```
-"Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif   /* UI + body */
-Consolas, "Courier New", monospace                                    /* code */
+"Inter", "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif      /* UI + body */
+Georgia, "Times New Roman", "Songti SC", "SimSun", "Source Han Serif SC", serif  /* display */
+"JetBrains Mono", Consolas, "Courier New", monospace                             /* code */
 ```
 
-Latin falls to Segoe UI (Windows) / the system UI font; CJK falls to Microsoft YaHei or
-PingFang SC. `font: inherit` is set on every control so form elements do not fall back to
-the browser's default 13.3px Times.
+The display/serif split is the editorial voice: **serif for the wordmark, page titles,
+welcome and dialog headlines, and stat numerals; sans for everything the user operates.**
+Latin display falls to Georgia, CJK display to the 宋体 family (Songti SC / SimSun) — the only
+serif a Windows machine reliably has. Body Latin falls to Inter then Segoe UI, CJK to
+Microsoft YaHei / PingFang SC. `font: inherit` is set on every control so form elements do
+not fall back to the browser's default 13.3px Times.
 
 ### Hierarchy
 
@@ -434,10 +459,11 @@ Body copy in the chat/reading surfaces is user-overridable through `--chat-font`
 
 ### Principles
 
-1. **CJK first: no negative letter-spacing, ever.** The two `letter-spacing` declarations in
-   the codebase are both positive (`+1px` on the Latin wordmark, `0.04em` on panel section
-   labels). Copying a Latin display system's `-0.28px` headline tracking onto Chinese text
-   squeezes glyphs that were designed on a square em.
+1. **CJK first: no negative letter-spacing, ever.** The Claude system's serif headlines carry
+   negative tracking (-0.3 to -1.5px), and that part is deliberately **not** imported: our
+   headlines are usually Chinese, and squeezing glyphs designed on a square em is a Latin
+   habit. The codebase's `letter-spacing` declarations stay small and positive (`0.02em` on
+   the Latin wordmark, `0.04em` on panel section labels).
 2. **Four weights, each with a job**: 400 body · 500 labels and quiet headings · 600
    emphasis, titles, selected state · 700 only the wordmark and stat values.
 3. **Numbers that are compared get `font-variant-numeric: tabular-nums`** (metric values,
@@ -625,21 +651,25 @@ classes above and adds a new one *in the same vocabulary* (state suffixes: `.on`
   `rgba(token-rgb, α)` on the ladder, not a new hex.
 - Reach for `{colors.bg-inset}` for inputs, code, chips and hover; `{colors.bg-panel}` for
   cards, menus and bubbles. Depth is a surface step.
-- Let green mean "current / chosen / worked". Selection uses green in every surface (nav,
-  session, run, tab, mode, chip) — consistency is what makes the overload legible.
+- Let coral mean "current / chosen / acted on". Selection uses the accent in every surface
+  (nav, session, run, tab, mode, chip) — consistency is what makes it legible. Green is
+  reserved for "it worked" (`--success`).
 - Keep CJK text at default tracking. Positive tracking only for Latin wordmarks and
   section labels.
 - Give every interactive element all four states (hover, active/selected, disabled,
   focus-visible). A control with only a hover state is incomplete here.
 - Use the z-index ladder; if a new layer is needed, name it in that ladder (and in this
   file) rather than picking a number that looks big.
-- Reuse `.s-chip` / `.pill` / `.rd-tabs` for "pick one of N" — the pill + green-fill
+- Reuse `.s-chip` / `.pill` / `.rd-tabs` for "pick one of N" — the pill + accent-fill
   vocabulary is the app's selection language.
 
 ### Don't
 
-- Don't add a second brand accent. Cyan/amber/red are semantic; focus blue is for the
-  keyboard only.
+- Don't add a second brand accent. Teal/amber/red/green are semantic; focus reuses the
+  brand coral, so there is no third hue to reach for.
+- Don't paint the canvas pure white, and don't use the dark surface as a background for
+  anything but code — the cream-to-dark contrast is the pacing rhythm, and it stops working
+  the moment either side spreads.
 - Don't put shadows on cards, rows or buttons — shadows are for overlays.
 - Don't introduce a radius outside the five rungs (the 3/4/5/7/14px values in the current
   stylesheet are drift, not a scale to extend).
@@ -675,7 +705,7 @@ would cost the density that makes the three-pane layout work.
    sibling in the same family (a new panel is a `.card`; a new control is a `.btn` variant).
 2. **New token → `:root` first.** If a value is needed in more than one place, it belongs in
    the variable block, and in this file.
-3. **Selection looks like selection.** Green fill + green border (or green text) at the
+3. **Selection looks like selection.** Coral fill + coral border (or coral text) at the
    `tint` rung, no exceptions.
 4. **Metadata is muted and small; actions are bright and labeled.** If a user cannot tell
    what is clickable, the fix is contrast, not a border.

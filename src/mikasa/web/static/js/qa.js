@@ -354,11 +354,11 @@ async function sendQuestion() {
         buffer = "";
       } else if (type === "error") {
         clearInterval(waitTimer);
-        card.innerHTML = `<p style="color:var(--red)">✗ ${esc(data.message)}</p>`;
+        card.innerHTML = `<p style="color:var(--danger)">✗ ${esc(data.message)}</p>`;
       }
     });
   } catch (err) {
-    card.innerHTML = `<p style="color:var(--red)">✗ 发送失败：${esc(err.message)}</p>`;
+    card.innerHTML = `<p style="color:var(--danger)">✗ 发送失败：${esc(err.message)}</p>`;
   } finally {
     clearInterval(waitTimer); // 兜底：done/error 已清，异常中断也不会留下空转
     finish();

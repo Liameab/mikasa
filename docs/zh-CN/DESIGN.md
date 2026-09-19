@@ -1,37 +1,47 @@
 ---
 version: alpha
 name: Mikasa-design-system
-description: 一个紧凑暗色画布的本机 RAG 工作台界面。唯一绿色强调色同时承担品牌、选中与成功；青色承担信息与引用；琥珀与红承担警示与危险。紧凑系统字体（11–22px，无 web font）、一套 4px 基数间距、五档圆角语法、固定 z-index 阶梯。为桌面窗口优先设计，全站只有一个响应式断点。每个颜色、圆角与浮层层级都是 style.css :root 里的 CSS 自定义属性——那个变量块才是本文档描述的事实源。
+description: 一个暖米画布、编辑气质的本机 RAG 工作台界面，改编自 Anthropic Claude 官网那套设计系统（2026-09-19）。暖米画布承载每一页；唯一珊瑚强调色承担品牌、主行动与选中；暖青承担信息与引用；成功绿刻意**不**做品牌色。深色面只出现在产品露出"机芯"的地方——代码块与终端。人文无衬线正文配衬线标题（无 web font）、一套 4px 基数间距、五档圆角语法、固定 z-index 阶梯。为桌面窗口优先设计，全站只有一个响应式断点。每个颜色、圆角与浮层层级都是 style.css :root 里的 CSS 自定义属性——那个变量块才是本文档描述的事实源。
 
 colors:
-  bg: "#0f1117"            # var(--bg)       页面底色
-  bg-panel: "#161b22"      # var(--bg-panel) 卡片、面板、气泡、菜单
-  bg-inset: "#0d1117"      # var(--bg-inset) 输入区、代码、芯片凹槽、行悬停
-  border: "#30363d"        # var(--border)   1px 细线与控件描边
-  text: "#e6edf3"          # var(--text)     主文本
-  muted: "#8b949e"         # var(--muted)    次级文本、图标、提示
-  green: "#3fb950"         # var(--green)    品牌 + 成功 + 选中
-  cyan: "#39c5cf"          # var(--cyan)     信息 + 引用
-  red: "#f85149"           # var(--red)      危险 + 错误
-  yellow: "#d29922"        # var(--yellow)   警示 + 注意 + 高亮
-  focus: "#2f81f7"         # var(--focus)    仅键盘焦点圈
+  bg: "#faf9f5"            # var(--bg)        页面画布——暖米，永不纯白
+  bg-panel: "#f5f0e8"      # var(--bg-panel)  卡片、面板、气泡、顶栏（往里走一档）
+  bg-inset: "#efe9de"      # var(--bg-inset)  输入区、用户气泡、芯片凹槽、行悬停
+  bg-raised: "#ffffff"     # var(--bg-raised) 仅浮层面：模态、菜单、toast
+  border: "#e6dfd8"        # var(--border)    1px 细线与控件描边
+  text: "#141413"          # var(--text)      主文本（暖黑）
+  muted: "#6c6a64"         # var(--muted)     次级文本、图标、提示
+  accent: "#cc785c"        # var(--accent)    品牌 + 主行动 + 选中（珊瑚）
+  accent-active: "#a9583e" # var(--accent-active) 按下的珊瑚
+  teal: "#5db8a6"          # var(--teal)      信息 + 引用
+  success: "#5db872"       # var(--success)   成功 + 健康——永不做品牌色
+  warning: "#d4a017"       # var(--warning)   警示 + 注意
+  danger: "#c64545"        # var(--danger)    危险 + 错误
+  focus: "#cc785c"         # var(--focus)     键盘焦点圈（同品牌色）
+  dark: "#181715"          # var(--dark)      仅代码块与终端
+  dark-soft: "#1f1e1b"     # var(--dark-soft) 深色块内的代码头
+  on-dark: "#faf9f5"       # var(--on-dark)   深色面上的文字（取画布同源色）
+  on-dark-soft: "#a09d96"  # var(--on-dark-soft) 深色面上的次级文字
   chat-font: "14.5px"      # var(--chat-font) 用户可覆写的消息字号
   chat-bg: "transparent"   # var(--chat-bg)   用户可覆写的对话区底色
   chat-img: "none"         # var(--chat-img)  用户可覆写的对话区背景图
 
 typography:
-  fontFamily: '"Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif'
-  mono: 'Consolas, "Courier New", monospace'
+  fontFamily: '"Inter", "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif'
+  display: 'Georgia, "Times New Roman", "Songti SC", "SimSun", "Source Han Serif SC", serif'
+  mono: '"JetBrains Mono", Consolas, "Courier New", monospace'
   base: 15px               # body
   lineHeight: 1.65         # body；长文阅读放宽到 1.75–1.8
-  brand:
-    fontSize: 18px
-    fontWeight: 700
-    letterSpacing: 1px
-  page-title:
-    fontSize: 16px
-    fontWeight: 600
-  card-title:
+  brand:                   # 字标：衬线，永不加粗
+    fontSize: 19px
+    fontWeight: 400
+    letterSpacing: 0.02em  # 只作用于拉丁——中文永不加字距
+    fontFamily: '{typography.display}'
+  page-title:              # .card h2、欢迎面板标题、更新弹窗标题
+    fontSize: 17px
+    fontWeight: 400
+    fontFamily: '{typography.display}'
+  card-title:              # 保持"界面"身份的卡片/弹窗标题
     fontSize: 16px
     fontWeight: 600
   section-label:           # .card h3 / 面板分组标题
@@ -58,9 +68,10 @@ typography:
   micro:                   # 徽标、元信息行、代码语言标签
     fontSize: 11px
     fontWeight: 400
-  stat-value:
-    fontSize: 20px
-    fontWeight: 700
+  stat-value:              # 衬线数字：指标读起来像杂志里的表格
+    fontSize: 22px
+    fontWeight: 400
+    fontFamily: '{typography.display}'
 
 rounded:
   control: 6px             # 按钮、输入框、菜单项、色板圆点
@@ -330,10 +341,13 @@ Mikasa 的界面是一个**紧凑、暗色、单用户的桌面工作台**：四
 
 **关键特征：**
 
-- 暗色画布（`{colors.bg}` #0f1117）配三级表面：页面 → 面板 → 凹槽。层次靠**往凹里走**
-  表达，不靠阴影。
-- 单一绿色强调色（`{colors.green}` #3fb950）承担品牌、选中与成功；着色一律是该 token 自身
-  RGB 走固定 alpha 阶梯。
+- 暖米画布（`{colors.bg}` #faf9f5）配三级表面：画布 → 面板 → 凹槽，外加只给浮层用的纯白。
+  层次靠换底色表达，不靠阴影。**这块米色就是品牌**——换纯白就成了任何一个 AI 工具
+  （2026-09-19：用户拿着 Anthropic 自己的设计系统来要这个气质）。
+- 单一珊瑚强调色（`{colors.accent}` #cc785c）承担品牌、主行动与选中；着色一律是该 token 自身
+  RGB 走固定 alpha 阶梯。珊瑚只"铺开"一次——主按钮填充；其余位置一律是洗色。
+- `{colors.success}`（#5db872）与品牌色**分开**：绿只说"健康/完成"（顶栏状态点、`.pill.ok`），
+  从不说"这是 Mikasa"。
 - 中文优先的排版：**永不用负字距**（汉字按方块字格设计）；全仓仅有的两处 `letter-spacing`
   都是正值，且只作用于拉丁字标。
 - 紧凑字阶：11/12/13/14/15/16/20/22px；正文 15px，阅读面 14px/1.8。
@@ -349,32 +363,37 @@ Mikasa 的界面是一个**紧凑、暗色、单用户的桌面工作台**：四
 
 | Token | 十六进制 | 用途 |
 | --- | --- | --- |
-| `{colors.bg}` | #0f1117 | 页面画布（body 底色）。 |
-| `{colors.bg-panel}` | #161b22 | 卡片、对话气泡、菜单、toast、顶栏。比画布高一级。 |
-| `{colors.bg-inset}` | #0d1117 | 输入框、代码块、芯片凹槽、表头、行悬停。比画布**低**一级——是凹进去的，不是抬起来的。 |
-| `{colors.border}` | #30363d | 唯一的细线色：卡片轮廓、控件描边、分隔线、滚动条滑块。 |
+| `{colors.bg}` | #faf9f5 | 页面画布（body 底色）。暖米，是这套系统的签名。 |
+| `{colors.bg-panel}` | #f5f0e8 | 卡片、对话气泡、顶栏、侧栏。往表面里走一档。 |
+| `{colors.bg-inset}` | #efe9de | 输入框、用户气泡、芯片凹槽、行悬停。往里走两档——凹进去的。 |
+| `{colors.bg-raised}` | #ffffff | 只给浮层：模态、菜单、toast、阅读面板。 |
+| `{colors.border}` | #e6dfd8 | 唯一的细线色：卡片轮廓、控件描边、分隔线、滚动条滑块。 |
+| `{colors.dark}` | #181715 | 代码块与终端——产品的"机芯"，永不做页面底色。 |
 
-**层次规则**：层次靠换底色（panel → bg → inset）与着色表达，面板**永不**用阴影假装抬高。
-阴影只属于*浮在页面上方*的东西（菜单、确认框、toast、面板）——见「高度与层次」。
+**层次规则**：层次靠换底色（画布 `bg` → 凹进 `bg-panel` → 更凹 `bg-inset`）、着色，以及
+（真正浮起来的东西）白色 `bg-raised`。面板**永不**用阴影假装抬高——阴影只属于*浮在页面上方*
+的东西（菜单、确认框、toast、面板），见「高度与层次」。
 
 ### 强调色与语义色
 
 | Token | 十六进制 | 表示 | 永不表示 |
 | --- | --- | --- | --- |
-| `{colors.green}` | #3fb950 | 品牌、选中/当前、成功、上传等正面动作 | 危险、纯信息 |
-| `{colors.cyan}` | #39c5cf | 信息、引用、参考文献、"回到底部" | 成功、选中 |
-| `{colors.yellow}` | #d29922 | 警示、注意、正文引用块、"这里值得看一眼" | 错误 |
-| `{colors.red}` | #f85149 | 错误、危险、破坏性确认、越界引用 | 警示 |
-| `{colors.focus}` | #2f81f7 | 键盘焦点圈（`:focus-visible`、输入框聚焦描边） | 品牌、装饰 |
+| `{colors.accent}` | #cc785c | 品牌、选中/当前、主行动 | 成功、危险、纯信息 |
+| `{colors.teal}` | #5db8a6 | 信息、引用、参考文献、"回到底部" | 成功、选中 |
+| `{colors.success}` | #5db872 | 成功、健康、"已在库中" | 品牌、选中 |
+| `{colors.warning}` | #d4a017 | 警示、注意、正文引用块、页面高亮 | 错误 |
+| `{colors.danger}` | #c64545 | 错误、危险、破坏性确认、越界引用 | 警示 |
+| `{colors.focus}` | #cc785c | 键盘焦点圈（`:focus-visible`、输入框聚焦描边） | 装饰 |
 
-**焦点蓝是"单一强调色"唯一被许可的例外。** 它只出现在键盘与界面对话的地方，从不作为装饰
-或品牌色使用——所以它被允许待在绿色家族之外。
+**焦点就是品牌色本身**——原来的焦点蓝 #2f81f7 在 2026-09-19 并进了珊瑚，于是旧暗色系统里
+那个"必须解释的例外"不再需要存在。
 
 ### alpha 阶梯（着色）
 
 所有着色一律 `rgba(<token RGB>, α)`，绝不新挑一个十六进制。在用到的 RGB 三元组：
-绿 `63, 185, 80` · 青 `57, 197, 207` · 琥珀 `210, 153, 34` · 红 `248, 81, 73` ·
-焦点 `47, 129, 247` · 边框 `48, 54, 61` · 白 `255, 255, 255`（表格悬停洗色，0.02–0.03）。
+珊瑚 `204, 120, 92` · 暖青 `93, 184, 166` · 成功 `93, 184, 114` · 警示 `212, 160, 23` ·
+高亮琥珀 `232, 165, 90` · 危险 `198, 69, 69` · 墨 `20, 20, 19`（表格与代码头的悬停洗色，
+0.02–0.03）· 遮罩 `24, 23, 21`。
 
 预期的阶梯，以及承载 90% 界面的六档：
 
@@ -394,19 +413,23 @@ Mikasa 的界面是一个**紧凑、暗色、单用户的桌面工作台**：四
 一套字体栈，零下载：
 
 ```
-"Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif   /* 界面 + 正文 */
-Consolas, "Courier New", monospace                                    /* 代码 */
+"Inter", "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif      /* 界面 + 正文 */
+Georgia, "Times New Roman", "Songti SC", "SimSun", "Source Han Serif SC", serif  /* 标题 */
+"JetBrains Mono", Consolas, "Courier New", monospace                             /* 代码 */
 ```
 
-拉丁字母落到 Segoe UI（Windows）或系统 UI 字体；中文落到微软雅黑或苹方。所有控件都写了
-`font: inherit`，避免表单元素回退到浏览器默认的 13.3px Times。
+衬线/无衬线的分工就是这套系统的编辑口吻：**衬线给字标、页面标题、欢迎与弹窗标题、指标数字；
+无衬线给一切"用户要动手操作"的东西**。拉丁衬线落到 Georgia，中文衬线落到宋体族
+（Songti SC / SimSun）——那是 Windows 机器上唯一稳定可用的衬线。正文拉丁落到 Inter 再到
+Segoe UI，中文落到微软雅黑或苹方。所有控件都写了 `font: inherit`，避免表单元素回退到
+浏览器默认的 13.3px Times。
 
 ### 层级
 
 | Token | 字号 | 字重 | 用途 |
 | --- | --- | --- | --- |
-| `{typography.brand}` | 18px | 700 | 仅 `Mikasa` 字标（+1px 字距，只作用于拉丁）。 |
-| `{typography.page-title}` | 20–22px | 600 | 页面级标题与指标数值。 |
+| `{typography.brand}` | 19px | 400 | 仅 `Mikasa` 字标（衬线；+0.02em 字距，只作用于拉丁）。 |
+| `{typography.page-title}` | 17px | 400 | 页面级标题（衬线）、欢迎面板与更新弹窗标题。 |
 | `{typography.card-title}` | 16px | 600 | `.card h2`、气泡 `h3`、确认框标题。 |
 | `{typography.body}` | 14px | 400 | 默认正文：表格、菜单、评测报告、阅读正文。 |
 | `.settings-panel .s-group` | 12px | 600 | 设置面板分组标签，青色，+0.04em 字距（拉丁式标签口吻）。 |
@@ -417,16 +440,16 @@ Consolas, "Courier New", monospace                                    /* 代码 
 | `{typography.caption}` | 12px | 400 | `.small`、`.pill`、提示、元信息行。 |
 | chip / 模式标签 | 12.5px | 400 | `.s-chip`、`.mode-btn`、`.to-bottom`——处于 caption 与 row 之间的半档。 |
 | `{typography.micro}` | 11px | 400 | 徽标、`.s-meta`、代码语言标签、消息署名。 |
-| `{typography.stat-value}` | 20px | 700 | 评测指标数值（配 `tabular-nums`）。 |
+| `{typography.stat-value}` | 22px | 400 | 评测指标数值（衬线 + `tabular-nums`）。 |
 
 对话区与阅读面的正文字号可由用户覆写（`--chat-font`，默认 14.5px）——这是一个**用户在运行期
 拥有**的 token，由设置面板写入。
 
 ### 原则
 
-1. **中文优先：永不使用负字距。** 全仓仅有的两处 `letter-spacing` 都是正值（拉丁字标
-   `+1px`、面板分组标签 `0.04em`）。把拉丁显示字体的 `-0.28px` 负字距搬到中文上，等于
-   挤压按方块字格设计的字形。
+1. **中文优先：永不使用负字距。** Claude 那套系统的衬线标题带负字距（-0.3 至 -1.5px），
+   这一条**刻意没有搬过来**：我们的标题多是中文，而挤压按方块字格设计的字形是拉丁习惯。
+   全仓的 `letter-spacing` 保持小而正（拉丁字标 `0.02em`、面板分组标签 `0.04em`）。
 2. **四个字重，各有各的活**：400 正文 · 500 标签与安静的标题 · 600 强调、标题、选中态 ·
    700 只给字标与指标数值。
 3. **需要对比的数字一律 `font-variant-numeric: tabular-nums`**（指标数值、数值列），让列对得齐。
@@ -600,15 +623,16 @@ toast 刻意压在确认框之上（动作结果要在弹窗关掉后仍看得�
 
 - 每个颜色、圆角、浮层层级都从 `:root` 取。新着色 = `rgba(token-rgb, α)` 走上阶梯，不是新十六进制。
 - 输入框、代码、芯片、悬停用 `{colors.bg-inset}`；卡片、菜单、气泡用 `{colors.bg-panel}`。层次 = 换底色档。
-- 让绿色表示"当前的 / 选中的 / 成了"。所有界面里的选中都用绿（导航、会话、运行、标签、模式、芯片）——一致性是这种"重载"能读得懂的前提。
+- 让珊瑚表示"当前的 / 选中的 / 被作用的"。所有界面里的选中都用珊瑚（导航、会话、运行、标签、模式、芯片）——一致性是它读得懂的前提；绿留给"它成功了"（`--success`）。
 - 中文保持默认字距。正字距只给拉丁字标与分节标签。
 - 每个可交互元素都给全四个状态（hover、active/选中、disabled、focus-visible）。只有一个 hover 态的控件在这里算没做完。
 - 用 z-index 阶梯；确实需要新层就先在阶梯里给它起名（并写进本文），而不是随手挑个大数字。
-- "多选一"一律复用 `.s-chip` / `.pill` / `.rd-tabs`——胶囊 + 绿色填充就是本应用的选中语言。
+- "多选一"一律复用 `.s-chip` / `.pill` / `.rd-tabs`——胶囊 + 强调色填充就是本应用的选中语言。
 
 ### 不该做
 
-- 别加第二个品牌强调色。青/琥珀/红是语义色；焦点蓝只给键盘。
+- 别加第二个品牌强调色。暖青/琥珀/红/绿都是语义色；焦点直接用品牌珊瑚，所以没有第三个色相可捡。
+- 别把画布刷成纯白，也别拿深色面去铺代码以外的东西——米色到深色的对比是这套系统的节奏，任何一边铺开，节奏就散了。
 - 别给卡片、行、按钮加阴影——阴影只属于浮层。
 - 别引入五档之外的圆角（现有样式表里的 3/4/5/7/14px 是漂移，不是可以继续扩展的尺度）。
 - 正文别小于 11px，中文别小于 12px。
@@ -635,7 +659,7 @@ toast 刻意压在确认框之上（动作结果要在弹窗关掉后仍看得�
 
 1. **一次只动一个组件。** 先定位它的类，再看同一族里最近的兄弟（新面板 = `.card`；新控件 = `.btn` 的变体）。
 2. **新 token 先进 `:root`。** 一个值要在两处以上用到，它就该进变量块，并写进本文。
-3. **选中就要长得像选中。** 绿色填充 + 绿描边（或绿字），落在 tint 档，没有例外。
+3. **选中就要长得像选中。** 珊瑚填充 + 珊瑚描边（或珊瑚字），落在 tint 档，没有例外。
 4. **元信息弱化且小，操作醒目且有字。** 用户看不出哪里能点时，解法是对比度，不是加描边。
 5. **样式表里的注释是中文**，并且解释*为什么*是这个值——尤其是那些来自用户反馈的值（"太狭窄"、"字看不清"）。保持这个习惯：一个没有理由的数字，会被下一个改动者"顺手清理"掉。
 6. **新增组件或 token 时，在同一个改动里更新本文**，并跑一遍护栏测试（见下）。

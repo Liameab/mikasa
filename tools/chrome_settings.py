@@ -104,11 +104,15 @@ async def run(args):
                 "getComputedStyle(document.querySelector('#messages')).fontSize"
             )
 
-            # 4. 预设背景色（墨绿）
-            await cdp.evaluate(
-                "[...document.querySelectorAll('.s-sw')]"
-                ".find(b => b.title === '墨绿')?.click(), true"
-            )
+            # 4. 预设背景色：点第二个色板（第一个是"默认"），期望值**从页面上读**
+            #    ——写死色名/色值的版本在换色板时会假失败（2026-09-19 换 Claude
+            #    暖米色板时正是它先报了警：工具没错，是它的假设过期了）。
+            picked = await cdp.evaluate("""(() => {
+              const b = [...document.querySelectorAll('.s-sw')][1];
+              const color = b.dataset.color || '';   // 原始 hex，与 CSS 变量逐字可比
+              b.click();
+              return { label: b.title, color };
+            })()""")
             await asyncio.sleep(0.3)
             bg_var = await cdp.evaluate(
                 "getComputedStyle(document.documentElement).getPropertyValue('--chat-bg').trim()"
@@ -183,14 +187,16 @@ async def run(args):
                 bad.append(f"历史气泡署名没换成 {NICK}")
             if font_px != "17px":
                 bad.append(f"字号未生效: {font_px}")
-            if bg_var != "#0f1a12":
-                bad.append(f"背景色变量不符: {bg_var}")
+            if bg_var != picked["color"]:
+                bad.append(
+                    f"背景色变量不符：点的是「{picked['label']}」{picked['color']}，实得 {bg_var}"
+                )
             if not img_var.startswith("url(") or not preview_ok:
                 bad.append("背景图链路失败")
             persist_ok = (
                 after["nick"] == NICK
                 and after["font"] == "17px"
-                and after["bg"] == "#0f1a12"
+                and after["bg"] == picked["color"]
                 and after["img"]
                 and after["inputNick"] == NICK
             )

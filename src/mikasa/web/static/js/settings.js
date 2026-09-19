@@ -24,14 +24,15 @@ const KEY = {
   bgImage: "mikasa.ui.bgImage",
 };
 
-// 预设背景色（暗色调，文字对比友好；"clear" 项 = 恢复默认）
+// 预设背景色（暖米系统的近亲色：都比画布深一档、文字对比友好；"" = 恢复默认）
+// 换版时同步换过一轮——旧的一组是暗色调，在暖米画布上会像贴错地方。
 const SWATCHES = [
   { label: "默认", color: "" },
-  { label: "深夜蓝", color: "#101a2b" },
-  { label: "墨绿", color: "#0f1a12" },
-  { label: "雾紫", color: "#1a1426" },
-  { label: "暖棕", color: "#1c1610" },
-  { label: "青灰", color: "#0e1c22" },
+  { label: "米白", color: "#f7f4ec" },
+  { label: "暖沙", color: "#f3ece0" },
+  { label: "浅陶", color: "#f6e9e2" },
+  { label: "淡青", color: "#eaf2ef" },
+  { label: "雾灰", color: "#efeee9" },
 ];
 
 const MAX_IMG = 4 * 1024 * 1024; // 压缩后上限 4MB（localStorage 5MB 配额）
@@ -113,7 +114,7 @@ async function imageToDataUrl(file) {
   canvas.width = Math.max(1, Math.round(img.width * scale));
   canvas.height = Math.max(1, Math.round(img.height * scale));
   const ctx = canvas.getContext("2d");
-  ctx.fillStyle = "#0f1117"; // 透明底先垫页面深色
+  ctx.fillStyle = "#faf9f5"; // 透明底先垫画布色（与 --bg 同值，换色板时要一起改）
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
   const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
