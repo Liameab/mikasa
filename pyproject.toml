@@ -4,18 +4,18 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mikasa"
-version = "0.1.4"
+version = "0.1.5"
 description = "Mikasa — a local-first document RAG workspace with citation tracing and automated evaluation"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 authors = [{ name = "Liameab" }]
 keywords = ["rag", "llm", "knowledge-base", "retrieval", "chinese", "education"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Education",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",

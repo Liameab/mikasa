@@ -9,7 +9,7 @@
 ;     dist\Mikasa 载荷、同样的快捷方式与卸载入口）。
 ;
 ; 编译（版本号从命令行传入，保持单一来源，见 tools/build_installer.py）：
-;   ISCC.exe packaging\Mikasa.iss /DAppVersion=0.1.4
+;   ISCC.exe packaging\Mikasa.iss /DAppVersion=0.1.5
 ;
 ; 设计取舍：
 ;   - PrivilegesRequired=lowest → 装进 %LOCALAPPDATA%\Programs\Mikasa，
@@ -46,7 +46,7 @@ DisableDirPage=no
 DefaultGroupName=Mikasa
 AllowNoIcons=yes
 
-; 关掉"许可协议"页：MIT 的全文已随包放进安装目录，没必要卡一步让用户翻
+; 关掉"许可协议"页：AGPL-3.0 的全文已随包放进安装目录（LICENSE），没必要卡一步让用户翻
 LicenseFile=
 
 OutputDir=..\dist

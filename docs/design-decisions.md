@@ -50,6 +50,7 @@
 | ADR-0022 | In-app updates: the client never sees a URL, checksums ship with the package, failed checks stay silent | Accepted |
 | ADR-0023 | A fourth source, DOAJ: key-free Chinese open-access journals, the licensing line, and no WAF bypassing | Accepted |
 | ADR-0024 | Resumable downloads, adoptable jobs: the "observation window" and slot self-healing (amends ADR-0022 points 3 and 7) | Accepted |
+| ADR-0025 | Relicensed to AGPL-3.0: the distributed build bundles AGPL PyMuPDF (change the license, not the dependency) | Accepted |
 
 ---
 
@@ -1427,3 +1428,43 @@ takeover), `web/routers/update.py` (the `_run_job` wrapper and the idempotent PO
 `tools/chrome_update.py` (the fake source gained `Range` plus a "cut once at 1 MiB" switch, and five
 new assertion groups: idempotency / resume / cross-page capsule / dismissed dialog / install only on
 click).
+
+---
+
+## ADR-0025 Relicensed to AGPL-3.0: the distributed build bundles AGPL PyMuPDF
+
+- Status: Accepted | 2026-09-20 (after the user asked what to do about the MIT / AGPL-PyMuPDF clash)
+- Related: ADR-0022 / ADR-0024 (in-app updates and the release process — **publishing binaries** is the
+  act that triggers the obligation)
+
+**Problem**: the project has always been MIT, while a core dependency in `pyproject.toml` is
+**PyMuPDF** ("AGPL-3.0 or Artifex Commercial"). It handles PDF text extraction
+(`ingest/loaders.py`) and the reader's page rendering and text layer (`web/routers/documents.py`) — a
+core component, not an optional extra. Since v0.1.1 we have been **publishing built exe/zip files**,
+and that is when AGPL sections 5-6 kick in: distributing a binary that includes AGPL code means the
+whole distribution must be licensed under the AGPL with the corresponding source offered to
+recipients. The MIT claim simply does not cover that part — and **nothing in local development ever
+surfaces this**; the obligation only exists on the *distribute* side.
+
+**Decision**: the project moves to **AGPL-3.0-or-later**.
+
+1. `LICENSE` becomes the verbatim AGPL-3.0 text (from gnu.org, LF endings); `pyproject.toml` carries
+   `license = "AGPL-3.0-or-later"` plus the matching classifier; both READMEs state the license, the
+   section-13 network obligation, and where the third-party notices live.
+2. **No commercial license, and no replacing PyMuPDF**: the reader's "select text on the page and hit
+   the same box in the original" depends on its word-box coordinates, and table geometry
+   reconstruction and Chinese text-layer quality lean on it heavily. Swapping in `pypdf` (text) plus
+   `pypdfium2` (rendering) is a real migration measured in weeks whose main outcome would be lower
+   quality. **Fit the license to the dependency, not the dependency to the license.**
+3. Compliance reuses machinery that already exists rather than adding process:
+   `tools/make_third_party_notices.py` has always singled PyMuPDF out in `THIRD_PARTY_NOTICES.md`
+   (including the "copyleft components require the corresponding source" hint), and both
+   `tools/make_release.py` and `packaging/Mikasa.iss` already ship `LICENSE` and that notice with the
+   product. Section 13's source offer is satisfied by the public repository itself.
+
+**Consequences**: Mikasa becomes a strong-copyleft project — free to use, study, modify and
+redistribute, but **modifications must be AGPL too**, and running it as a network service for others
+requires offering them the source. A few legally cautious companies will therefore avoid this code; for
+a public personal project that is an acceptable price, and it beats claiming MIT while bundling AGPL.
+**The already-published v0.1.1-v0.1.4 builds still carry the MIT notice** (that cannot be recalled);
+from the next release onward the repository and the artifacts agree.

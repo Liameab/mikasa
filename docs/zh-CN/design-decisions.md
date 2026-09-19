@@ -43,6 +43,7 @@
 | ADR-0022 | 应用内更新：客户端碰不到 URL + 与包同批的校验和 + 检查失败静默 | Accepted |
 | ADR-0023 | 第四个来源 DOAJ：免密钥中文开放获取期刊 + 各来源的授权边界 + 不做 WAF 绕过 | Accepted |
 | ADR-0024 | 更新下载可续传、任务可接续：「观察窗」+ 槽位自愈（修订 ADR-0022 第 3、7 点） | Accepted |
+| ADR-0025 | 许可证改为 AGPL-3.0：发布物捆了 AGPL 的 PyMuPDF（不换依赖，换许可证） | Accepted |
 
 ---
 
@@ -1131,3 +1132,39 @@ papers-filters,papers-detail}.js`、`css/style.css` 与四处导航；测试
 （各一行接线）、`css/style.css`（`.upd-pill`）；测试 `tests/unit/update/test_install.py`、
 `tests/unit/web/test_update_api.py`；E2E `tools/chrome_update.py`（假源加 Range 与"1MiB 处掐断
 一次"，新增幂等 / 续传 / 跨页胶囊 / 收起弹窗 / 点了才装五段断言）。
+
+---
+
+## ADR-0025 许可证改为 AGPL-3.0：发布物捆了 AGPL 的 PyMuPDF
+
+- 状态：Accepted ｜ 2026-09-20（用户问"MIT 与 AGPL 的 PyMuPDF 冲突怎么办"后拍板）
+- 关联：ADR-0022 / ADR-0024（应用内更新与发布流程——**公开发布二进制**正是触发义务的那件事）
+
+**问题**：项目一直挂 MIT，而 `pyproject.toml` 的核心依赖里有 **PyMuPDF**（"AGPL-3.0 或 Artifex
+商业许可"二选一）。它负责 PDF 文本提取（`ingest/loaders.py`）与阅读器的原页渲染/文字层
+（`web/routers/documents.py`）——是核心件，不是可选件。从 v0.1.1 起我们开始**公开分发打包好的
+exe/zip**，那一刻 AGPL 第 5/6 条的义务就生效：分发含 AGPL 组件的二进制，整个发布物须按 AGPL
+授权并向接收者提供对应源码。MIT 的声明对这部分无效，而且**没人会在本地开发时发现**——
+它只在"分发"这个动作上成立。
+
+**决策**：项目整体改为 **AGPL-3.0-or-later**。
+
+1. `LICENSE` 换成 AGPL-3.0 全文（取自 gnu.org 的规范文本，逐字不改，LF 行尾）；
+   `pyproject.toml` 的 `license = "AGPL-3.0-or-later"` 与 classifier 同步；README 双版写明
+   许可证、§13 的网络服务义务与第三方声明的位置。
+2. **不买商业许可，也不换掉 PyMuPDF**：阅读器"页面上选字要对上原文框"依赖它的词框坐标，
+   PDF 表格几何重建与中文文本层质量也重度依赖它——换成 `pypdf`（文本）+ `pypdfium2`（渲染）
+   是实打实的迁移工程，且质量很可能下降（那是按周计的活，收益却是负的）。
+   **用许可证适配依赖，而不是为了许可证换掉依赖。**
+3. 合规沿用既有机制、不新增流程：`tools/make_third_party_notices.py` 生成的
+   `THIRD_PARTY_NOTICES.md` 早已把 PyMuPDF 单列（含"copyleft 组件要求提供对应源码"的提示），
+   `tools/make_release.py` 与 `packaging/Mikasa.iss` 都已把 `LICENSE` 与那份声明放进发布物；
+   §13 的"提供对应源码"由公开仓库天然满足。
+
+**后果**：Mikasa 成为强著佐权项目——允许自由使用/研究/修改/再分发，但**改过的版本也必须 AGPL**，
+且把它做成网络服务给别人用时要提供源码。少数法务严格的公司会因此不采用这份代码；对一个公开的
+个人项目，这是可接受的代价，也比"挂着 MIT 却捆着 AGPL"诚实。**已发布的 v0.1.1–v0.1.4 里带的
+仍是 MIT 声明**（改不回来），从下一个版本起仓库与发布物一致。
+
+**代码/文档**：`LICENSE`（新文本）、`pyproject.toml`、`README.md` / `README.zh-CN.md`、
+`packaging/Mikasa.iss`（注释）、`THIRD_PARTY_NOTICES.md`（生成物，内容一直是对的）。

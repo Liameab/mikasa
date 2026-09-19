@@ -8,7 +8,7 @@ fusion), Chinese-aware structural chunking, citation tracing, and a three-stage 
 pipeline — all hand-written, **no RAG framework**. The code is transparent and the evaluation numbers
 are reproducible.
 
-**Status**: 815 tests passing, ruff + mypy clean. Actively developed; Windows builds (portable zip and
+**Status**: 859 tests passing, ruff + mypy clean. Actively developed; Windows builds (portable zip and
 installer) are published, with in-app update checking built in.
 
 ## Highlights
@@ -128,9 +128,13 @@ Open http://127.0.0.1:8000/ — four pages:
   here** — type on the left, watch it render on the right, save, and the note is citable by the next
   question (and editable later).
 - **Find papers** — search arXiv, OpenAlex, CORE and DOAJ at once (three of the four need no key;
-  DOAJ is what brings in Chinese open-access journals) with year/language/open-access filters and
-  citation- or date-sorting, read a result's full abstract in the detail pane, and import its
-  open-access PDF straight into the corpus (import, then ask about it right away). Recent queries are one click away, and the detail pane adds three ways to keep going: related papers, cited by, and references. Results you have
+  DOAJ is what brings in Chinese open-access journals) with date-range/language/open-access filters
+  and citation- or date-sorting, page through the results with page numbers and jump-to-page (the
+  total is summed from the sources' own hit counts and capped by the upstreams' own depth limits), and **click a row to open
+  the paper in your browser** — 「详情」 in the row is where the full abstract, import button, and
+  the three ways to keep going live: related papers, cited by, and references. Importing pulls the
+  open-access PDF straight into the corpus (import, then ask about it right away); recent queries
+  are one click away. Results you have
   already imported are marked "already in your library". Each source declares what it supports, so
   options it cannot honour are disabled with a reason rather than silently ignored — a CNKI-like
   experience, not CNKI's data: paywalled full text stays out.
@@ -156,7 +160,7 @@ API docs (Swagger) at http://127.0.0.1:8000/docs.
 - Python ≥ 3.11 (3.13 recommended); optional NVIDIA GPU for local inference;
 - Source comments and internal docs are written in **Chinese**; baseline gates are
   `ruff format`, `ruff check`, `mypy`, and `pytest`;
-- Current suite: **815 tests**, coverage ~93% (see the regression gate in `docs/evaluation.md`);
+- Current suite: **859 tests**, coverage ~93% (see the regression gate in `docs/evaluation.md`);
 - Zero-compilation install on Windows + CPython 3.13 (all dependencies ship prebuilt wheels;
   see `pyproject.toml` and ADR-0006/0008 for the version-pinning rationale).
 
@@ -180,4 +184,12 @@ config/           # profiles/*.yaml + commented example
 
 ## License
 
-See [LICENSE](LICENSE).
+**AGPL-3.0-or-later** — see [LICENSE](LICENSE).
+
+This is a strong-copyleft license, and it is deliberate: the app bundles
+[PyMuPDF](https://pymupdf.readthedocs.io/) (AGPL-3.0 or commercial) for PDF parsing and page
+rendering, so the distributed builds cannot be MIT. You may use, study, modify and redistribute
+Mikasa freely under the same terms; if you run it as a network service for other people, §13
+requires you to offer them the corresponding source. Bundled third-party components and their
+licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) (regenerate with
+`python tools/make_third_party_notices.py`).
