@@ -83,6 +83,19 @@ def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8")
     assert DB.exists(), f"真实库不存在：{DB}（演练对象是 data/mikasa.db，不是 .bak）"
 
+    # **这道闸是给"历史工具"留的**（2026-09-20）：本脚本是为 v1 → v2 那一次迁移写的一次性
+    # 演练，后面的断言全部写死当时的真实数据。库里已经是更高版本之后再跑它，只会在
+    # 某处 fetchone()[0] 抛 TypeError——一句人话比一个栈有用得多。
+    with open_db(DB) as conn:
+        _ver = conn.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
+        _row = _ver.fetchone()
+    _current = int(_row[0]) if _row is not None else 0
+    if _current != 1:
+        print(f"这个库的 schema 版本是 v{_current}，不是 v1——本脚本只演练 v1 → v2 那一次迁移，")
+        print("对已经迁过的库没有可演练的东西（断言写死了当时的数据，跑下去只会误报失败）。")
+        print("要演练下一次迁移：把库换成迁移前的备份副本，并同步更新本脚本里的预期值。")
+        return 0
+
     box: list[str] = []
     logging.getLogger("mikasa").addHandler(_BoxHandler(box))
 

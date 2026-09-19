@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # 依赖漏洞扫描只在定时/手动跑（见下面 deps 作业的说明）
+  schedule:
+    - cron: "23 3 * * 1"  # 每周一 03:23 UTC
+  workflow_dispatch:
 
 jobs:
   test:
@@ -88,3 +92,28 @@ jobs:
       - name: Release tooling smoke (collect only)
         if: runner.os == 'Linux'
         run: python -c "import ast, pathlib; [ast.parse(p.read_text(encoding='utf-8')) for p in pathlib.Path('tools').glob('*.py')]"
+
+  # 依赖漏洞扫描（2026-09-20 补）。三条取舍写在这里，免得后面有人"顺手"改：
+  #   ① **只在定时/手动触发**，不进 push/PR 门禁——上游新报一个 CVE 不该让当天
+  #      所有人的 PR 变红；而每周一次的红色是**信号**，该看就看。
+  #   ② 扫的是**随包分发的那套依赖**（`pip install -e .`），不是 dev 工具链
+  #      （ruff/mypy/pytest 不随 exe/zip 出去，报出来的 CVE 只是噪声）。
+  #   ③ 不屏蔽"暂无修复版本"的条目：那些正是要人知道、要人决定怎么办的东西。
+  deps:
+    name: dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install runtime deps + pip-audit
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          pip install -e .
+
+      - name: pip-audit
+        run: pip-audit

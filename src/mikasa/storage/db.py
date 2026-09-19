@@ -19,7 +19,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 from mikasa.errors import StorageError
@@ -437,6 +437,45 @@ _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
 }
 
 
+_INITLOCK_SUFFIX = ".initlock"
+_INIT_GUARD_TIMEOUT = 30.0  # 等另一个进程做完初始化（建表/迁移）的秒数
+
+
+@contextmanager
+def _init_guard(db_path: Path) -> Iterator[None]:
+    """跨进程初始化互斥（2026-09-20 补）。
+
+    进程内那把 `_INIT_LOCK` 挡不住"serve 与 CLI 同时首启"：两个进程会读到同一个
+    schema 版本号，然后一起跑迁移。SQL 层多数幂等（IF NOT EXISTS / 容错加列）能
+    兜住，但**带回填 UPDATE 的迁移不是幂等的**，撞上就是双写——所以别把正确性
+    押在"每个迁移都恰好幂等"上。
+
+    **为什么另开一个小库来加锁**：迁移是"每级提交一次"的设计（见 `_upgrade`），
+    中途的 commit 会把主库上的写锁放掉，而我们要的是"整段初始化期间别的进程
+    不许进来"。一个只用来加锁、不参与业务事务的小库正好绕开这层纠缠：
+    `BEGIN EXCLUSIVE` 一拿到底，退出时 rollback 释放。
+
+    锁文件就在库文件旁边（`<db>.initlock`，零字节），随 data 目录一起备份/搬家；
+    等不到锁的进程会在超时后**如实抛错**，而不是悄悄并行迁移。
+    """
+    lock_path = db_path.with_name(db_path.name + _INITLOCK_SUFFIX)
+    lock_conn = sqlite3.connect(str(lock_path), timeout=_INIT_GUARD_TIMEOUT)
+    try:
+        try:
+            lock_conn.execute("BEGIN EXCLUSIVE")
+        except sqlite3.OperationalError as exc:  # pragma: no cover - 需两个进程才凑得出
+            raise StorageError(
+                "数据库正在被另一个 Mikasa 进程初始化（建表/迁移），请稍后重试；"
+                "如果一直如此，请确认没有别的 Mikasa / CLI 还在启动中。"
+            ) from exc
+        yield
+    finally:
+        # 释放排他锁；连接已断等异常不必上抛（锁随连接一起没）
+        with suppress(sqlite3.Error):
+            lock_conn.execute("ROLLBACK")
+        lock_conn.close()
+
+
 @contextmanager
 def open_db(db_path: Path) -> Iterator[sqlite3.Connection]:
     """open + init 一步到位（库不存在即创建），退出时提交并关闭连接。
@@ -447,11 +486,9 @@ def open_db(db_path: Path) -> Iterator[sqlite3.Connection]:
     """
     conn = connect(db_path)
     try:
-        # 进程内串行化初始化：并发首请求时多个线程会同时走到"没有版本行"这个
-        # 判断上，然后一起建表、一起插版本行。SQL 层已各自幂等（IF NOT EXISTS /
-        # OR IGNORE / duplicate column 容错），这把锁只是把无谓的相互撞车省掉。
-        # **只覆盖本进程**——跨进程（serve + CLI）靠上面那层幂等 SQL 兜底。
-        with _INIT_LOCK:
+        # 初始化（建表 + 迁移）串行化：进程内用线程锁，跨进程用锁文件（见
+        # _init_guard 的说明）——两层都要，它们挡的不是同一批人。
+        with _INIT_LOCK, _init_guard(db_path):
             init_db(conn)
         yield conn
         conn.commit()  # 调用方已 commit 则此处为空操作（幂等）

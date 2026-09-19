@@ -459,3 +459,31 @@ def test_concurrent_first_connect_does_not_hit_database_locked(tmp_path):
             thread.join()
 
     assert not failures, failures[:3]
+
+
+def test_init_guard_serializes_across_processes(tmp_path, monkeypatch):
+    """跨进程初始化互斥（2026-09-20 补）：另一个进程正在初始化时如实报错。
+
+    进程内那把线程锁挡不住"serve 与 CLI 同时首启"——两个**进程**会读到同一个
+    schema 版本号、一起跑迁移。模拟办法：直接用同一个锁文件取排他锁（等价于
+    另一个进程正在初始化），再断言 open_db 不会悄悄并行迁移。
+    """
+    db_path = tmp_path / "guard.db"
+    monkeypatch.setattr(db, "_INIT_GUARD_TIMEOUT", 0.2)  # 别让用例真等 30 秒
+    lock_path = db_path.with_name(db_path.name + db._INITLOCK_SUFFIX)
+
+    holder = sqlite3.connect(str(lock_path))
+    holder.execute("BEGIN EXCLUSIVE")  # 假装另一个进程正在初始化
+    try:
+        with (
+            pytest.raises(StorageError, match="另一个 Mikasa 进程"),
+            db.open_db(db_path) as conn,
+        ):
+            conn.execute("SELECT 1")
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+
+    # 锁放开之后一切照常（这道闸不能把正常路径堵死）
+    with db.open_db(db_path) as conn:
+        assert conn.execute("SELECT 1").fetchone() is not None
