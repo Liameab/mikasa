@@ -512,3 +512,274 @@ def test_search_schema_accepts_every_registered_source():
     import_allowed = set(get_args(PaperImportIn.model_fields["source"].annotation))
     for label, allowed in (("检索", search_allowed), ("导入", import_allowed)):
         assert registered <= allowed, f"{label} schema 缺少这些来源：{sorted(registered - allowed)}"
+
+
+# ---------------------------------------------------------------------------
+# 引证关系（v0.1.4：相关论文 / 引用了它）
+# ---------------------------------------------------------------------------
+
+
+def _stub_relations(
+    monkeypatch,
+    *,
+    work_id="W1234567890",
+    search_results=None,
+    cited=None,
+    cited_total=None,
+    references=None,
+):
+    """相关论文走**本地检索**（桩 papers_search）、引证关系走 OpenAlex（桩它自己的函数）。"""
+    import mikasa.papers.openalex as openalex_mod
+    import mikasa.web.routers.papers as papers_router
+    from mikasa.papers.service import PaperPage
+
+    monkeypatch.setattr(openalex_mod, "resolve_work_id", lambda **kw: work_id)
+    monkeypatch.setattr(
+        papers_router,
+        "papers_search",
+        lambda q, sources, offset, limit, filters: PaperPage(
+            results=tuple(search_results or []), errors={}, has_more=False
+        ),
+    )
+    monkeypatch.setattr(openalex_mod, "cited_by", lambda wid, limit: (cited or [], cited_total))
+    monkeypatch.setattr(openalex_mod, "references_of", lambda wid, limit: references or [])
+    monkeypatch.setattr(papers_router, "fetch_paper", lambda source, pid: _PaperStub())
+
+
+class _PaperStub:
+    """fetch_paper 的替身：related 只用标题；cited/references 用 DOI。"""
+
+    title = "南海北部天然气水合物富集特征及定量评价"
+    doi = "10.3799/dqkx.2020.321"
+
+
+def _openalex_paper(idx=1):
+    from mikasa.papers.sources import PaperResult
+
+    return PaperResult(
+        source="openalex",
+        id=f"W2{idx:09d}",
+        title=f"南海北部天然气水合物相关论文 {idx}",  # 与桩标题共享词面（否则被守卫挡掉）
+        authors=("作者甲",),
+        year=2024,
+        venue="某某学报",
+        abstract="摘要",
+        doi="",
+        pdf_url=None,
+        landing_url="https://example.org/x",
+        oa=False,
+    )
+
+
+def test_related_uses_a_title_search(client, monkeypatch):
+    """相关论文 = 拿标题再检索一次（不再用上游的 related_works，见路由注释）。"""
+    _stub_relations(monkeypatch, search_results=[_openalex_paper(1), _openalex_paper(2)])
+    c, _ = client
+    body = c.get("/api/papers/related", params={"source": "openalex", "id": "W2123456789"}).json()
+    assert [r["title"] for r in body["results"]] == [
+        "南海北部天然气水合物相关论文 1",
+        "南海北部天然气水合物相关论文 2",
+    ]
+    assert "按标题关键词检索" in body["note"]
+    assert body["total"] is None
+
+
+def test_related_drops_the_paper_itself(client, monkeypatch):
+    """标题检索必然把它自己搜出来——要剔掉（否则第一条就是它）。"""
+    from mikasa.papers.sources import PaperResult
+
+    itself = PaperResult(
+        source="openalex",
+        id="W2123456789",
+        title="南海北部天然气水合物（它自己）",
+        authors=(),
+        year=None,
+        venue="",
+        abstract="",
+        doi="",
+        pdf_url=None,
+        landing_url="",
+        oa=False,
+    )
+    _stub_relations(monkeypatch, search_results=[itself, _openalex_paper(1)])
+    c, _ = client
+    body = c.get("/api/papers/related", params={"source": "openalex", "id": "W2123456789"}).json()
+    assert [r["title"] for r in body["results"]] == ["南海北部天然气水合物相关论文 1"]
+
+
+def test_cited_reports_total(client, monkeypatch):
+    _stub_relations(monkeypatch, cited=[_openalex_paper(3)], cited_total=66)
+    c, _ = client
+    body = c.get(
+        "/api/papers/related",
+        params={"source": "openalex", "id": "W2123456789", "kind": "cited"},
+    ).json()
+    assert body["total"] == 66
+    assert len(body["results"]) == 1
+
+
+def test_cited_bridges_other_sources_by_doi(client, monkeypatch):
+    """非 OpenAlex 来源的"被引/参考文献"：按 DOI 桥接（中文刊也能看引证）。"""
+    import mikasa.papers.openalex as openalex_mod
+
+    seen = {}
+
+    def fake_resolve(*, doi="", openalex_id=""):
+        seen["doi"] = doi
+        return "W2999999999"
+
+    _stub_relations(monkeypatch, cited=[_openalex_paper(1)], cited_total=5)
+    monkeypatch.setattr(openalex_mod, "resolve_work_id", fake_resolve)
+
+    c, _ = client
+    body = c.get(
+        "/api/papers/related",
+        params={"source": "doaj", "id": "0" * 32, "kind": "cited"},
+    ).json()
+    assert seen["doi"] == "10.3799/dqkx.2020.321"
+    assert len(body["results"]) == 1 and body["total"] == 5
+
+
+def test_references_kind(client, monkeypatch):
+    _stub_relations(monkeypatch, references=[_openalex_paper(9)])
+    c, _ = client
+    body = c.get(
+        "/api/papers/related",
+        params={"source": "openalex", "id": "W2123456789", "kind": "references"},
+    ).json()
+    assert [r["title"] for r in body["results"]] == ["南海北部天然气水合物相关论文 9"]
+
+
+def test_cited_without_doi_says_so_instead_of_inventing(client, monkeypatch):
+    import mikasa.web.routers.papers as papers_router
+
+    class _NoDoi:
+        title = "无 DOI 的预印本"
+        doi = ""
+
+    monkeypatch.setattr(papers_router, "fetch_paper", lambda s, i: _NoDoi())
+    c, _ = client
+    body = c.get(
+        "/api/papers/related", params={"source": "arxiv", "id": "2401.12345", "kind": "cited"}
+    ).json()
+    assert body["results"] == []
+    assert "没有 DOI" in body["note"]
+    assert body["total"] is None
+
+
+def test_cited_when_openalex_has_no_record(client, monkeypatch):
+    _stub_relations(monkeypatch, work_id=None)
+    c, _ = client
+    body = c.get(
+        "/api/papers/related", params={"source": "openalex", "id": "W2123456789", "kind": "cited"}
+    ).json()
+    assert body["results"] == []
+    assert "OpenAlex 里没有这篇论文的记录" in body["note"]
+
+
+def test_related_rejects_bad_kind_and_id(client):
+    c, _ = client
+    assert (
+        c.get(
+            "/api/papers/related", params={"source": "openalex", "id": "W2123456789", "kind": "x"}
+        ).status_code
+        == 422
+    )
+    assert (
+        c.get("/api/papers/related", params={"source": "openalex", "id": "bad"}).status_code == 422
+    )
+
+
+def test_related_query_truncates_cjk_titles():
+    """相关论文的查询串：中文取前 8 字、英文取前 10 词（实测见函数 docstring）。"""
+    import mikasa.web.routers.papers as papers_router
+
+    q = papers_router._related_query("南海北部天然气水合物富集特征及定量评价")
+    assert q == "南海北部天然气水"  # 8 字（实测这个长度在 OpenAlex 上召回最好）
+    assert papers_router._related_query("Attention Is All You Need: A Survey of Transformers") == (
+        "Attention Is All You Need: A Survey of Transformers"
+    )  # 少于 10 词 → 原样
+    long_en = " ".join(f"w{i}" for i in range(20))
+    assert len(papers_router._related_query(long_en).split()) == 10
+
+
+def test_related_passes_the_truncated_query_to_search(client, monkeypatch):
+    """端到端：交给检索的确实是截断后的查询串（不是整串标题）。"""
+    import mikasa.papers.openalex as openalex_mod
+    import mikasa.web.routers.papers as papers_router
+    from mikasa.papers.service import PaperPage
+
+    seen = {}
+
+    def fake_search(q, sources, offset, limit, filters):
+        seen["q"] = q
+        return PaperPage(results=(), errors={}, has_more=False)
+
+    class _Stub:
+        title = "南海北部天然气水合物富集特征及定量评价"
+        doi = ""
+
+    monkeypatch.setattr(papers_router, "papers_search", fake_search)
+    monkeypatch.setattr(papers_router, "fetch_paper", lambda s, i: _Stub())
+    monkeypatch.setattr(openalex_mod, "resolve_work_id", lambda **kw: "W1")
+    c, _ = client
+    c.get("/api/papers/related", params={"source": "openalex", "id": "W2123456789"})
+    assert seen["q"] == "南海北部天然气水"
+
+
+def test_related_filters_candidates_that_share_no_topic_words():
+    """词面守卫：候选要与标题共享 ≥2 个汉字二元组（实测挡掉"蛇类生态"那类噪声）。"""
+    import mikasa.web.routers.papers as papers_router
+
+    title = "南海北部天然气水合物富集特征及定量评价"
+    assert papers_router._shares_topic(
+        title, "南海北部神狐海域沉积物颗粒对天然气水合物聚集的主要影响"
+    )
+    assert not papers_router._shares_topic(title, "白石砬子地区蛇类生态习性资源调查与管理")
+    # 非中文标题不套这条（英文二元组没意义）
+    assert papers_router._shares_topic("Attention Is All You Need", "Completely Unrelated Title")
+
+
+def test_related_applies_the_topic_guard(client, monkeypatch):
+    """端到端：噪声候选被挡掉，同主题的留下。"""
+    import mikasa.papers.openalex as openalex_mod
+    import mikasa.web.routers.papers as papers_router
+    from mikasa.papers.service import PaperPage
+    from mikasa.papers.sources import PaperResult
+
+    def paper(t):
+        return PaperResult(
+            source="openalex",
+            id=f"W{abs(hash(t)) % 10**9:09d}",
+            title=t,
+            authors=(),
+            year=None,
+            venue="",
+            abstract="",
+            doi="",
+            pdf_url=None,
+            landing_url="",
+            oa=False,
+        )
+
+    class _Stub:
+        title = "南海北部天然气水合物富集特征及定量评价"
+        doi = ""
+
+    monkeypatch.setattr(
+        papers_router,
+        "papers_search",
+        lambda q, sources, offset, limit, filters: PaperPage(
+            results=(
+                paper("南海北部神狐海域沉积物颗粒对天然气水合物聚集的主要影响"),
+                paper("白石砬子地区蛇类生态习性资源调查与管理"),
+            ),
+            errors={},
+            has_more=False,
+        ),
+    )
+    monkeypatch.setattr(papers_router, "fetch_paper", lambda s, i: _Stub())
+    monkeypatch.setattr(openalex_mod, "resolve_work_id", lambda **kw: "W1")
+    c, _ = client
+    body = c.get("/api/papers/related", params={"source": "openalex", "id": "W2123456789"}).json()
+    assert [r["title"][:6] for r in body["results"]] == ["南海北部神狐"]

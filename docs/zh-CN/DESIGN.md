@@ -601,6 +601,8 @@ toast 刻意压在确认框之上（动作结果要在弹窗关掉后仍看得�
 `.paper-actions` / `.paper-status` / `.paper-key-row` · 详情
 `.pd-title` / `.pd-meta` / `.pd-body` / `.pd-actions` / `.pd-exits`
 
+找论文页补充（v0.1.4）：`.paper-history`（`.ph-chip` / `.ph-clear`）· `.pd-related` / `.pd-rel-head` / `.pd-rel-tab`（`.on`）/ `.pd-rel-status` / `.pd-rel-list` / `.pd-rel-item` / `.pd-rel-title` / `.pd-rel-meta` / `.pd-rel-import`
+
 笔记编辑器（M6 ①）：`.note-backdrop` · `.note-box` / `.note-head` / `.note-title` ·
 `.note-split` / `.note-input` / `.note-preview` · `.note-foot` / `.note-folder-wrap` /
 `.note-folder` / `.note-hint`

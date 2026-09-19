@@ -94,11 +94,15 @@
     <!-- 中：搜索 + 结果列表（列表在列内滚动，页面不滚） -->
     <section class="card">
       <form id="paper-form" class="paper-form" autocomplete="off">
-        <input id="paper-q" class="kb-search" type="search"
+        <!-- list = 浏览器原生联想：候选来自**你自己的检索历史**（本地存），
+             不走上游——上游的联想接口实测十几秒，做不了真·输入即联想 -->
+        <input id="paper-q" class="kb-search" type="search" list="paper-history-list"
                placeholder="检索论文：中英文关键词均可，如「大语言模型 检索增强」"
                aria-label="论文检索词">
+        <datalist id="paper-history-list"></datalist>
         <button id="paper-search-btn" class="btn primary" type="submit">搜索</button>
       </form>
+      <div id="paper-history" class="paper-history hidden"></div>
       <div id="paper-status" class="muted small"></div>
       <div id="paper-notes" class="p-note"></div>
       <div id="paper-results" class="paper-results"></div>

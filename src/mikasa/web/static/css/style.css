@@ -1884,3 +1884,77 @@ a.pd-title:hover { color: var(--accent); }
   line-height: 1.7;
   color: var(--warning);
 }
+
+/* ---- 检索历史（v0.1.4「像知网」的第一件：搜过的词一键重搜）----
+   一行小胶囊，不占视觉重量；空历史时整行隐藏（不留一条空框）。 */
+.paper-history {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.paper-history .ph-chip {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 2px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.paper-history .ph-chip:hover { border-color: var(--accent); color: var(--accent); }
+.paper-history .ph-clear {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  padding: 2px 4px;
+}
+.paper-history .ph-clear:hover { color: var(--danger); }
+
+/* ---- 引证关系（v0.1.4）：详情面板里的「相关论文 / 引用了它」---- */
+.pd-related { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+.pd-rel-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+.pd-rel-tab {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12.5px;
+  font-family: inherit;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.pd-rel-tab:hover { color: var(--text); }
+.pd-rel-tab.on { background: rgba(204, 120, 92, 0.14); color: var(--accent); font-weight: 600; }
+.pd-rel-status { margin: 6px 0 0; }
+.pd-rel-list { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.pd-rel-item {
+  position: relative;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.pd-rel-item:hover { background: var(--bg-inset); border-left-color: var(--accent); }
+.pd-rel-title { font-size: 13px; line-height: 1.45; font-weight: 500; }
+.pd-rel-meta { margin-top: 2px; }
+.pd-rel-import { position: absolute; right: 6px; top: 6px; font-size: 12px; padding: 1px 8px; }
+/* 行内有"导入"钮时给标题让出位置：钮是绝对定位的，长标题会从它底下穿过去
+   （2026-09-19 截图里实测："…AT THE UNIVERSI[导入]TY"） */
+.pd-rel-item:has(.pd-rel-import) .pd-rel-title { padding-right: 54px; }
+
+/* ---- 结果行密度（v0.1.4 第 ④ 件）：纵向各压一档，一屏多看两行 ---- */
+.paper-item { padding: 8px; }
+.paper-meta { margin-top: 2px; }
+.paper-snippet { margin-top: 4px; line-height: 1.45; }

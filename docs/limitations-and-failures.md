@@ -264,6 +264,29 @@ else → 400 — the same rule the app-level handler uses. Regression tests lock
 (`test_note_embedding_provider_failure_502`), including "no half-finished state is left behind"
 (library, uploads, and web-tmp all clean).
 
+### The licensing line for paper sources, and what "one-click import" really means (DOAJ, 2026-09-19)
+
+- **A source is only integrated if it explicitly permits programmatic access.** All four are clean on that
+  count: DOAJ declares its metadata **CC0**, OpenAlex does the same, arXiv's API terms allow programmatic
+  access (with an identifiable UA and polite rate limits, which we honour), and CORE is an open-access
+  aggregator whose API terms permit use. **CNKI/Wanfang records are commercially licensed, and scraping
+  them is a breach** — "the page opens in a browser" and "programmatic use is permitted" are different
+  things.
+- **We do not work around bot protection.** The National Center for Philosophy and Social Sciences
+  Documentation (free Chinese journals, strong social-science coverage) does expose an anonymous JSON
+  search endpoint — behind a **ChinaNetCenter WAF**: same URL, same parameters, 265 hits in headless
+  Chrome and `total: 0` from urllib. Getting the data would mean solving the WAF's challenge cookie,
+  which is working against the site's own bot protection rather than a technical hurdle. So it stays out.
+  (Its predecessor, NSSD, suspended service on 2024-07-11.)
+- **Most DOAJ "open access" records have no direct PDF**: in a 25-record sample every `link[]` entry was a
+  publisher landing page (0 ended in `.pdf`). Chinese papers found through DOAJ are therefore usually
+  "read the abstract, click through to the journal, no one-click import". The UI distinguishes three
+  states (direct link / open access but landing page only / not open access) instead of flattening them
+  into "no full text".
+- **Upstream metadata is untrusted input**: DOAJ passes paper HTML straight through its abstract field
+  (measured: the UI rendered `1<sup>#</sup>`). It now goes through `utils/text.strip_markup` — tags
+  removed, **never rendered** (rendering would import an XSS surface).
+
 ### How paper search really behaves on the wire (2026-09-19)
 
 - **The links to these free services hang intermittently.** Five consecutive probes of the same arXiv

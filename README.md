@@ -130,7 +130,7 @@ Open http://127.0.0.1:8000/ — four pages:
 - **Find papers** — search arXiv, OpenAlex, CORE and DOAJ at once (three of the four need no key;
   DOAJ is what brings in Chinese open-access journals) with year/language/open-access filters and
   citation- or date-sorting, read a result's full abstract in the detail pane, and import its
-  open-access PDF straight into the corpus (import, then ask about it right away). Results you have
+  open-access PDF straight into the corpus (import, then ask about it right away). Recent queries are one click away, and the detail pane adds three ways to keep going: related papers, cited by, and references. Results you have
   already imported are marked "already in your library". Each source declares what it supports, so
   options it cannot honour are disabled with a reason rather than silently ignored — a CNKI-like
   experience, not CNKI's data: paywalled full text stays out.

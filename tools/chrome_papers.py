@@ -186,8 +186,13 @@ class _FakeSources(BaseHTTPRequestHandler):
 
     # ---- OpenAlex：works JSON ----
 
+    @staticmethod
+    def _wid(n: int) -> str:
+        """与 _work 相同的编号规则（供引证关系构造 id）。"""
+        return f"W2{n:09d}"
+
     def _work(self, n: int, *, oa: bool) -> dict:
-        wid = f"W2{n:09d}"
+        wid = self._wid(n)
         return {
             "id": f"https://openalex.org/{wid}",
             "doi": f"https://doi.org/10.1000/e2e-{n}",
@@ -202,7 +207,30 @@ class _FakeSources(BaseHTTPRequestHandler):
         }
 
     def _openalex(self, path: str, query: dict) -> None:
-        if path.startswith("/openalex/works/"):
+        # v0.1.4 的引证关系（相关论文 / 被引）也走这个假源：
+        #   · select=related_works            → 单条工作自带的关系 id 列表
+        #   · filter=openalex_id:W…|W…        → 按 id 批量取（related_works 的第二步）
+        #   · filter=cites:W…                 → 引用了它的论文（带总数）
+        #   · filter=doi:…                    → 按 DOI 桥接（非 OpenAlex 来源走这条）
+        params = {k: v[0] for k, v in query.items()}
+        if path.startswith("/openalex/works/") and "related_works" in params.get("select", ""):
+            n = int(path.rsplit("/", 1)[-1].lstrip("W").lstrip("2"))
+            payload = {
+                "related_works": [f"https://openalex.org/{self._wid(i)}" for i in (n + 1, n + 2)]
+            }
+        elif "openalex_id" in params.get("filter", ""):
+            ids = params["filter"].split(":", 1)[1].split("|")
+            payload = {
+                "results": [self._work(int(i.lstrip("W").lstrip("2")), oa=True) for i in ids]
+            }
+        elif "cites" in params.get("filter", ""):
+            payload = {
+                "meta": {"count": 1254},  # 被引总数 → 界面上那行"共 N 篇引用"
+                "results": [self._work(n, oa=False) for n in (11, 12)],
+            }
+        elif "doi" in params.get("filter", ""):
+            payload = {"results": [self._work(7, oa=True)]}  # DOI 反查 → 固定一条
+        elif path.startswith("/openalex/works/"):
             wid = path.rsplit("/", 1)[-1]
             n = int(wid.lstrip("W").lstrip("2"))
             payload = self._work(n, oa=n != 1)  # 第 1 条无开放获取（禁用态验收用）
@@ -468,6 +496,7 @@ async def run(args):
         )
         target = wait_json_list(args.cdp_port)
         async with CDP(target["webSocketDebuggerUrl"]) as cdp:
+            bad: list[str] = []  # 问题清单：中途与末尾的断言都写进这里
             await cdp.call("Page.enable")
             await cdp.call("Log.enable")
             for _ in range(60):
@@ -613,6 +642,82 @@ async def run(args):
             docs_after = api_get(port, "/api/documents")["documents"]
             health = api_get(port, "/api/health")["documents"]
 
+            # ---- 6b. 引证关系（v0.1.4）：相关论文 / 引用了它 ----
+            # 特意点 **OpenAlex** 那一行：引证网络要 DOI 才能桥接，而假源里
+            # 只有 OpenAlex 条目带 DOI（arXiv 是无 DOI 的预印本、DOAJ 假条目
+            # 只有 ISSN）——这正是产品里的诚实降级路径，另有单测覆盖"没有 DOI"。
+            await cdp.evaluate(
+                "(() => { const row = [...document.querySelectorAll('.paper-item')]"
+                ".find(r => r.querySelector('.paper-src')?.textContent === 'OpenAlex');"
+                " row.click(); return true; })()"
+            )
+            await asyncio.sleep(0.4)
+            await cdp.evaluate(
+                "(() => { const b = [...document.querySelectorAll('#paper-detail .pd-rel-tab')]"
+                ".find(x => x.textContent === '相关论文'); b.click(); return true; })()"
+            )
+            await wait_until(
+                cdp,
+                "document.querySelectorAll('#paper-detail .pd-rel-item').length > 0",
+                "相关论文列表出现",
+            )
+            related = await cdp.evaluate("""(() => ({
+              count: document.querySelectorAll('#paper-detail .pd-rel-item').length,
+              firstTitle: document.querySelector('#paper-detail .pd-rel-title')?.textContent || '',
+              status: document.querySelector('#paper-detail .pd-rel-status')?.textContent || '',
+            }))()""")
+
+            await cdp.evaluate(
+                "(() => { const b = [...document.querySelectorAll('#paper-detail .pd-rel-tab')]"
+                ".find(x => x.textContent === '引用了它'); b.click(); return true; })()"
+            )
+            await wait_until(
+                cdp,
+                "(document.querySelector('#paper-detail .pd-rel-status')?.textContent || '')"
+                ".includes('篇引用')",
+                "被引列表出现（含总数）",
+            )
+            cited = await cdp.evaluate("""(() => ({
+              count: document.querySelectorAll('#paper-detail .pd-rel-item').length,
+              status: document.querySelector('#paper-detail .pd-rel-status')?.textContent || '',
+              hasImportBtn: !!document.querySelector('#paper-detail .pd-rel-import'),
+            }))()""")
+            # 点一条相关论文 = 详情面板切过去（不往结果列表里插行）
+            await cdp.evaluate(
+                "(() => { const b = [...document.querySelectorAll('#paper-detail .pd-rel-tab')]"
+                ".find(x => x.textContent === '相关论文'); b.click(); return true; })()"
+            )
+            await wait_until(
+                cdp,
+                "document.querySelectorAll('#paper-detail .pd-rel-item').length > 0",
+                "相关论文列表再次出现",
+            )
+            rows_before = await cdp.evaluate("document.querySelectorAll('.paper-item').length")
+            await cdp.evaluate("document.querySelector('#paper-detail .pd-rel-item').click(); true")
+            await asyncio.sleep(0.5)
+            picked = await cdp.evaluate("""(() => ({
+              title: document.querySelector('#paper-detail .pd-title')?.textContent || '',
+              rows: document.querySelectorAll('.paper-item').length,
+            }))()""")
+            if picked["rows"] != rows_before:
+                bad.append("点相关论文后结果列表被插了行（应当只在面板里切换）")
+
+            # ---- 6c. 检索历史（v0.1.4）：搜完出现胶囊，清空后整行隐藏 ----
+            history = await cdp.evaluate("""(() => ({
+              hidden: document.querySelector('#paper-history').classList.contains('hidden'),
+              chips: [...document.querySelectorAll('#paper-history .ph-chip')]
+                .map(c => c.textContent),
+              datalist: document.querySelectorAll('#paper-history-list option').length,
+            }))()""")
+            await cdp.evaluate(
+                "(() => { const b = [...document.querySelectorAll('#paper-history .ph-clear')][0];"
+                " b.click(); return true; })()"
+            )
+            await asyncio.sleep(0.3)
+            history_cleared = await cdp.evaluate(
+                "document.querySelector('#paper-history').classList.contains('hidden')"
+            )
+
             # ---- 7. 无开放获取那条：导入按钮提前禁用 ----
             # 只看 CORE（它的第 1 条假记录故意不带 downloadUrl），点第一条
             await cdp.evaluate("""(() => {
@@ -682,7 +787,7 @@ async def run(args):
                     f.write(base64.b64decode(shot))
                 log(f"截图已写: {args.out_shot}")
 
-            bad = []
+            # （问题清单在流程开头就建，供中途的即时断言使用）
             if layout["cols"] != 3:
                 bad.append(f"三栏布局没生效（grid 列数 {layout['cols']}）")
             if layout["navActive"] != "papers":
@@ -720,6 +825,16 @@ async def run(args):
                 bad.append(f"翻页出现重复结果：{paging}")
             if not detail["title"] or not detail["body"] or not detail["hasImport"]:
                 bad.append(f"详情面板内容不全：{detail}")
+            if related["count"] < 2 or not related["firstTitle"]:
+                bad.append(f"相关论文没出来：{related}")
+            if cited["count"] < 1 or "篇引用" not in cited["status"]:
+                bad.append(f"被引列表或总数不对：{cited}")
+            if not picked["title"]:
+                bad.append(f"点相关论文后面板没切换：{picked}")
+            if history["hidden"] or not history["chips"] or history["datalist"] < 1:
+                bad.append(f"检索历史没出现：{history}")
+            if not history_cleared:
+                bad.append("清空检索历史后整行没有隐藏")
             if not imported["rowBadge"] or imported["badges"] < 1:
                 bad.append(f"导入后结果行没标「已在库中」：{imported}")
             if "去提问" not in imported["exits"] or "去知识库" not in imported["exits"]:

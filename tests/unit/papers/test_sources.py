@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import urllib.error
 import urllib.parse
 
@@ -389,3 +390,88 @@ def test_openalex_id_rejects(bad):
 
 def test_openalex_id_accepts():
     assert openalex.validate_id("W3160856016")
+
+
+# ---------------------------------------------------------------------------
+# OpenAlex 引证关系（v0.1.4：相关论文 / 引用了它）
+# ---------------------------------------------------------------------------
+
+
+def _stub_json(monkeypatch, payloads: dict[str, dict]):
+    """按 URL 子串路由的桩：'related_works' → {…}。返回记录到的 URL 列表。"""
+    calls: list[str] = []
+
+    def fake_get(url: str, timeout: float) -> bytes:
+        calls.append(url)
+        for key, payload in payloads.items():
+            if key in url:
+                return json.dumps(payload).encode("utf-8")
+        return json.dumps({"results": []}).encode("utf-8")
+
+    monkeypatch.setattr(openalex, "_http_get", fake_get)
+    return calls
+
+
+def test_resolve_work_id_prefers_existing_id(monkeypatch):
+    """已有 W-id 就直接用（OpenAlex 来源自己不花那一次反查）。"""
+    calls = _stub_json(monkeypatch, {})
+    assert openalex.resolve_work_id(openalex_id="W2123456789", doi="10.1/x") == "W2123456789"
+    assert calls == []
+
+
+def test_resolve_work_id_by_doi(monkeypatch):
+    calls = _stub_json(
+        monkeypatch, {"filter=doi": {"results": [{"id": "https://openalex.org/W2999999999"}]}}
+    )
+    assert openalex.resolve_work_id(doi="10.1234/abc") == "W2999999999"
+    assert "doi%3A10.1234" in calls[0] or "doi:10.1234" in urllib.parse.unquote(calls[0])
+
+
+def test_resolve_work_id_returns_none_when_absent(monkeypatch):
+    _stub_json(monkeypatch, {"filter=doi": {"results": []}})
+    assert openalex.resolve_work_id(doi="10.1234/none") is None
+    assert openalex.resolve_work_id() is None  # 既没 id 也没 doi
+
+
+def test_cited_by_returns_results_and_total(monkeypatch):
+    calls = _stub_json(
+        monkeypatch,
+        {
+            "cites": {
+                "meta": {"count": 1254},
+                "results": [{"id": "https://openalex.org/W2000000009", "display_name": "引用了它"}],
+            }
+        },
+    )
+    results, total = openalex.cited_by("W2999999999", 5)
+    assert total == 1254
+    assert [r.title for r in results] == ["引用了它"]
+    assert "cites%3AW2999999999" in calls[0] or "cites:W2999999999" in urllib.parse.unquote(
+        calls[0]
+    )
+    assert "cited_by_count%3Adesc" in calls[0] or "cited_by_count:desc" in urllib.parse.unquote(
+        calls[0]
+    )
+
+
+def test_cited_by_missing_meta_gives_none_total(monkeypatch):
+    _stub_json(monkeypatch, {"cites": {"results": []}})
+    results, total = openalex.cited_by("W2999999999", 5)
+    assert results == [] and total is None
+
+
+def test_references_of_returns_cited_works(monkeypatch):
+    calls = _stub_json(
+        monkeypatch,
+        {
+            "select=referenced_works": {"referenced_works": ["https://openalex.org/W2000000005"]},
+            "openalex_id": {
+                "results": [
+                    {"id": "https://openalex.org/W2000000005", "display_name": "参考文献甲"}
+                ]
+            },
+        },
+    )
+    results = openalex.references_of("W2999999999", 5)
+    assert [r.title for r in results] == ["参考文献甲"]
+    assert any("referenced_works" in c for c in calls)

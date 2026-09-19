@@ -254,3 +254,90 @@ class OpenAlexSource:
         params = urllib.parse.urlencode({"select": _SELECT})
         work = _load_json(_http_get(f"{_base_url()}/works/{paper_id}?{params}", timeout=_TIMEOUT))
         return _normalize(work)
+
+
+# ---------------------------------------------------------------------------
+# 引证关系（v0.1.4「更像知网」）：相关论文 / 引用了它
+# ---------------------------------------------------------------------------
+#
+# 为什么放在 OpenAlex 模块里：**只有它有引证关系**。arXiv 是预印本库、
+# DOAJ 是期刊目录、CORE 是全文聚合，三家都没有"谁引了谁"。而 OpenAlex
+# 覆盖全学科并带 DOI，所以**别的来源的论文可以按 DOI 桥接过来**——
+# 这正是"点开一篇中文刊的文章，也能看到相关论文"的实现方式。
+#
+# 实测（2026-09-19）：cites 过滤
+# （filter=cites:W…）返回全量被引（一次实测 1254 条），按被引降序取前 N。
+# 代价：每查一次 1~2 个请求，都是"用户点了才发"，不占检索链路预算。
+
+
+def resolve_work_id(*, doi: str = "", openalex_id: str = "") -> str | None:
+    """把一篇论文定位到 OpenAlex 的 W-id；定位不到返回 None（调用方如实说明）。
+
+    优先用**已有**的 W-id（OpenAlex 来源直接就是）；否则用 DOI 反查——
+    DOI 是跨来源的公共钥匙（arXiv/DOAJ/CORE 都带），也是这条桥能搭起来的原因。
+    """
+    if openalex_id:
+        return openalex_id if validate_id(openalex_id) else None
+    if not doi:
+        return None
+    params = urllib.parse.urlencode({"filter": f"doi:{doi}", "select": "id", "per-page": 1})
+    data = _load_json(_http_get(f"{_base_url()}/works?{params}", timeout=_TIMEOUT))
+    rows = data.get("results")
+    if not isinstance(rows, list) or not rows:
+        return None
+    short_id = str(rows[0].get("id") or "").rstrip("/").rsplit("/", 1)[-1]
+    return short_id if validate_id(short_id) else None
+
+
+def fetch_works_by_ids(ids: list[str], limit: int) -> list[PaperResult]:
+    """按 W-id 批量取元数据（related_works 给的是 id 列表，要再取一次详情）。"""
+    wanted = [i for i in ids if validate_id(i)][:limit]
+    if not wanted:
+        return []
+    params = urllib.parse.urlencode(
+        {"filter": "openalex_id:" + "|".join(wanted), "select": _SELECT, "per-page": len(wanted)}
+    )
+    data = _load_json(_http_get(f"{_base_url()}/works?{params}", timeout=_TIMEOUT))
+    rows = data.get("results")
+    if not isinstance(rows, list):
+        raise PaperError("OpenAlex 返回内容无法解析（缺少 results 列表）")
+    # 上游不保证返回顺序 → 按请求的 id 顺序重排，界面上的"相关度"才不会乱跳
+    by_id = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        short = str(row.get("id") or "").rstrip("/").rsplit("/", 1)[-1]
+        by_id[short] = row
+    return [_normalize(by_id[i]) for i in wanted if i in by_id]
+
+
+def references_of(work_id: str, limit: int) -> list[PaperResult]:
+    """它引用了谁（referenced_works）——知网那排出口里的"参考文献"。"""
+    params = urllib.parse.urlencode({"select": "referenced_works"})
+    data = _load_json(_http_get(f"{_base_url()}/works/{work_id}?{params}", timeout=_TIMEOUT))
+    refs = data.get("referenced_works")
+    if not isinstance(refs, list):
+        return []
+    ids = [str(u).rstrip("/").rsplit("/", 1)[-1] for u in refs]
+    return fetch_works_by_ids(ids, limit)
+
+
+def cited_by(work_id: str, limit: int) -> tuple[list[PaperResult], int | None]:
+    """引用了它的论文（按被引降序——最经典的那些排前面）。返回 (结果, 总数)。"""
+    params = urllib.parse.urlencode(
+        {
+            "filter": f"cites:{work_id}",
+            "sort": "cited_by_count:desc",
+            "select": _SELECT,
+            "per-page": limit,
+        }
+    )
+    data = _load_json(_http_get(f"{_base_url()}/works?{params}", timeout=_TIMEOUT))
+    rows = data.get("results")
+    if not isinstance(rows, list):
+        raise PaperError("OpenAlex 返回内容无法解析（缺少 results 列表）")
+    meta = data.get("meta")
+    total = meta.get("count") if isinstance(meta, dict) else None
+    return [_normalize(r) for r in rows if isinstance(r, dict)], (
+        total if isinstance(total, int) else None
+    )

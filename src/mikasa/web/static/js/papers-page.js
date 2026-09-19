@@ -22,6 +22,12 @@ import { initOnboard } from "./onboard.js";
 const PAGE_SIZE = 50;
 const SOURCE_LABEL = { arxiv: "arXiv", openalex: "OpenAlex", core: "CORE", doaj: "DOAJ" };
 
+// 检索历史（v0.1.4「像知网」）：只存本机浏览器，最多 8 条。
+// **联想来自历史，不走上游**——上游的 typeahead 实测十几秒（2026-09-19），
+// 挂在输入框上只会让人以为卡了；历史是本地读写，零延迟且不泄露检索词。
+const HISTORY_KEY = "mikasa.papers.history";
+const HISTORY_MAX = 8;
+
 /** 各源上游命中总数 → "OpenAlex 命中 69,966 条"（拿不到总数的源不出现）。 */
 function totalsText(totals) {
   return Object.entries(totals || {})
@@ -37,6 +43,8 @@ const notesLine = $("#paper-notes");
 const resultsBox = $("#paper-results");
 const moreBtn = $("#paper-more");
 const detailBox = $("#paper-detail");
+const historyBox = $("#paper-history");
+const historyList = $("#paper-history-list");
 
 // 一次检索的会话状态（翻页只动 offset；改词/改条件 = 从 0 重来）
 const state = { q: "", offset: 0, hasMore: false, busy: false, results: [], selected: null, totals: {} };
@@ -101,6 +109,76 @@ function resultRow(paper) {
   return row;
 }
 
+/* ---------------- 检索历史 ---------------- */
+
+function readHistory() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+    return Array.isArray(raw) ? raw.filter((x) => typeof x === "string").slice(0, HISTORY_MAX) : [];
+  } catch {
+    return []; // 隐私模式/坏数据：当作没有历史，不影响检索本身
+  }
+}
+
+function writeHistory(items) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, HISTORY_MAX)));
+  } catch {
+    /* 存不下只是下次没有历史，不影响使用 */
+  }
+}
+
+/** 把这次检索词记进历史（去重、最近的排最前）。 */
+function rememberQuery(q) {
+  const items = readHistory().filter((x) => x !== q);
+  items.unshift(q);
+  writeHistory(items);
+  renderHistory();
+}
+
+function renderHistory() {
+  const items = readHistory();
+  historyBox.classList.toggle("hidden", items.length === 0);
+  historyBox.replaceChildren();
+  // 原生 datalist：在输入框里打字时给候选（浏览器自带，无需自绘下拉）
+  historyList.replaceChildren(
+    ...items.map((q) => {
+      const opt = document.createElement("option");
+      opt.value = q;
+      return opt;
+    })
+  );
+  if (!items.length) return;
+  historyBox.append(el("span", null, "最近："));
+  for (const q of items) {
+    const chip = el("button", { class: "ph-chip", type: "button", title: q }, q);
+    chip.addEventListener("click", () => {
+      input.value = q;
+      void runSearch();
+    });
+    historyBox.append(chip);
+  }
+  const clear = el("button", { class: "ph-clear", type: "button", title: "清空检索历史" }, "清空");
+  clear.addEventListener("click", () => {
+    writeHistory([]);
+    renderHistory();
+  });
+  historyBox.append(clear);
+}
+
+/**
+ * 在详情面板里打开一条论文（来源可以是检索结果，也可以是"相关论文/被引"
+ * 里的条目）。结果列表里有它就同步高亮那一行；没有就只是面板切换——
+ * **不往列表里插行**：列表是"这次检索的快照"，混进引证结果会让人分不清
+ * 哪条是自己搜出来的。
+ */
+function showPaper(paper) {
+  state.selected = paper;
+  const row = resultsBox.querySelector(`.paper-item[data-ref="${paper.source}:${paper.id}"]`);
+  markSelected(row);
+  renderDetail(detailBox, paper, { onImport: doImport, onPick: showPaper });
+}
+
 function markSelected(row) {
   for (const node of resultsBox.querySelectorAll(".paper-item")) {
     node.classList.toggle("on", node === row);
@@ -110,7 +188,7 @@ function markSelected(row) {
 function selectPaper(paper, row) {
   state.selected = paper;
   markSelected(row);
-  renderDetail(detailBox, paper, { onImport: doImport });
+  renderDetail(detailBox, paper, { onImport: doImport, onPick: showPaper });
 }
 
 /** 命中"已在库中"后就地更新那一行（不重查——服务端下次检索自然一致）。 */
@@ -120,7 +198,7 @@ function markInLibrary(paper) {
   if (row && !row.querySelector(".paper-inlib")) {
     row.querySelector(".paper-head").append(el("span", { class: "pill paper-inlib" }, "已在库中"));
   }
-  renderDetail(detailBox, paper, { onImport: doImport });
+  renderDetail(detailBox, paper, { onImport: doImport, onPick: showPaper });
 }
 
 /* ---------------- 导入 ---------------- */
@@ -162,6 +240,7 @@ function renderPage(body, append) {
     state.results = [];
     state.selected = null;
     renderEmpty(detailBox);
+renderHistory(); // 检索历史（本地）
   }
   for (const paper of results) {
     state.results.push(paper);
@@ -237,6 +316,7 @@ async function runSearch({ append = false } = {}) {
       filters: filters.readFilters(),
     });
     renderPage(body, append);
+    if (!append) rememberQuery(q); // 历史只记"新检索"，翻页不算
     // **按窗口大小推进**：有空洞时收到的条数 < limit，按条数推会重复（见文件头）
     state.offset += PAGE_SIZE;
   } catch (err) {

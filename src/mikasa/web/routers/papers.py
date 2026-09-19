@@ -26,6 +26,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
+import mikasa.papers.openalex as openalex
 from mikasa.config.settings import Settings, clear_api_key, write_api_key
 from mikasa.papers import PaperError, PaperFilters, fetch_paper, source_catalog
 from mikasa.papers import search as papers_search
@@ -66,6 +67,65 @@ def _validate_source_id(source: str, paper_id: str) -> None:
     validator = _ID_VALIDATORS.get(source)
     if validator is None or not validator(paper_id):
         raise HTTPException(status_code=422, detail=f"非法的论文编号：{paper_id}")
+
+
+_RELATED_TITLE_CHARS = 8
+_RELATED_TITLE_WORDS = 10
+
+
+def _related_query(title: str) -> str:
+    """相关论文的查询串：**中文标题只取前 8 字**，英文取前 10 个词。
+
+    这不是拍脑袋，是量出来的（2026-09-19，两篇真实中文论文各试四种截断）：
+      · "南海北部天然气水合物富集特征及定量评价" —— 整串与 12 字都在 OpenAlex
+        上**一条都搜不到**（30 秒超时），取前 8 字立刻给出神狐海域天然气水合物
+        那一系列论文；
+      · "旋喷灌浆锚杆的结构设计及其工程应用分析" —— 前 8 字给出"高压旋喷扩大头
+        抗浮锚杆"等同主题文章。
+    原因推测是长 CJK 串在它的检索里被切得太碎、相关性算不出来。中文标题的核心
+    词几乎总在前半句（"XX的YY研究"），所以截前 8 字是个稳的启发式。
+    英文标题没有这个问题，保留整串的前 10 个词即可。
+    """
+    cjk = sum(1 for ch in title if "一" <= ch <= "鿿")
+    if cjk >= 4:
+        return title[:_RELATED_TITLE_CHARS]
+    return " ".join(title.split()[:_RELATED_TITLE_WORDS])
+
+
+def _cjk_bigrams(text: str) -> set[str]:
+    """汉字二元组集合（只取汉字，标点/数字/字母不参与）。"""
+    zh = [ch for ch in text if "一" <= ch <= "鿿"]
+    return {zh[i] + zh[i + 1] for i in range(len(zh) - 1)}
+
+
+def _shares_topic(title: str, candidate: str, minimum: int = 2) -> bool:
+    """词面守卫：候选与原标题至少共享 `minimum` 个汉字二元组。
+
+    为什么需要（2026-09-19 实测）：检索是按词袋打分的，中文长标题里随便
+    哪个词撞上都能把无关文献抬进前列——「复合填料及其分层」召回了"基于大
+    数据的学生综合数据分析"，「南海北部天然气水」召回了"白石砬子地区蛇类
+    生态习性"。共享两个**连续汉字**的候选则实测都是同主题（"天然气水合物"
+    /"渗滤系统"）。**词面留得住，语义留不住**——所以守在词面这一层。
+    """
+    if sum(1 for ch in title if "一" <= ch <= "鿿") < 4:
+        return True  # 非中文标题不套这条（二元组在英文上没意义）
+    return len(_cjk_bigrams(title) & _cjk_bigrams(candidate)) >= minimum
+
+
+def _items_with_library(settings: Settings, papers) -> list[dict]:  # noqa: ANN001 - 序列即可
+    """把 PaperResult 序列转成响应项（含"已在库中"标记）。
+
+    检索与引证两个端点共用：引证结果同样是可导入的论文条目，前端因此能
+    复用同一套行渲染与导入链路（ADR-0020 的 source_ref 语义不变）。
+    """
+    with open_db(settings.db_path) as conn:
+        in_library = repo.list_source_refs(conn)
+    items = []
+    for paper in papers:
+        item = dataclasses.asdict(paper)
+        item["in_library"] = f"{paper.source}:{paper.id}" in in_library
+        items.append(item)
+    return items
 
 
 def _discard_tmp(tmp_path: Path) -> None:
@@ -111,15 +171,8 @@ def search_papers(
         raise HTTPException(
             status_code=502, detail="论文检索暂时不可用：" + "；".join(page.errors.values())
         )
-    with open_db(settings.db_path) as conn:
-        in_library = repo.list_source_refs(conn)
-    results = []
-    for paper in page.results:
-        item = dataclasses.asdict(paper)
-        item["in_library"] = f"{paper.source}:{paper.id}" in in_library
-        results.append(item)
     return {
-        "results": results,
+        "results": _items_with_library(settings, page.results),
         "errors": page.errors,
         "notes": page.notes,
         "has_more": page.has_more,
@@ -127,6 +180,83 @@ def search_papers(
         # 前端据此显示"OpenAlex 命中 6.9 万条"，不显示的就是不知道
         "totals": page.totals,
     }
+
+
+@router.get("/api/papers/related")
+def related_papers(
+    source: str,
+    id: str,
+    kind: str = "related",
+    limit: int = 10,
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """相关论文 / 引用了它（引证关系只 OpenAlex 有，别的来源按 DOI 桥接）。
+
+    为什么值得单独一个端点：这是"像知网"最实用的一环——看到一篇好文章，
+    接着看谁引了它、以及同一主题还有哪些，再一键导入。中文刊的文章大多
+    没有直链 PDF（DOAJ），但**它们有 DOI**，所以照样能桥到 OpenAlex 的
+    引证网络里来。
+
+    诚实降级：没有 DOI、或 OpenAlex 里查不到该 DOI → 200 + note 说明原因，
+    而不是编几篇"相关"出来（前端据此显示一行灰字）。
+    """
+    _validate_source_id(source, id)
+    if kind not in ("related", "cited", "references"):
+        raise HTTPException(status_code=422, detail=f"不支持的关系类型：{kind}")
+    limit = max(1, min(limit, 25))
+    try:
+        paper = fetch_paper(source, id)
+    except PaperError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if kind == "related":
+        # **相关论文不用上游的"推荐"**（2026-09-19 实测）：OpenAlex 的
+        # related_works 对中文论文基本是噪声——实测一篇"南海北部天然气水合物"
+        # 的相关推荐是心脏外科、教育学和一场合唱音乐会，连它的 primary_topic
+        # 都标成了"军事技术"。
+        # 改用**我们自己的检索**：拿标题当查询再搜一次，跨来源、结果天然相关，
+        # 而且能带出 DOAJ 里的中文开放获取期刊。
+        page = papers_search(_related_query(paper.title), None, 0, limit + 1, None)
+        papers = [
+            p
+            for p in page.results
+            if not (p.source == source and p.id == id) and _shares_topic(paper.title, p.title)
+        ][:limit]
+        return {
+            "results": _items_with_library(settings, papers),
+            "note": "按标题关键词检索（跨来源）",
+            "total": None,
+        }
+
+    doi = paper.doi
+    openalex_id = id if source == "openalex" else ""
+    if not openalex_id and not doi:
+        return {
+            "results": [],
+            "note": "这篇论文没有 DOI（或该来源未提供），无法关联到引证网络",
+            "total": None,
+        }
+    try:
+        work_id = openalex.resolve_work_id(doi=doi, openalex_id=openalex_id)
+    except PaperError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if work_id is None:
+        return {
+            "results": [],
+            "note": "OpenAlex 里没有这篇论文的记录（中文期刊的 DOI 覆盖不全），暂时给不出引证关系",
+            "total": None,
+        }
+    try:
+        if kind == "cited":
+            papers, total = openalex.cited_by(work_id, limit)
+            note = ""
+        else:  # references
+            papers = openalex.references_of(work_id, limit)
+            total = None
+            note = "" if papers else "OpenAlex 没有记录这篇论文的参考文献"
+    except PaperError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"results": _items_with_library(settings, papers), "note": note, "total": total}
 
 
 @router.post("/api/papers/import")

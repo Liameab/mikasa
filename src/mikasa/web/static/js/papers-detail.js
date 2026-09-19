@@ -10,6 +10,7 @@
    ========================================================================= */
 
 import { el } from "./common.js";
+import { fetchRelated } from "./papers-api.js";
 
 const SOURCE_LABEL = { arxiv: "arXiv", openalex: "OpenAlex", core: "CORE", doaj: "DOAJ" };
 
@@ -33,11 +34,110 @@ export function renderEmpty(detail) {
 }
 
 /**
+ * 引证关系区块（v0.1.4）：相关论文 / 引用了它。
+ *
+ * **懒加载**：点开才发请求——详情面板是"点一下就看"的东西，不该为每个
+ * 结果预先付一次网络往返（这些免费源的往返本来就不便宜）。
+ *
+ * 诚实降级：桥不到 OpenAlex（没有 DOI / 中文刊 DOI 覆盖不全）时服务端回
+ * 200 + note，这里显示一行灰字，**不编"相关论文"**。
+ */
+function relatedSection(paper, { onPick, onImport }) {
+  const box = el("div", { class: "pd-related" });
+  const list = el("div", { class: "pd-rel-list" });
+  const status = el("div", { class: "pd-rel-status muted small" });
+  const cache = {}; // kind → {results, note, total}
+  let current = "";
+
+  const render = (kind, data) => {
+    list.replaceChildren();
+    if (!data.results.length) {
+      // 一条都没有：note 就是全部信息（"没有 DOI"/"OpenAlex 里没有这篇"…）
+      status.textContent =
+        data.note ||
+        (kind === "cited" ? "暂时没有查到引用它的论文" : "暂时没有相关论文");
+      return;
+    }
+    // 有结果时 note 是**来源说明**（如"同一主题：岩土工程与地下结构"），
+    // 与"显示 N 篇"并存——用户该知道这批结果是怎么来的
+    const count =
+      kind === "cited" && data.total !== null
+        ? `共 ${data.total.toLocaleString("zh-CN")} 篇引用，按被引排序显示前 ${data.results.length} 篇`
+        : `显示 ${data.results.length} 篇`;
+    status.textContent = data.note ? `${data.note} · ${count}` : count;
+    for (const item of data.results) {
+      const title = el("div", { class: "pd-rel-title" }, item.title);
+      const meta = el(
+        "div",
+        { class: "pd-rel-meta muted small" },
+        [
+          item.authors && item.authors.length ? item.authors[0] + (item.authors.length > 1 ? " 等" : "") : "",
+          item.year ? String(item.year) : "",
+          item.venue || "",
+          item.cited_by === null || item.cited_by === undefined ? "" : `被引 ${item.cited_by}`,
+          item.in_library ? "已在库中" : "",
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      );
+      const row = el("div", { class: "pd-rel-item" }, title, meta);
+      row.addEventListener("click", () => onPick(item));
+      // 行内直接导入（能导入的才给按钮，与详情面板同一判据）
+      if (!item.in_library && item.pdf_url) {
+        const btn = el("button", { class: "btn ghost pd-rel-import", type: "button" }, "导入");
+        btn.addEventListener("click", async (ev) => {
+          ev.stopPropagation(); // 别顺带把整行点成"选中"
+          btn.disabled = true;
+          btn.textContent = "导入中…";
+          await onImport(item, btn);
+          btn.textContent = item.in_library ? "已导入" : "导入";
+          btn.disabled = item.in_library;
+        });
+        row.append(btn);
+      }
+      list.append(row);
+    }
+  };
+
+  const load = async (kind, button) => {
+    current = kind;
+    for (const b of box.querySelectorAll(".pd-rel-tab")) b.classList.toggle("on", b === button);
+    if (cache[kind]) {
+      render(kind, cache[kind]);
+      return;
+    }
+    status.textContent = "正在查询…";
+    list.replaceChildren();
+    try {
+      const data = await fetchRelated(paper.source, paper.id, kind);
+      if (current !== kind) return; // 连点两个页签：只认最后一次
+      cache[kind] = data;
+      render(kind, data);
+    } catch (err) {
+      if (current === kind) status.textContent = `查询失败：${err.message}`;
+    }
+  };
+
+  const tabRelated = el("button", { class: "pd-rel-tab", type: "button" }, "相关论文");
+  const tabCited = el("button", { class: "pd-rel-tab", type: "button" }, "引用了它");
+  const tabRefs = el("button", { class: "pd-rel-tab", type: "button" }, "参考文献");
+  tabRelated.addEventListener("click", () => void load("related", tabRelated));
+  tabCited.addEventListener("click", () => void load("cited", tabCited));
+  tabRefs.addEventListener("click", () => void load("references", tabRefs));
+  box.append(
+    el("div", { class: "pd-rel-head" }, el("span", null, "更多"), tabRelated, tabCited, tabRefs),
+    status,
+    list
+  );
+  return box;
+}
+
+/**
  * 渲染一条结果的详情。
  * `onImport` 返回 Promise；导入成功后由调用方负责再调一次 renderDetail
  * 并把 paper.in_library 置真（详情面板只负责画，不持有状态）。
  */
-export function renderDetail(detail, paper, { onImport }) {
+export function renderDetail(detail, paper, { onImport, onPick }) {
   const title = paper.landing_url
     ? el(
         "a",
@@ -111,5 +211,9 @@ export function renderDetail(detail, paper, { onImport }) {
     }
   }
 
-  detail.replaceChildren(el("h2", null, "论文详情"), title, meta, abstract, actions);
+  const children = [el("h2", null, "论文详情"), title, meta, abstract, actions];
+  // 引证关系只在"这条不在库里"或"在库里也值得看更多"时都给——它本来就是
+  // 用来继续找论文的，与导入状态无关
+  if (onPick) children.push(relatedSection(paper, { onPick, onImport }));
+  detail.replaceChildren(...children);
 }

@@ -626,6 +626,8 @@ Find-papers page (ADR-0020)：`.papers-layout`（grid 三栏）· sidebar `.p-fi
 `.paper-snippet` / `.paper-inlib` / `.paper-actions` / `.paper-status` / `.paper-key-row` ·
 detail `.pd-title` / `.pd-meta` / `.pd-body` / `.pd-actions` / `.pd-exits`
 
+Find-papers extras (v0.1.4)：`.paper-history` (`.ph-chip` / `.ph-clear`) · `.pd-related` / `.pd-rel-head` / `.pd-rel-tab` (`.on`) / `.pd-rel-status` / `.pd-rel-list` / `.pd-rel-item` / `.pd-rel-title` / `.pd-rel-meta` / `.pd-rel-import`
+
 Note editor (M6 ①)：`.note-backdrop` · `.note-box` / `.note-head` / `.note-title` ·
 `.note-split` / `.note-input` / `.note-preview` · `.note-foot` / `.note-folder-wrap` /
 `.note-folder` / `.note-hint`

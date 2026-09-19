@@ -56,6 +56,19 @@ export async function importPaper(source, id) {
   };
 }
 
+/**
+ * 相关论文 / 引用了它（v0.1.4）。
+ *
+ * 引证关系只有 OpenAlex 有，别的来源按 **DOI 桥接**过去；桥不过去时服务端
+ * 回 200 + note（"没有 DOI""OpenAlex 里没有这篇"），所以这里把 note 当正常
+ * 数据读，不抛错——界面据此显示一行灰字而不是一个红 toast。
+ */
+export async function fetchRelated(source, id, kind = "related") {
+  const params = new URLSearchParams({ source, id, kind });
+  const body = await apiFetch(`/api/papers/related?${params}`);
+  return { results: body.results || [], note: body.note || "", total: body.total ?? null };
+}
+
 /** 来源目录（名字/展示名/能力）。 */
 export async function fetchSources() {
   const body = await apiFetch("/api/papers/sources");
