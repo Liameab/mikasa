@@ -262,6 +262,13 @@ The import also records `documents.source_ref` (`"arxiv:2401.12345"`), which is
 what lets a search result say "already in your library"; the v4 migration adds
 that column, and the two re-index keep-lists carry it across a full rebuild.
 
+Paging needs no new endpoint: page N is the same search request with
+`offset=(N-1)×50`, because the service's window formula spreads that global
+window across the sources — "jump to page N" is just a different offset. The
+page *count* is derived on the frontend from the hit totals the sources report
+(summed, capped by the upstreams' 10,000-result page-paging limit x source count), and the status line states where that number came
+from rather than presenting it as a precise fact.
+
 **In-app updates** (v0.1.1, ADR-0022) live in `update/` and are exposed by
 `web/routers/update.py`: `GET /api/update/check`, `POST /api/update/download`,
 `GET /api/update/download/status`, `POST /api/update/install`. The server asks GitHub's

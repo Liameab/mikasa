@@ -145,9 +145,14 @@ migration (v1→v2) is in the ADR-0004 revision section.
   VIP exclusive full text is unreachable (paywall, no public API); the panel and the docs say
   "CNKI-like experience, not CNKI's data" in as many words, and a paper without open-access full
   text offers a DOI landing-page jump instead of an import;
-- **Paging is forward-only**: the rotating window advances by `limit` per page (source order comes
-  from the registry, global position `p` belongs to source `p % n`), so there is no "jump to page N"
-  and no reliable total; each page costs one upstream request per source;
+- **Paging depth is bounded by the upstreams, and the page count is an estimate** (page numbers and
+  jump-to-page arrived 2026-09-20; the boundaries are worth stating): the rotating window advances by
+  `limit` per page (source order comes from the registry, global position `p` belongs to source
+  `p % n`); the page-numbered sources (OpenAlex, DOAJ) both document a 10,000-result ceiling, and
+  beyond it only cursor paging exists — which cannot jump to an arbitrary page. So the reachable
+  depth is 200 x (number of selected sources) pages, and "N pages" is an **estimate** summed from the
+  hit counts the sources report (the merged stream has no exact total); each page costs one upstream
+  request per source, and the deepest pages are visibly slower;
 - **arXiv's politeness throttle (~1 request/3 s) is felt by the user**: a single search can be two
   upstream calls, and back-to-back searches wait out the interval — a deliberate trade against
   getting the public API to rate-limit us;
@@ -187,8 +192,14 @@ than offering one that quietly does nothing:
 - **arXiv has no citation data at all**, so "sort by most cited" is offered only while a source
   that has citations is selected, and arXiv rows read "被引数据：该来源不提供" — 0 citations and
   "unknown" are deliberately worded differently;
-- **OpenAlex's deep paging is capped** by its 200-record page size: a window that cannot fit comes
-  back short, `has_more` turns false and that source stops paging rather than pretending;
+- **Page-numbered sources have a 10,000-result depth ceiling** (fixed 2026-09-20): OpenAlex and DOAJ
+  only offer page/per-page, no native offset, and OpenAlex documents a `page x per-page <= 10,000`
+  limit (beyond it only cursor paging exists, and a cursor cannot jump to an arbitrary page). Both
+  sources therefore fetch "the page containing the window" and slice it, up to that 10,000th result;
+  deeper pages come back empty honestly (`has_more` turns false) rather than pretending otherwise.
+  **Before the fix** they fetched everything from page 1 up to `start+count`, so the per-page cap
+  (200 / 100) silently cut them off around page 8-16 — one root cause behind the user's "I can only
+  page a few pages" report;
 - **Two candidates were rejected on evidence**: Semantic Scholar answers 429 on its anonymous pool
   (twice, ~2s apart) so it would need a free key before it can be a source at all; ChinaXiv's
   `/api/search` returns "请求方法应为POST" for GET and for two POST encodings alike, and `/oai`
@@ -200,14 +211,18 @@ A note is stored byte-exact, but the *parsed* text that becomes chunks passes th
 Markdown pipeline as any uploaded `.md` — with the following consequences, all accepted rather than
 worked around (each fix would change the loader for **every** Markdown document in every corpus):
 
-- **Fenced code blocks never enter retrieval.** The loader skips them wholesale so that a `#` inside a
-  code sample is not read as a heading. A note that is *only* a code block therefore produces zero
-  paragraphs and is rejected with `400 笔记正文不能为空`-class wording; a mixed note is searchable by its
-  prose, not by its code.
-- **`strip_repeated_lines` (≥3 identical lines) runs on md/txt.** Blank lines are preserved (they carry
-  paragraph structure) and a line appearing once or twice is kept, but a line appearing three or more
-  times survives only at its first occurrence — a note with three structurally identical tables loses
-  the later `| --- | --- |` separators *in the index*, though the file itself is untouched.
+- **Fenced code blocks now do enter retrieval** (changed 2026-09-20; previously "never"): each block is
+  indexed as a **plain-text paragraph**, so a `#` inside the sample is not read as a heading — which was
+  the real reason for skipping it, and that is a *parsing* concern: not parsing the block at all solves
+  it. Two gains: a note that is only code can be saved at all, and a mixed note is searchable by its
+  code. The price is extra text in the index; a note containing *only headings* still yields zero
+  paragraphs and is still rejected with 400 (that message now mentions only that case).
+- **`strip_repeated_lines` now runs on pdf/txt only** (changed 2026-09-20; previously "md/txt"). That
+  heuristic was written for the headers and footers of PDF-to-text dumps, and applying it to Markdown
+  damaged legitimate content — a note with three structurally identical tables lost the later
+  `| --- | --- |` separators *in the index*, though the file itself was untouched. Plain text keeps it:
+  a user's .txt is plausibly a PDF dump. Blank lines are always preserved (they carry paragraph
+  structure).
 - **Setext still applies.** A `---` line directly under a text line (no blank line between) makes that
   text an H2 heading rather than a paragraph.
 - **`Cf` characters (zero-width spaces, ZWJ sequences in emoji) are dropped from the index text** by
@@ -246,8 +261,13 @@ worked around (each fix would change the loader for **every** Markdown document 
   Read paths resolve such a row by *file name*, but ingest's same-name replace matches on the *full path*,
   so editing a note whose path was stale produced a second document — one duplicate, no note marker, and
   the old text still in the index. The note API now repairs the row's path before ingesting (and refuses
-  with a 409 if another row already owns that name). **Uploads still carry the same root cause**: dropping
-  a same-named file with new content onto a row with a stale path duplicates it as well. Notes were the
+  with a 409 if another row already owns that name). **Uploads carried the same root cause**: dropping
+  a same-named file with new content onto a row with a stale path duplicated it as well — **fixed
+  2026-09-20** on the **write side** (`ingest/service.py`): when the full-path lookup misses, the ingest
+  tail falls back to a file-name lookup (`repo.get_document_by_upload_name`, using `PureWindowsPath` so
+  both backslashes and `/` work) and repairs the row's `file_path` before running the usual same-name
+  replace. All three ingest paths (upload, paper import, note) share that tail, so the note-side patch is
+  no longer load-bearing. Notes were the
   loud case because editing combines two things uploads rarely do — the content always changes, and
   `force=True` disables the content-hash net that usually hides the problem.
 

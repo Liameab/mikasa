@@ -208,6 +208,9 @@ OpenAlex/CORE/DOAJ（JSON）各写一个来源模块，**归一成同一份 `Pap
 忽略（CORE 的年份**参数**会被上游收下后丢掉，所以那个来源改走查询语法）。
 `web/routers/papers.py` 暴露五个端点——`POST /api/papers/search`、
 `POST /api/papers/import`、`GET /api/papers/sources`、`GET/PUT /api/papers/settings`
+（翻页不新增端点：第 N 页就是 `offset=(N-1)×50` 的同一个检索请求——服务层的窗口公式
+把全局窗口摊到各来源上，所以"跳页"只是换一个 offset；总页数由前端按各源自报的命中数
+求和算出，并按上游按页取数的 1 万条上限 × 来源数封顶，状态行里写明这个来路）
 ——导入路径按 id 反查来源 API 自行推 PDF 地址、不信客户端，因此真正进入 URL 的
 用户输入只有一对正则校验过的 `{source, id}`。导入同时写入 `documents.source_ref`
 （`"arxiv:2401.12345"`），搜索结果据此标"已在库中"；该列由 v4 迁移补上，并被
