@@ -121,6 +121,9 @@ def search_papers(
         "errors": page.errors,
         "notes": page.notes,
         "has_more": page.has_more,
+        # 各源上游命中总数（"这库到底有多大"）：拿不到总数的源不出现，
+        # 前端据此显示"OpenAlex 命中 6.9 万条"，不显示的就是不知道
+        "totals": page.totals,
     }
 
 

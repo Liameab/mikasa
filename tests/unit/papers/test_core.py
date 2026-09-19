@@ -140,8 +140,8 @@ def test_validate_id():
 
 def test_search_url_shape(stub_http):
     stub_http["body"] = _results_body([_work()])
-    results, full = core.CoreSource().search("水库坝", 20, 10)
-    assert len(results) == 1 and full is False
+    results, total = core.CoreSource().search("水库坝", 20, 10)
+    assert len(results) == 1 and total == 1  # totalHits（假响应里是 len(results)）
     url = stub_http["urls"][0]
     query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
     assert query["q"] == ["水库坝"]
@@ -179,10 +179,11 @@ def test_search_sort_translation(stub_http):
     ]
 
 
-def test_search_full_flag(stub_http):
+def test_search_total(stub_http):
+    """上游 totalHits → 命中总数（界面用它显示"命中 N 条"）。"""
     stub_http["body"] = _results_body([_work(), _work(id=72544)])
-    _, full = core.CoreSource().search("x", 0, 2)
-    assert full is True  # 取满 count → 后面可能还有
+    _, total = core.CoreSource().search("x", 0, 2)
+    assert total == 2
 
 
 def test_fetch_by_id(stub_http):

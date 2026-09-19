@@ -34,15 +34,20 @@ import urllib.parse
 import urllib.request
 
 from mikasa.papers.errors import PaperError
+from mikasa.papers.http import USER_AGENT, with_retry
 from mikasa.papers.sources import PaperFilters, PaperResult, SourceCaps
 
 # 官方文档未见明确限速，但实测连打 5~6 次即 429 → 保守取 2 秒
 _CORE_MIN_INTERVAL = 2.0
 
+# 单请求超时（秒）：15 秒对本机到这些站点的链路太紧（实测同一 URL 在
+# 0.8–22.5 秒之间浮动，2026-09-19）。取 20 秒 + 网络级重试一次；
+# 一页的**总时限**另有页级截止兜底（service.py 的 _PAGE_DEADLINE）——
+# 单个源挂住不该把整页拖到一分钟（实测串行 73 秒那次就是这么来的）。
+_TIMEOUT = 20.0
+
 # id 白名单：CORE 的 work id 是纯数字（实测 "72543"）
 _CORE_ID_RE = re.compile(r"^\d{1,20}$")
-
-_USER_AGENT = "Mikasa/0.1 (local paper search)"
 
 # 年份合法区间：脏值（710300/202022）一律判 None
 _YEAR_MIN, _YEAR_MAX = 1900, 2100
@@ -68,18 +73,23 @@ def _http_get(url: str, timeout: float) -> bytes:
         if wait > 0:
             time.sleep(wait)
         _last_ok = time.monotonic()
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read()
+        return with_retry(lambda: _read(url, timeout))
     except urllib.error.HTTPError as exc:
         if exc.code == 429:
             raise PaperError(
                 "CORE 请求过于频繁（HTTP 429），请稍等半分钟再试（该来源限流较紧）"
             ) from exc
         raise PaperError(f"CORE 服务返回错误（HTTP {exc.code}），请稍后重试") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
         raise PaperError("无法连接 CORE（网络不可达或超时），请稍后重试") from exc
+
+
+def _read(url: str, timeout: float) -> bytes:
+    """裸 HTTP 调用（重试包裹的那一层）。"""
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
 
 
 def validate_id(paper_id: str) -> bool:
@@ -202,7 +212,7 @@ class CoreSource:
         count: int,
         *,
         filters: PaperFilters | None = None,
-    ) -> tuple[list[PaperResult], bool]:
+    ) -> tuple[list[PaperResult], int | None]:
         query = q.replace('"', " ").strip()
         # cited 排序 CORE 不支持（HTTP 500），服务层会记 note；这里回落相关度
         want_recent = filters is not None and filters.sort == "recent"
@@ -215,15 +225,16 @@ class CoreSource:
                 "sort": sort,
             }
         )
-        data = _load_json(_http_get(f"{_base_url()}/search/works/?{params}", timeout=20.0))
+        data = _load_json(_http_get(f"{_base_url()}/search/works/?{params}", timeout=_TIMEOUT))
         works = data.get("results")
         if not isinstance(works, list):
             raise PaperError("CORE 返回内容无法解析（缺少 results 列表）")
         results = [_normalize(w) for w in works if isinstance(w, dict)]
-        return results, len(results) == count
+        total = data.get("totalHits")  # 上游命中总数（拿不到就是 None，界面不显示）
+        return results, total if isinstance(total, int) else None
 
     def fetch(self, paper_id: str) -> PaperResult:
         if not validate_id(paper_id):
             raise PaperError(f"非法的 CORE 论文编号：{paper_id}")
-        work = _load_json(_http_get(f"{_base_url()}/works/{paper_id}", timeout=20.0))
+        work = _load_json(_http_get(f"{_base_url()}/works/{paper_id}", timeout=_TIMEOUT))
         return _normalize(work)

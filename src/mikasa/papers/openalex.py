@@ -24,6 +24,7 @@ import urllib.parse
 import urllib.request
 
 from mikasa.papers.errors import PaperError
+from mikasa.papers.http import USER_AGENT, with_retry
 from mikasa.papers.sources import PaperFilters, PaperResult, SourceCaps
 
 # OpenAlex id 形如 "W" + 数字（六位起）：解析与路由双重校验
@@ -35,10 +36,14 @@ _SELECT = (
     "abstract_inverted_index,open_access,language,cited_by_count"
 )
 
-_USER_AGENT = "Mikasa/0.1 (local paper search)"
-
 # OpenAlex 单页上限（超出会 400）；深翻页时窗口可能取不满，has_more 自然为假
 _MAX_PER_PAGE = 200
+
+# 单请求超时（秒）：15 秒对本机到这些站点的链路太紧（实测同一 URL 在
+# 0.8–22.5 秒之间浮动，2026-09-19）。取 20 秒 + 网络级重试一次；
+# 一页的**总时限**另有页级截止兜底（service.py 的 _PAGE_DEADLINE）——
+# 单个源挂住不该把整页拖到一分钟（实测串行 73 秒那次就是这么来的）。
+_TIMEOUT = 20.0
 
 _SORT_PARAMS = {
     "relevance": "relevance_score:desc",
@@ -109,10 +114,9 @@ def _http_get(url: str, timeout: float) -> bytes:
     if key:
         sep = "&" if "?" in url else "?"
         url = f"{url}{sep}api_key={urllib.parse.quote(key)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read()
+        return with_retry(lambda: _read(req, timeout))
     except urllib.error.HTTPError as exc:
         if exc.code in (429, 409, 403):
             if not key:
@@ -126,8 +130,14 @@ def _http_get(url: str, timeout: float) -> bytes:
         if exc.code == 404:
             raise PaperError("OpenAlex 未找到该论文（id 可能已变更）") from exc
         raise PaperError(f"OpenAlex 请求失败（HTTP {exc.code}）") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
         raise PaperError("无法连接 OpenAlex（网络不可达或超时），请稍后重试") from exc
+
+
+def _read(req: urllib.request.Request, timeout: float) -> bytes:
+    """裸 HTTP 调用（重试包裹的那一层）。"""
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
 
 
 def _load_json(data: bytes) -> dict:
@@ -200,7 +210,7 @@ class OpenAlexSource:
         count: int,
         *,
         filters: PaperFilters | None = None,
-    ) -> tuple[list[PaperResult], bool]:
+    ) -> tuple[list[PaperResult], int | None]:
         # **窗口对齐**（2026-09-16 两轮才修对，教训记在下面）：OpenAlex 只有
         # page/per-page，没有原生 offset，而页边界固定在 per-page 的整数倍上
         # ——凑不出"边界刚好落在 start"。
@@ -226,17 +236,21 @@ class OpenAlexSource:
                 **_filter_params(filters),
             }
         )
-        data = _load_json(_http_get(f"{_base_url()}/works?{params}", timeout=15.0))
+        data = _load_json(_http_get(f"{_base_url()}/works?{params}", timeout=_TIMEOUT))
         works = data.get("results")
         if not isinstance(works, list):
             raise PaperError("OpenAlex 返回内容无法解析（缺少 results 列表）")
         results = [_normalize(w) for w in works if isinstance(w, dict)]
         window = results[start : start + count]
-        return window, len(window) == count
+        # meta.count = 上游命中总数（与窗口无关）：界面用它显示"命中 N 条"，
+        # 让"这库到底有多大"可见——这是知网那种规模感里我们唯一能诚实给出的部分
+        meta = data.get("meta")
+        total = meta.get("count") if isinstance(meta, dict) else None
+        return window, total if isinstance(total, int) else None
 
     def fetch(self, paper_id: str) -> PaperResult:
         if not validate_id(paper_id):
             raise PaperError(f"非法的 OpenAlex 论文编号：{paper_id}")
         params = urllib.parse.urlencode({"select": _SELECT})
-        work = _load_json(_http_get(f"{_base_url()}/works/{paper_id}?{params}", timeout=15.0))
+        work = _load_json(_http_get(f"{_base_url()}/works/{paper_id}?{params}", timeout=_TIMEOUT))
         return _normalize(work)

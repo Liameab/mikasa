@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 import mikasa.papers.service as service
@@ -40,12 +42,16 @@ class _FakeSource:
         total: int | None = None,
         fail: str | None = None,
         caps: SourceCaps | None = None,
+        reported_total: int | None = None,
+        delay: float = 0.0,
     ) -> None:
         self.name = name
         self.label = name
         self.total = total  # None = 每页都取满
         self.fail = fail
         self.caps = caps or SourceCaps()
+        self.reported_total = reported_total  # 上游报的命中总数（第二项返回值）
+        self.delay = delay  # 人为拖慢（并行测试用）
         self.calls: list[tuple[int, int, PaperFilters | None]] = []
 
     def search(
@@ -56,11 +62,13 @@ class _FakeSource:
         *,
         filters: PaperFilters | None = None,
     ) -> tuple[list[PaperResult], bool]:
+        if self.delay:
+            time.sleep(self.delay)
         self.calls.append((start, count, filters))
         if self.fail:
             raise PaperError(self.fail)
         n = count if self.total is None else max(0, min(count, self.total - start))
-        return [_paper(self.name, start + i) for i in range(n)], n == count
+        return [_paper(self.name, start + i) for i in range(n)], self.reported_total
 
     def fetch(self, paper_id: str) -> PaperResult:
         raise AssertionError("编排层不该调用 fetch")
@@ -315,3 +323,80 @@ def test_window_total_covers_limit():
             for limit in (1, 3, 10, 20):
                 total = sum(service._window(i, n, offset, limit)[1] for i in range(n))
                 assert total == limit, f"n={n} offset={offset} limit={limit}"
+
+
+# ---------------------------------------------------------------------------
+# 命中总数与并发取源（2026-09-19）
+# ---------------------------------------------------------------------------
+
+
+def test_totals_carried_per_source(monkeypatch):
+    """各源报的上游命中总数进 page.totals；没报的源不出现（不编数字）。"""
+    _use(
+        monkeypatch,
+        ("arxiv", _FakeSource("arxiv", reported_total=1234)),
+        ("openalex", _FakeSource("openalex", reported_total=69966)),
+        ("core", _FakeSource("core")),  # 没报 → 缺席
+    )
+    page = service.search("x", None, 0, 6)
+    assert page.totals == {"arxiv": 1234, "openalex": 69966}
+
+
+def test_failed_source_has_no_total(monkeypatch):
+    """失败的源不该留下"命中数"——它根本没答话。"""
+    _use(monkeypatch, ("arxiv", _FakeSource("arxiv", fail="闸门关了", reported_total=99)))
+    page = service.search("x", None, 0, 3)
+    assert page.totals == {}
+    assert "arxiv" in page.errors
+
+
+def test_sources_are_queried_in_parallel(monkeypatch):
+    """三源并发：一页耗时 ≈ 最慢的源，而不是三者之和。
+
+    回归锁（2026-09-19）：串行时 arXiv 的 3 秒节流 + CORE 的 2 秒会一层层
+    排队，用户看到"加载半天就才几篇"。这里每个假源各睡 0.3 秒：串行 ≥0.9s，
+    并发 ≈0.3s——阈值取 0.6 秒，两边都留足余量（CI 机器抖动容忍）。
+    """
+    _use(
+        monkeypatch,
+        ("arxiv", _FakeSource("arxiv", delay=0.3)),
+        ("openalex", _FakeSource("openalex", delay=0.3)),
+        ("core", _FakeSource("core", delay=0.3)),
+    )
+    t0 = time.monotonic()
+    page = service.search("x", None, 0, 3)
+    elapsed = time.monotonic() - t0
+    assert len(page.results) == 3
+    assert elapsed < 0.6, f"三个源看起来是串行的：{elapsed:.2f}s"
+
+
+def test_page_deadline_delivers_partial_results(monkeypatch):
+    """一个源挂住不返回：整页到点先交付，挂住的源如实进 errors。
+
+    回归锁（2026-09-19）：真实链路里单源会挂 25–40 秒（实测一次检索被拖到
+    73 秒），用户看到的是"加载半天"。截止时间在这里压到 0.2 秒，挂源睡 1.2 秒。
+    """
+    _use(
+        monkeypatch,
+        ("arxiv", _FakeSource("arxiv")),
+        ("core", _FakeSource("core", delay=1.2)),  # 假装挂住
+    )
+    monkeypatch.setattr(service, "_PAGE_DEADLINE", 0.2)
+    t0 = time.monotonic()
+    page = service.search("x", None, 0, 4)
+    elapsed = time.monotonic() - t0
+    assert elapsed < 1.0, f"页级截止没生效：{elapsed:.2f}s"
+    assert [r.id for r in page.results] == ["arxiv-0", "arxiv-1"]  # 快的源照常交付
+    assert "响应太慢" in page.errors["core"]  # 挂住的源不装哑巴
+
+
+def test_page_deadline_does_not_mask_fast_failures(monkeypatch):
+    """快速失败仍走各自的错误文案（页级截止不该顶替真实原因）。"""
+    _use(
+        monkeypatch,
+        ("arxiv", _FakeSource("arxiv", fail="arXiv 服务返回错误（HTTP 406），请稍后重试")),
+        ("core", _FakeSource("core")),
+    )
+    monkeypatch.setattr(service, "_PAGE_DEADLINE", 0.2)
+    page = service.search("x", None, 0, 4)
+    assert "HTTP 406" in page.errors["arxiv"]

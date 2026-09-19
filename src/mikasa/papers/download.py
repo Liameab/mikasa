@@ -32,12 +32,14 @@ import urllib.request
 from pathlib import Path
 
 from mikasa.papers.errors import PaperError
+from mikasa.papers.http import USER_AGENT
 
 _PDF_MAX_BYTES = 50 * 1024 * 1024
 _DOWNLOAD_TIMEOUT = 90.0
 _MAX_REDIRECTS = 3
 _CHUNK = 64 * 1024
-_USER_AGENT = "Mikasa/0.1 (local paper search)"
+# 与检索源共用一份 UA（带项目主页：出版商的机器人策略也更认可识别的客户端）
+_USER_AGENT = USER_AGENT
 
 # 各来源共用的默认端口（urlsplit 不带端口时补上，供 getaddrinfo 用）
 _DEFAULT_PORTS = {"https": 443, "http": 80}

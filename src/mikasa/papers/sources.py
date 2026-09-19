@@ -87,11 +87,13 @@ class PaperSource(Protocol):
         count: int,
         *,
         filters: PaperFilters | None = None,
-    ) -> tuple[list[PaperResult], bool]:
+    ) -> tuple[list[PaperResult], int | None]:
         """检索一页。
 
-        返回 (结果, 是否取满 count)——取满即"后面可能还有"，由服务层
-        换算成 has_more（不依赖各源不可靠的 total）。
+        返回 (结果, 上游命中总数)——第二项**只用于展示规模**（"命中 N 条"），
+        翻页信号仍由服务层按"取满 count"判断：各源报的 total 在带筛选时常常
+        虚高，拿它算 has_more 会翻出空页（2026-09-16 的教训）。拿不到总数
+        就返回 None，界面不显示，不假装。
         `filters` 只按 `caps` 声明的能力翻译，**不支持的一律忽略且不得
         假装生效**（由服务层记进 notes）。
         失败抛 PaperError（中文文案）。

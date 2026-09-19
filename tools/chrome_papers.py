@@ -49,8 +49,8 @@ REPO_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MIKASA_EXE = REPO_ROOT / ".venv" / "Scripts" / "mikasa.exe"
 
 FAKE_KEY = "sk-papers-e2e-0001"  # 只写进临时数据目录，不可能是真密钥
-CORPUS = 30  # 假源每个源的条数（≥ 两页，翻页路径才走得到）
-PAGE_SIZE = 20  # 与 papers-page.js 的 PAGE_SIZE 一致
+CORPUS = 60  # 假源每个源的条数（≥ 两页 × 三源，翻页路径才走得到）
+PAGE_SIZE = 50  # 与 papers-page.js 的 PAGE_SIZE 一致（2026-09-19 由 20 提到 50）
 # 最后一条 toast 的文本（带外括号，可直接 .includes）。toast 存活 3.6s，
 # 连续两次导入时 querySelector 会取到**上一条**——2026-09-16 实测踩过。
 LAST_TOAST = "([...document.querySelectorAll('#toast .toast-msg')].at(-1)?.textContent || '')"
@@ -168,9 +168,14 @@ class _FakeSources(BaseHTTPRequestHandler):
             count = int(query.get("max_results", ["10"])[0])
             ids = range(start + 1, min(start + count, CORPUS) + 1)
             entries = "".join(self._arxiv_entry_xml(n) for n in ids)
+        # opensearch:totalResults = 上游命中总数（界面"命中 N 条"的数据源）
         xml = (
             '<?xml version="1.0" encoding="UTF-8"?>'
-            '<feed xmlns="http://www.w3.org/2005/Atom">' + entries + "</feed>"
+            '<feed xmlns="http://www.w3.org/2005/Atom"'
+            ' xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">'
+            f"<opensearch:totalResults>{CORPUS * 100}</opensearch:totalResults>"
+            + entries
+            + "</feed>"
         )
         self._send(xml.encode("utf-8"), "application/atom+xml")
 
@@ -201,10 +206,11 @@ class _FakeSources(BaseHTTPRequestHandler):
             per_page = int(query.get("per-page", ["10"])[0])
             start = (page - 1) * per_page
             payload = {
+                "meta": {"count": CORPUS * 1000},  # 上游命中总数 → 界面"命中 N 条"
                 "results": [
                     self._work(n, oa=n != 1)
                     for n in range(start + 1, min(start + per_page, CORPUS) + 1)
-                ]
+                ],
             }
         self._send(json.dumps(payload).encode("utf-8"), "application/json")
 
@@ -231,10 +237,11 @@ class _FakeSources(BaseHTTPRequestHandler):
         limit = int(query.get("limit", ["10"])[0])
         # 第 1 条无 downloadUrl：证明"CORE 全 OA"没有被写死（导入按钮应禁用）
         payload = {
+            "totalHits": CORPUS * 100,  # 上游命中总数 → 界面"命中 N 条"
             "results": [
                 self._core_work(n, pdf=n != 1)
                 for n in range(offset + 1, min(offset + limit, CORPUS) + 1)
-            ]
+            ],
         }
         self._send(json.dumps(payload).encode("utf-8"), "application/json")
 
@@ -464,6 +471,11 @@ async def run(args):
 
             # ---- 2. 检索：三源轮转（arXiv/OpenAlex/CORE 各一）----
             await search(cdp, "水库坝")
+            first_status = await cdp.evaluate("""(() => {
+              const text = document.querySelector('#paper-status').textContent || '';
+              // 各源命中总数（"arXiv 命中 6,000 条 · OpenAlex 命中 60,000 条"）
+              return { text, totalsShown: text.includes('命中') };
+            })()""")
             page1 = await cdp.evaluate("""(() => {
               const rows = [...document.querySelectorAll('.paper-item')];
               return {
@@ -643,6 +655,8 @@ async def run(args):
                 bad.append(f"来源目录渲染不对：{layout}")
             if page1["count"] != PAGE_SIZE:
                 bad.append(f"第一页应为 {PAGE_SIZE} 条，实际 {page1['count']}")
+            if not first_status["totalsShown"]:
+                bad.append(f"状态行没显示各源命中总数：{first_status['text']}")
             if page1["sources"] != ["arXiv", "OpenAlex", "CORE"]:
                 bad.append(f"首三条不是三源轮转：{page1['sources']}")
             if not page1["snippetShown"] or page1["firstMeta"].count("·") < 2:

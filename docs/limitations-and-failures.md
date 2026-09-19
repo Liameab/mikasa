@@ -264,6 +264,31 @@ else → 400 — the same rule the app-level handler uses. Regression tests lock
 (`test_note_embedding_provider_failure_502`), including "no half-finished state is left behind"
 (library, uploads, and web-tmp all clean).
 
+### How paper search really behaves on the wire (2026-09-19)
+
+- **The links to these free services hang intermittently.** Five consecutive probes of the same arXiv
+  URL returned 0.8s / 2.2s / 8.4s / timeout / 22.5s; switching between curl and urllib, adding an
+  `Accept` header, or changing the User-Agent changed nothing — **this is not a header or parameter
+  problem**, it is the path, and no code fixes it. The original 15-second timeout turned that into a
+  source that vanished periodically (one of the direct causes behind "only a handful of results").
+  Now: 20 seconds per request, one network-level retry, and a **30-second page deadline** — whatever
+  has arrived is delivered, and a source that has not answered says so ("响应太慢，本次已跳过").
+- **406 is the only HTTP status we retry.** It is not the upstream talking (that is 429/5xx, which are
+  never retried — hammering again only tightens the rate limit); it is an intermediary injecting a
+  rejection towards non-browser clients. The distinction lives in `papers/http.py`.
+- **"N hits" is the number the source claims, not one we counted.** OpenAlex's `meta.count`, arXiv's
+  `opensearch:totalResults` and CORE's `totalHits` each use their own definition and are not comparable
+  (CORE's is especially inflated — it counts broad matches). It exists to convey scale and **never
+  feeds the paging decision** — paging still asks "did this page come back full?".
+- **OpenAlex's anonymous allowance runs out.** Since 2026 it requires a free key; anonymous access gets
+  a small trial quota and then answers 429 for the rest of the period. That is its product policy, not
+  a bug — the "OpenAlex key" row in the panel exists for exactly this (a key raises it to 100k
+  credits/day). Once the allowance is spent the source disappears, as a 429 or as a hang.
+- **Concurrency does not defeat rate limits.** Each source keeps its own module-level throttle
+  (arXiv 3s, CORE 2s, OpenAlex none); running them in parallel only overlaps the waiting — it does not
+  ask any upstream for more. That is deliberate: 2026-09-16 taught us what happens when a client
+  hammers itself into a 429.
+
 ## 4. Real Bug Cases from Development (Fixed, Archived)
 
 > Each entry is a retrospective on why testing missed it at the time, not a trophy case. Archival

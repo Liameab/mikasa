@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 from mikasa.papers.arxiv import ArxivSource
@@ -32,6 +33,11 @@ from mikasa.papers.core import CoreSource
 from mikasa.papers.errors import PaperError
 from mikasa.papers.openalex import OpenAlexSource
 from mikasa.papers.sources import PaperFilters, PaperResult, PaperSource
+
+# 一页检索的总时限（秒）：到这些免费站点的链路会间歇性挂住（实测单源
+# 25–40 秒不返回），整页跟着一起等就把"搜索"变成了"罚站"。到点先交付
+# 已到的结果，未回的源如实记进 errors——宁可少几个源，不要一次等一分钟。
+_PAGE_DEADLINE = 30.0
 
 # 模块级注册表：测试可整表 monkeypatch 成假源（调用时查找，热可换）。
 # **顺序即交错顺序**（新源追加在末尾），也是 `sources=None`（全部来源）
@@ -52,6 +58,7 @@ class PaperPage:
     has_more: bool
     notes: dict[str, str] = field(default_factory=dict)  # source → 中文消息（降级）
     attempted: tuple[str, ...] = ()  # 本页实际发出请求的来源（502 判据用）
+    totals: dict[str, int] = field(default_factory=dict)  # source → 上游命中总数
 
 
 def _window(index: int, n: int, offset: int, limit: int) -> tuple[int, int]:
@@ -108,28 +115,56 @@ def search(
     n = len(names)
     errors: dict[str, str] = {}
     notes: dict[str, str] = {}
-    collected: dict[str, list[PaperResult]] = {}
+    collected: dict[str, list[PaperResult]] = {name: [] for name in names}
+    totals: dict[str, int] = {}
     starts: dict[str, int] = {}
     counts: dict[str, int] = {}
     attempted: list[str] = []
+    pending: list[tuple[str, int, int]] = []
     for index, name in enumerate(names):
         start, count = _window(index, n, offset, limit)
         starts[name] = start
         counts[name] = count
         if count == 0:
-            collected[name] = []  # 本页没有它的位：不发请求（limit=0 是无效请求）
-            continue
+            continue  # 本页没有它的位：不发请求（limit=0 是无效请求）
         attempted.append(name)
-        source = SOURCES[name]
-        note = _downgrade_notes(source.caps, filters)
+        note = _downgrade_notes(SOURCES[name].caps, filters)
         if note:
             notes[name] = note
+        pending.append((name, start, count))
+
+    # **并发取源**（2026-09-19）：串行时 arXiv 的 3 秒节流 + CORE 的 2 秒会
+    # 一层层排队，一页实测 5–10 秒起步；而各源的节流锁是模块级、彼此独立的
+    # （arxiv 3s / core 2s / openalex 无），并发不会把谁的限速打穿——它只是
+    # 让等待重叠。池子大小 = 本页实际发请求的源数（最多 3~4），池内无排队。
+    if pending:
+        pool = ThreadPoolExecutor(max_workers=len(pending))
         try:
-            results, _full = source.search(q, start, count, filters=filters)
-            collected[name] = list(results)
-        except PaperError as exc:
-            collected[name] = []
-            errors[name] = str(exc)
+            futures = {
+                pool.submit(SOURCES[name].search, q, start, count, filters=filters): name
+                for name, start, count in pending
+            }
+            try:
+                for future in as_completed(futures, timeout=_PAGE_DEADLINE):
+                    name = futures[future]
+                    try:
+                        results, total = future.result()
+                        collected[name] = list(results)
+                        if total is not None:
+                            totals[name] = total
+                    except PaperError as exc:
+                        errors[name] = str(exc)
+            except TimeoutError:
+                # **页级截止**：还有源没回来，就先交付已到的结果。实测到这些
+                # 站点的链路会挂住 25–40 秒（一次真实检索被拖到 73 秒），
+                # 而用户要的是"快点看到东西"。挂住的源如实记进 errors（前端
+                # 显示在降级说明里），不补位、不假装——重搜即可。
+                for future, name in futures.items():
+                    if not future.done():
+                        errors[name] = "响应太慢，本次已跳过（再搜一次通常就好）"
+        finally:
+            # 不等在跑的线程：它们是守护性的一次网络读，让它们自己结束
+            pool.shutdown(wait=False, cancel_futures=True)
     # 装填式合并：按全局位置取，缺位留洞（不补位 = 不重复）
     merged: list[PaperResult] = []
     for p in range(offset, offset + limit):
@@ -145,6 +180,7 @@ def search(
         has_more=has_more,
         notes=notes,
         attempted=tuple(attempted),
+        totals=totals,
     )
 
 

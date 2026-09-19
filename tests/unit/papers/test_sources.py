@@ -85,13 +85,13 @@ def test_arxiv_parse_entry_fields(monkeypatch):
         return ARXIV_FEED
 
     monkeypatch.setattr(arxiv, "_http_get", fake_get)
-    results, full = arxiv.ArxivSource().search('attention "survey"', 0, 10)
+    results, total = arxiv.ArxivSource().search('attention "survey"', 0, 10)
 
     assert captured["url"].startswith("https://export.arxiv.org/api/query?")
     assert "search_query=all%3A%22attention+survey%22" in captured["url"]  # 引号被剥
     assert "start=0" in captured["url"] and "max_results=10" in captured["url"]
     assert "sortBy=relevance" in captured["url"]
-    assert full is False  # 2 条 < 10，未取满
+    assert total == 42  # opensearch:totalResults —— 上游命中总数（窗口无关）
 
     first, second = results
     assert first == PaperResult(
@@ -113,8 +113,8 @@ def test_arxiv_parse_entry_fields(monkeypatch):
     assert second.authors == ("Carol Wang",)
 
 
-def test_arxiv_full_flag_and_env_base(monkeypatch):
-    """取满 count → full=True；MIKASA_PAPERS_ARXIV_BASE 在调用时生效。"""
+def test_arxiv_total_and_env_base(monkeypatch):
+    """总数来自 feed 的 opensearch:totalResults；MIKASA_PAPERS_ARXIV_BASE 调用时生效。"""
     calls: list[str] = []
 
     def fake_get(url: str, timeout: float) -> bytes:
@@ -123,8 +123,8 @@ def test_arxiv_full_flag_and_env_base(monkeypatch):
 
     monkeypatch.setattr(arxiv, "_http_get", fake_get)
     monkeypatch.setenv("MIKASA_PAPERS_ARXIV_BASE", "http://127.0.0.1:9/api/query")
-    _, full = arxiv.ArxivSource().search("x", 0, 2)
-    assert full is True
+    _, total = arxiv.ArxivSource().search("x", 0, 2)
+    assert total == 42
     assert calls[0].startswith("http://127.0.0.1:9/api/query?")
 
 
@@ -275,14 +275,14 @@ def test_openalex_search_params_and_select(monkeypatch):
         return _fake_openalex_get({"meta": {"count": 1}, "results": [OPENALEX_WORK]})(url, timeout)
 
     monkeypatch.setattr(openalex, "_http_get", fake_get)
-    results, full = openalex.OpenAlexSource().search("水库坝", 0, 10)
+    results, total = openalex.OpenAlexSource().search("水库坝", 0, 10)
 
     assert captured["url"].startswith("https://api.openalex.org/works?")
     assert "search=%E6%B0%B4%E5%BA%93%E5%9D%9D" in captured["url"]
     assert "sort=relevance_score%3Adesc" in captured["url"]
     assert "abstract_inverted_index" in captured["url"]  # select 瘦身列表
     assert "is_oa" not in captured["url"]  # 没要求"只看 OA"就不发该 filter
-    assert len(results) == 1 and full is False
+    assert len(results) == 1 and total == 1  # meta.count
 
 
 def test_openalex_filter_translation(monkeypatch):
@@ -319,11 +319,11 @@ def test_openalex_window_alignment(monkeypatch, start, count):
     N 源轮转下 start 一般不是 count 的整数倍，只有这里能拦住。
     """
     monkeypatch.setattr(openalex, "_http_get", _paged_openalex_fake(100))
-    results, full = openalex.OpenAlexSource().search("x", start, count)
+    results, total = openalex.OpenAlexSource().search("x", start, count)
     ids = [r.id for r in results]
     expected = [f"W{n:09d}" for n in range(start, start + count)]
     assert ids == expected
-    assert full is True  # 100 条足够，取满
+    assert total == 100  # 上游总数（与窗口无关，不随 start/count 变）
 
 
 def test_openalex_window_alignment_no_duplicate_across_pages(monkeypatch):

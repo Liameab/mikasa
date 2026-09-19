@@ -17,8 +17,17 @@ import { createFilters } from "./papers-filters.js";
 import { citesText, renderDetail, renderEmpty } from "./papers-detail.js";
 import { initOnboard } from "./onboard.js";
 
-const PAGE_SIZE = 20;
+// 每页条数：20 → 50（2026-09-19）。二十条在大屏上一屏半就到底、"加载更多"
+// 点个不停；三源并发之后一页的成本主要是网络往返，条数翻倍几乎不增加等待。
+const PAGE_SIZE = 50;
 const SOURCE_LABEL = { arxiv: "arXiv", openalex: "OpenAlex", core: "CORE" };
+
+/** 各源上游命中总数 → "OpenAlex 命中 69,966 条"（拿不到总数的源不出现）。 */
+function totalsText(totals) {
+  return Object.entries(totals || {})
+    .map(([name, n]) => `${SOURCE_LABEL[name] || name} 命中 ${n.toLocaleString("zh-CN")} 条`)
+    .join(" · ");
+}
 
 const form = $("#paper-form");
 const input = $("#paper-q");
@@ -30,7 +39,7 @@ const moreBtn = $("#paper-more");
 const detailBox = $("#paper-detail");
 
 // 一次检索的会话状态（翻页只动 offset；改词/改条件 = 从 0 重来）
-const state = { q: "", offset: 0, hasMore: false, busy: false, results: [], selected: null };
+const state = { q: "", offset: 0, hasMore: false, busy: false, results: [], selected: null, totals: {} };
 
 const filters = createFilters({
   onChange: ({ reSearch }) => {
@@ -159,6 +168,8 @@ function renderPage(body, append) {
     resultsBox.append(resultRow(paper));
   }
   state.hasMore = Boolean(body.has_more);
+  // 各源总数是"这次查询"级的常量，翻页时以最后一次响应为准即可
+  if (body.totals) state.totals = body.totals;
   moreBtn.classList.toggle("hidden", !state.hasMore);
   renderNotes(body, append);
 
@@ -168,9 +179,10 @@ function renderPage(body, append) {
     );
     statusLine.textContent = "";
   } else {
-    statusLine.textContent = `已显示 ${state.results.length} 条${
-      state.hasMore ? "，可继续加载" : ""
-    }`;
+    const totals = totalsText(state.totals);
+    statusLine.textContent =
+      `已显示 ${state.results.length} 条${state.hasMore ? "，可继续加载" : ""}` +
+      (totals ? ` · ${totals}` : "");
   }
 }
 

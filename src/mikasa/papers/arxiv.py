@@ -23,15 +23,20 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 from mikasa.papers.errors import PaperError
+from mikasa.papers.http import USER_AGENT, with_retry
 from mikasa.papers.sources import PaperFilters, PaperResult, SourceCaps
 
 # 官方建议的最低请求间隔（秒）：礼貌限速，别把公共 API 打爆
 _ARXIV_MIN_INTERVAL = 3.0
 
+# 单请求超时（秒）：15 秒对本机到这些站点的链路太紧（实测同一 URL 在
+# 0.8–22.5 秒之间浮动，2026-09-19）。取 20 秒 + 网络级重试一次；
+# 一页的**总时限**另有页级截止兜底（service.py 的 _PAGE_DEADLINE）——
+# 单个源挂住不该把整页拖到一分钟（实测串行 73 秒那次就是这么来的）。
+_TIMEOUT = 20.0
+
 # id 白名单：拒绝查询串/空白/路径穿越（pdf URL 由拼接构造，这是卫生检查）
 _ARXIV_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9./-]{1,63}$")
-
-_USER_AGENT = "Mikasa/0.1 (local paper search)"
 
 
 def _base_url() -> str:
@@ -67,16 +72,23 @@ def _http_get(url: str, timeout: float) -> bytes:
         if wait > 0:
             time.sleep(wait)
         _last_ok = time.monotonic()
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read()
+        # 重试在节流**之内**：重试的那一次距上一次发起已隔了一个超时周期
+        # （≥15 秒），远大于 3 秒节流，不必再等
+        return with_retry(lambda: _read(url, timeout))
     except urllib.error.HTTPError as exc:
         if exc.code == 429:
             raise PaperError("arXiv 请求过于频繁（HTTP 429），请等半分钟再试") from exc
         raise PaperError(f"arXiv 服务返回错误（HTTP {exc.code}），请稍后重试") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
         raise PaperError("无法连接 arXiv（网络不可达或超时），请稍后重试") from exc
+
+
+def _read(url: str, timeout: float) -> bytes:
+    """裸 HTTP 调用（重试包裹的那一层）。"""
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
 
 
 def _local(tag: str) -> str:
@@ -163,13 +175,21 @@ def _parse_entry(entry: ET.Element) -> PaperResult:
     )
 
 
-def _parse_feed(data: bytes) -> list[PaperResult]:
+def _parse_feed(data: bytes) -> tuple[list[PaperResult], int | None]:
+    """解析 Atom feed → (条目, 上游命中总数)。
+
+    总数取 `opensearch:totalResults`（arXiv 给的是全库命中数，与窗口无关）；
+    拿不到就是 None——界面据此决定要不要显示"命中 N 条"，不假装有数字。
+    """
     try:
         root = ET.fromstring(data)
     except ET.ParseError as exc:
         raise PaperError("arXiv 返回内容无法解析（响应不是有效 XML）") from exc
     entries = [e for e in root if _local(e.tag) == "entry"]
-    return [_parse_entry(e) for e in entries]
+    total_elem = next((c for c in root if _local(c.tag) == "totalResults"), None)
+    raw_total = (total_elem.text or "").strip() if total_elem is not None else ""
+    total = int(raw_total) if raw_total.isdigit() else None
+    return [_parse_entry(e) for e in entries], total
 
 
 class ArxivSource:
@@ -191,7 +211,7 @@ class ArxivSource:
         count: int,
         *,
         filters: PaperFilters | None = None,
-    ) -> tuple[list[PaperResult], bool]:
+    ) -> tuple[list[PaperResult], int | None]:
         # 引号会改变 arXiv 的查询语义（精确短语），用户输入不该有这种权力
         query = " ".join(q.replace('"', " ").split())
         # 日期区间：arXiv 只认查询语法里的 submittedDate，格式 YYYYMMDDHHMM
@@ -212,14 +232,14 @@ class ArxivSource:
                 "sortOrder": sort_order,
             }
         )
-        results = _parse_feed(_http_get(f"{_base_url()}?{params}", timeout=15.0))
-        return results, len(results) == count
+        results, total = _parse_feed(_http_get(f"{_base_url()}?{params}", timeout=_TIMEOUT))
+        return results, total
 
     def fetch(self, paper_id: str) -> PaperResult:
         if not validate_id(paper_id):
             raise PaperError(f"非法的 arXiv 论文编号：{paper_id}")
         params = urllib.parse.urlencode({"id_list": paper_id})
-        results = _parse_feed(_http_get(f"{_base_url()}?{params}", timeout=15.0))
+        results, _ = _parse_feed(_http_get(f"{_base_url()}?{params}", timeout=_TIMEOUT))
         if not results:
             raise PaperError(f"arXiv 未找到该论文（{paper_id}）")
         return results[0]
