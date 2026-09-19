@@ -476,10 +476,17 @@ subsequent drag lands on the panel — the measurement in fact selected the pane
   call, but `MIKASA_UPDATE_SKIP_LAUNCH=1` turns that call into a log line — **no test ever runs an
   installer** (deliberately). "Double-click the setup and it upgrades in place" is verified by hand, not
   by CI.
-- **Downloads from github.com are slow on some networks** (measured here: 18 seconds for a few KB).
-  Nothing in the code fixes that; the progress bar, the 30-minute timeout, and the fall-back to the
-  release page are the whole mitigation, and a browser (which resumes) is the better path when the
-  automatic download fails.
+- **Downloads from github.com are slow on some networks** (measured here: 18 seconds for a few KB;
+  ~300 KB/s single-stream through the system proxy, so the 83.7 MB installer takes 4–5 minutes).
+  Bandwidth is not something code fixes; what it can fix is "one drop costs you the whole download":
+  since ADR-0024 the download resumes with `Range` and retries with backoff (3 attempts), keeping the
+  partial in `updates/<asset>.part` — retries, a second click, even a restart all continue from it.
+  That used to read "a browser (which resumes) is the better path"; both sides behave the same now.
+  Multi-connection downloads are still not done: measured on the same link, 4 connections ≈442 KB/s
+  against ~300 KB/s single-stream — 1.4× is not worth the complexity. Two residual facts, recorded
+  honestly: ① when the server does not support `Range` (answers 200) the download degrades to a full
+  re-download, it just does not error; ② after a transport failure a ~90 MB partial stays on disk
+  until **the next download starts** (it is kept for the sake of resuming).
 - **The check is a startup network call.** It is disclosed, toggleable and silent on failure, but it is
   also the only thing Mikasa does that reaches the internet on its own. Anyone who minds can turn it
   off; nothing else changes.

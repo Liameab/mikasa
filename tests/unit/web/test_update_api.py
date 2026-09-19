@@ -18,6 +18,7 @@ import pytest
 import mikasa
 import mikasa.update.release as release_mod
 import mikasa.web.routers.update as update_router
+from mikasa.update.install import UpdateManager
 
 _SETUP_NAME = "Mikasa-Setup-9.9.9-win64.exe"
 _SETUP_URL = "https://github.com/Liameab/mikasa/releases/download/v9.9.9/" + _SETUP_NAME
@@ -71,8 +72,19 @@ def opener(monkeypatch: pytest.MonkeyPatch) -> _FakeOpener:
     return fake
 
 
-def _noop_download(manager, release, updates_dir) -> None:  # noqa: ANN001 - 顶掉后台任务体
-    """占住槽但什么都不做：用来观察 running 状态与 409。"""
+def _counter_download(calls: list[str]):
+    """造一个"一直在下"的假任务体：登记线程存活就不摘，并记下每次调用。
+
+    这就是分钟级下载在跑的等价物：槽被活线程占着 → 第二次 POST 只该跟随，
+    不该起第二个 worker。
+    """
+
+    def _task(manager, ticket, release, updates_dir) -> None:  # noqa: ANN001 - 顶掉后台任务体
+        calls.append(ticket.token)
+        manager.worker_started(ticket.token)
+        manager.progress(ticket.token, 1, 100)
+
+    return _task
 
 
 # ---------------- /api/update/check ----------------
@@ -148,25 +160,82 @@ def test_download_rejects_release_without_setup_asset(
 def test_download_starts_job_and_status_reports_running(
     client, opener: _FakeOpener, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(update_router, "run_download", _noop_download)
+    monkeypatch.setattr(update_router, "run_download", _counter_download([]))
     c, _ = client
     resp = c.post("/api/update/download")
     assert resp.status_code == 202
     assert resp.json()["version"] == "9.9.9"
+    assert resp.json()["adopted"] is False  # 新起的任务，不是接上别人的
 
     status = c.get("/api/update/download/status").json()
     assert status["status"] == "running"
     assert status["asset_name"] == _SETUP_NAME
+    assert status["attempt"] == 1 and status["stalled"] is False
 
 
-def test_download_conflicts_when_one_is_already_running(
+def test_download_second_post_adopts_instead_of_conflict(
     client, opener: _FakeOpener, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(update_router, "run_download", _noop_download)
+    """已经在下了再点一次：**幂等**（202 + adopted），不是 409。
+
+    老行为回 409，前端把它渲染成"启动下载失败：更新下载已经开始了"——
+    用户看到的就是"切回来之后再也下不动"。
+    """
+    calls: list[str] = []
+    monkeypatch.setattr(update_router, "run_download", _counter_download(calls))
     c, _ = client
     assert c.post("/api/update/download").status_code == 202
+    # 真跑时任务体在分钟级下载里一直挂着，worker 由 _run_job 登记；测试里
+    # 假任务体是同步跑完的，所以这一步手工补上"线程还活着"
+    c.app.state.services.update_jobs.worker_started(calls[0])
+
     resp = c.post("/api/update/download")
-    assert resp.status_code == 409
+
+    assert resp.status_code == 202
+    assert resp.json()["adopted"] is True
+    assert resp.json()["status"] == "running"
+    assert len(calls) == 1  # 没有起第二个 worker
+
+
+def test_download_takes_over_after_the_worker_died(
+    client, opener: _FakeOpener, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """线程没了（宽限期也过了）→ 新任务接管：这是"卡死之后还能再点"的路径。"""
+    calls: list[str] = []
+    monkeypatch.setattr(update_router, "run_download", _counter_download(calls))
+    c, _ = client
+    c.app.state.services.update_jobs = UpdateManager(grace=0.0)
+    assert c.post("/api/update/download").status_code == 202
+
+    resp = c.post("/api/update/download")
+
+    assert resp.status_code == 202
+    assert resp.json()["adopted"] is True
+    assert len(calls) == 2  # 旧任务的线程已经不在了，接管是安全的
+
+
+def test_download_does_not_restart_a_finished_download(
+    client, opener: _FakeOpener, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """已经下完且文件还在 → 不重占槽（否则白下 80MB，用户该去点安装）。"""
+    calls: list[str] = []
+    c, settings = client
+
+    def _finish(manager, ticket, release, updates_dir) -> None:  # noqa: ANN001
+        calls.append(ticket.token)
+        updates_dir.mkdir(parents=True, exist_ok=True)
+        path = updates_dir / release.setup_asset().name
+        path.write_bytes(b"MZ")
+        manager.finish(ticket.token, path)
+
+    monkeypatch.setattr(update_router, "run_download", _finish)
+    assert c.post("/api/update/download").status_code == 202
+    assert c.get("/api/update/download/status").json()["status"] == "done"
+
+    resp = c.post("/api/update/download")
+
+    assert resp.status_code == 202 and resp.json()["adopted"] is True
+    assert len(calls) == 1
 
 
 def test_download_then_install_full_flow(
@@ -176,13 +245,13 @@ def test_download_then_install_full_flow(
     c, settings = client
     started: list[str] = []
 
-    def _fake_download(manager, release, updates_dir) -> None:  # noqa: ANN001
+    def _fake_download(manager, ticket, release, updates_dir) -> None:  # noqa: ANN001
         updates_dir.mkdir(parents=True, exist_ok=True)
         path = updates_dir / release.setup_asset().name
         path.write_bytes(b"MZ")
-        manager.progress(3, 3)
-        manager.verifying()
-        manager.finish(path)
+        manager.progress(ticket.token, 3, 3)
+        manager.verifying(ticket.token)
+        manager.finish(ticket.token, path)
 
     monkeypatch.setattr(update_router, "run_download", _fake_download)
     monkeypatch.setattr(

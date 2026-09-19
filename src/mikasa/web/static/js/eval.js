@@ -16,6 +16,7 @@
 import { $, apiFetch, el, fmtTime, initTopbar, toast } from "./common.js";
 import { renderRunReport } from "./report.js";
 import { initOnboard } from "./onboard.js"; // 首启引导（空库时弹一次）
+import { initUpdateBadge } from "./update.js"; // 更新进度胶囊（观察到别处起的下载）
 
 let pollTimer = null; // 轮询句柄（页面卸载/任务收尾时清除）
 const startBtn = $("#start-eval");
@@ -172,6 +173,7 @@ async function openRun(runId) {
 
 startBtn.addEventListener("click", startEval);
 initTopbar("eval").then((health) => void initOnboard(health));
+initUpdateBadge(); // 应用更新进度（本页不打 check，只看本地状态）
 refreshRuns();
 // 恢复态：服务进程里可能已有 running 任务（页面刷新/409 跟随）
 apiFetch("/api/eval/jobs/current")

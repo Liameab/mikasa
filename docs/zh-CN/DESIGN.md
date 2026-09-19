@@ -559,7 +559,8 @@ toast 刻意压在确认框之上（动作结果要在弹窗关掉后仍看得�
 布局：`.qa-layout` · `.kb-main` · `.eval-layout` · `.session-pane` · `.chat-pane` ·
 `.msg-scroll`（消息滚动区，用户可覆写底色/背景图）
 
-顶栏：`.topbar` · `.brand` · `nav.main a`（`.active`）· `.health-pill`（`.dot`）
+顶栏：`.topbar` · `.brand` · `nav.main a`（`.active`）· `.health-pill`（`.dot`）·
+`.upd-pill`（顶栏的更新进度胶囊，`.ok` / `.warn`）
 
 卡片：`.card`（`h2` 标题 / `h3` 节标签）· `.stat-card`（`.k` 标签 `.v` 数值）· `#reading-card`
 

@@ -584,7 +584,8 @@ distinction is load-bearing — do not recolor either.
 Layout：`.qa-layout` · `.kb-main` · `.eval-layout` · `.session-pane` · `.chat-pane` ·
 `.msg-scroll`（消息滚动区，用户可覆写底色/背景图）
 
-Chrome：`.topbar` · `.brand` · `nav.main a`（`.active`）· `.health-pill`（`.dot`）
+Chrome：`.topbar` · `.brand` · `nav.main a`（`.active`）· `.health-pill`（`.dot`）·
+`.upd-pill`（顶栏的更新进度胶囊，`.ok` / `.warn`）
 
 Cards：`.card`（`h2` 标题 / `h3` 节标签）· `.stat-card`（`.k` 标签 `.v` 数值）· `#reading-card`
 

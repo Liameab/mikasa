@@ -1884,6 +1884,25 @@ a.pd-title:hover { color: var(--accent); }
   line-height: 1.7;
   color: var(--warning);
 }
+/* ---- 顶栏的更新胶囊（ADR-0024）----
+   下载转入后台后，弹窗可以关；进度就落到这枚跨页胶囊上（四页共用一套，
+   由 update.js 自己插进顶栏，页面里没有占位元素）。它是顶栏的普通子元素，
+   不新增 z-index 档位；配色沿用 .pill 的三档语义（ok=就绪、warn=失败/停滞），
+   只是它可点，所以自己长一副按钮形状。 */
+.upd-pill {
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.upd-pill:hover { border-color: var(--accent); color: var(--accent); }
+.upd-pill.ok { color: var(--success); border-color: rgba(93, 184, 114, 0.5); background: rgba(93, 184, 114, 0.12); }
+.upd-pill.warn { color: var(--warning); border-color: rgba(212, 160, 23, 0.5); background: rgba(212, 160, 23, 0.1); }
 
 /* ---- 检索历史（v0.1.4「像知网」的第一件：搜过的词一键重搜）----
    一行小胶囊，不占视觉重量；空历史时整行隐藏（不留一条空框）。 */

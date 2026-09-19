@@ -194,14 +194,16 @@ directory), **Chat appearance** lives in the browser (localStorage, this browser
 - **Chat background color**: 6 presets + a custom color picker;
 - **Background image**: pick a local image → it is compressed automatically (JPEG, long edge 1600) and used as the chat background; removable at any time. The background applies only to the message area.
 
-### 8.3 About · version and updates (v0.1.1)
+### 8.3 About · version and updates (v0.1.1; download behaviour since v0.1.4)
 
 - On startup the app **checks once for a newer version** (silently — a failure never nags you); if one exists, a dialog lists what changed;
 - **"Download and install"**: the app fetches the installer into `updates/` inside your data directory (with a progress bar), verifies its sha256 against the `SHA256SUMS.txt` published with the release, and then starts the wizard — the wizard closes Mikasa first and reopens the new version when it is done. Your data (library, uploads, settings) is untouched;
-- Slow network or a failed download: the dialog says so honestly and keeps "Open release page" within reach, so you can always download it in a browser instead;
+- **The download runs in the background; the UI is just a window onto it** (v0.1.4): the dialog can be closed ("Keep downloading in the background"), and progress moves to a small topbar capsule — **visible on every feature page**, and clicking it reopens the dialog. Switching pages, reloading, even closing the app never restarts the download from zero;
+- **A dropped connection resumes** (v0.1.4): what has been downloaded stays on disk and the next attempt continues from that offset (the dialog says so honestly: "connection dropped, retrying (attempt N)"). If it ultimately fails, "Open release page" is still there as the browser fallback — and browsers resume too, so both paths behave the same now;
+- **It will not press install for you**: if the download finishes while you are on another page, the capsule becomes "update ready · click to install" and you decide when — the installer closes Mikasa first, so it does not act while you are elsewhere;
 - **"Skip this version"** silences that version; to bring it back, press "Check for updates" in settings (a manual check ignores the skip marker);
 - **"Check for updates on startup"** can be turned off entirely — the app then makes no automatic check at all (the manual button still works);
-- The update dialog can only appear **in v0.1.1 and later**: older builds do not contain the code and cannot know a new release exists.
+- The update dialog can only appear **in v0.1.1 and later**: older builds do not contain the code and cannot know a new release exists. The same holds for **the v0.1.4 resume/reattach behaviour** — you need the new build first, so this upgrade is still best done in a browser.
 
 ---
 

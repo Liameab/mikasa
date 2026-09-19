@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""无头 Chrome「应用内更新」E2E 验收（ADR-0022）。
+"""无头 Chrome「应用内更新」E2E 验收（ADR-0022 / ADR-0024）。
 
 自起一台隔离服务器（offline profile + MIKASA_DATA_DIR 指向临时目录），
 GitHub API 与下载主机全部用**本地假源**替换（`MIKASA_UPDATE_API_BASE`
@@ -10,8 +10,14 @@ GitHub API 与下载主机全部用**本地假源**替换（`MIKASA_UPDATE_API_B
      说明（Markdown 渲染过）都在；
   2. 「打开发布页」真的打开的是 release 页地址（打桩 window.open 收 URL）；
   3. 「下载并安装」→ 进度条走完 → 服务端把文件下到 updates/ 且 **sha256
-     与假 SHA256SUMS.txt 一致** → 自动调 install（`MIKASA_UPDATE_SKIP_LAUNCH=1`
-     让服务端不真的双击那个假 exe）→ 弹窗转入"正在安装"文案；
+     与假 SHA256SUMS.txt 一致** → 弹窗转入"正在安装"文案；
+  3a. 下载中再 POST 一次下载端点：**幂等**（202 + adopted，不起第二个 worker）；
+  3b. 假源在 1MiB 处**掐断一次**：客户端必须带 Range 从断点续下；
+  3c. 切到「找论文」→ 顶栏胶囊显示进度；切回问答页 → 弹窗自动接上进度；
+  3d. 收起弹窗（「后台继续」）→ 下载转后台；胶囊接管；**下完也不自动装**
+      （安装器第一件事是杀掉 Mikasa，用户不在场不能替他按）；
+  3e. 点胶囊重开弹窗 → 「立即安装」→ 才调 install（`MIKASA_UPDATE_SKIP_LAUNCH=1`
+      让服务端不真的双击那个假 exe）；
   4. 「跳过此版本」→ toast + 关窗；刷新页面确实不再弹（且**没有再打**
      GitHub API——计数假源命中次数）；设置面板点「检查更新」手动再来一次
      仍会弹（跳过标记只在静默检查里生效）；
@@ -30,6 +36,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -53,11 +60,17 @@ SETUP_NAME = f"Mikasa-Setup-{FAKE_VERSION}-win64.exe"
 NOTES_TITLE = "更新内容"
 # 假安装包：只要字节确定、长度已知即可（sha256 由假源现算）。
 # **绝不会被真的执行**——服务端带着 MIKASA_UPDATE_SKIP_LAUNCH=1 跑。
-INSTALLER_BYTES = (b"MZ" + bytes(range(256))) * 12000  # ≈3MB
+INSTALLER_BYTES = (b"MZ" + bytes(range(256))) * 40000  # ≈10MB
 # 分块 + 节流下发：真实下载要几分钟，假源秒发会让"进度条"这一段
-# 永远来不及渲染（第一轮实测就卡在这里）——慢下来才验收得到。
+# 永远来不及渲染（第一轮实测就卡在这里）——慢下来才验收得到。整段
+# 下载 ≈17 秒，中间的切页/收起弹窗那几步才有时间窗。
 _THROTTLE_CHUNK = 256 * 1024
-_THROTTLE_SLEEP = 0.15
+_THROTTLE_SLEEP = 0.2
+
+# 续传验收：假源在第一次响应写到这么多字节时**硬断连接**（声明的是完整
+# Content-Length，所以客户端只能看到"响应截断"）。取 _THROTTLE_CHUNK 的
+# 整数倍，客户端落盘的半成品长度就是确定的 1MiB。
+_CUT_AFTER = 4 * _THROTTLE_CHUNK
 
 
 def js_quote(s: str) -> str:
@@ -80,6 +93,8 @@ class _FakeGitHub(BaseHTTPRequestHandler):
     port = 0
     installer = INSTALLER_BYTES
     latest_hits = 0  # /releases/latest 命中次数（"没再打网络"的判据）
+    ranges: list[str] = []  # 安装包请求带的 Range 头（"" = 整份下）
+    cut_fired = False  # 掐断只做一次：第二次请求必须完整下发，续传才收得了尾
 
     def log_message(self, *args):  # noqa: ANN002 - 静音（access log 没用）
         del args
@@ -122,16 +137,46 @@ class _FakeGitHub(BaseHTTPRequestHandler):
             digest = hashlib.sha256(INSTALLER_BYTES).hexdigest()
             self._send(f"{digest}  {SETUP_NAME}\n".encode(), "text/plain")
         elif self.path == f"/download/{SETUP_NAME}":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Length", str(len(INSTALLER_BYTES)))
-            self.end_headers()
-            for i in range(0, len(INSTALLER_BYTES), _THROTTLE_CHUNK):
-                self.wfile.write(INSTALLER_BYTES[i : i + _THROTTLE_CHUNK])
-                self.wfile.flush()
-                time.sleep(_THROTTLE_SLEEP)
+            self._send_asset()
         else:
             self.send_error(404)
+
+    def _send_asset(self) -> None:
+        """安装包：认 Range（206）、越界回 416、并且**掐断一次**给续传演现场。"""
+        total = len(INSTALLER_BYTES)
+        raw = (self.headers.get("Range") or "").strip()
+        _FakeGitHub.ranges.append(raw)
+        start = 0
+        if raw:
+            match = re.fullmatch(r"bytes=(\d+)-", raw)
+            if match is None:
+                self.send_error(400, "bad range")
+                return
+            start = int(match.group(1))
+            if start >= total:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{total}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+        body = INSTALLER_BYTES[start:]
+        self.send_response(206 if start else 200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(body)))
+        if start:
+            self.send_header("Content-Range", f"bytes {start}-{total - 1}/{total}")
+        self.end_headers()
+        cut = not _FakeGitHub.cut_fired and len(body) > _CUT_AFTER
+        for i in range(0, len(body), _THROTTLE_CHUNK):
+            self.wfile.write(body[i : i + _THROTTLE_CHUNK])
+            self.wfile.flush()
+            if cut and i + _THROTTLE_CHUNK >= _CUT_AFTER:
+                # 声明完整长度、写一半就断（真实链路上就是这么被 reset 的）
+                _FakeGitHub.cut_fired = True
+                log(f"假源：按计划在 {_CUT_AFTER} 字节处掐断连接")
+                self.connection.close()
+                return
+            time.sleep(_THROTTLE_SLEEP)
 
 
 class FakeGitHub:
@@ -145,8 +190,14 @@ class FakeGitHub:
         self.port = free_port()
         _FakeGitHub.port = self.port
         _FakeGitHub.latest_hits = 0
+        _FakeGitHub.ranges = []
+        _FakeGitHub.cut_fired = False
         self._httpd = ThreadingHTTPServer(("127.0.0.1", self.port), _FakeGitHub)
         threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
+
+    def ranges(self) -> list[str]:
+        """安装包请求的 Range 头序列（续传的证据）。"""
+        return list(_FakeGitHub.ranges)
 
     def stop(self) -> None:
         if self._httpd is not None:
@@ -173,6 +224,32 @@ class FakeGitHub:
 def api_get(port: int, path: str) -> dict:
     with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=5) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def api_post(port: int, path: str) -> tuple[int, dict]:
+    """POST 一个端点，返回 (状态码, 响应体)。4xx/5xx 也照样返回，不抛。"""
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8") or "{}"
+        return exc.code, json.loads(raw)
+
+
+def wait_status(port: int, want: str, what: str, timeout: float = 120.0) -> dict:
+    """等服务端的任务状态到某一步（下载是后台任务，与页面无关）。"""
+    deadline = time.time() + timeout
+    body: dict = {}
+    while time.time() < deadline:
+        try:
+            body = api_get(port, "/api/update/download/status")
+            if body.get("status") == want:
+                return body
+        except (urllib.error.URLError, OSError, json.JSONDecodeError):
+            pass
+        time.sleep(0.3)
+    raise RuntimeError(f"超时等不到状态 {want}（{what}），最后看到：{body}")
 
 
 def start_server(port: int, env: dict, logfile) -> subprocess.Popen:
@@ -343,18 +420,94 @@ async def run(args):
                 ".textContent.includes('正在下载')",
                 "下载进度出现",
             )
+            # 百分比要等第一个字节回来才有的写（服务端先取校验和，再开下载）
+            await wait_until(
+                cdp,
+                "document.querySelector('#update-dialog .upd-progress-text')"
+                ".textContent.includes('%')",
+                "进度条带上百分比",
+            )
             progress_text = await cdp.evaluate(
                 "document.querySelector('#update-dialog .upd-progress-text').textContent"
             )
             if args.out_shot:
                 await screenshot(cdp, str(Path(args.out_shot).with_name("update-e2e-progress.png")))
+
+            # ---- 3a. 已经在下了再点一次：幂等（老行为回 409，前端把它当失败
+            #          "启动下载失败：更新下载已经开始了"，用户就再也点不动）----
+            again_code, again_body = api_post(port, "/api/update/download")
+            first_ranges = fake.ranges()  # 到这一步只该有一次整份请求
+
+            # ---- 3b. 切到别的功能：进度胶囊跨页可见（下载不受影响）----
+            await cdp.call("Page.navigate", {"url": f"http://127.0.0.1:{port}/papers"})
+            await wait_until(cdp, "document.readyState === 'complete'", "找论文页加载完成")
+            await wait_until(cdp, "!!document.querySelector('#update-pill')", "顶栏出现更新胶囊")
+            pill_other = await cdp.evaluate("document.querySelector('#update-pill').textContent")
+            if args.out_shot:
+                await screenshot(cdp, str(Path(args.out_shot).with_name("update-e2e-pill.png")))
+
+            # ---- 3c. 回到问答页：弹窗自动接上进度（不再"回来就断了"）----
+            await cdp.call("Page.navigate", {"url": f"http://127.0.0.1:{port}/"})
+            await wait_until(cdp, DIALOG, "回到问答页后弹窗自动接上")
+            await wait_until(
+                cdp,
+                "document.querySelector('#update-dialog .upd-progress-text')"
+                ".textContent.includes('正在下载')",
+                "弹窗继续显示下载进度",
+            )
+            resumed_text = await cdp.evaluate(
+                "document.querySelector('#update-dialog .upd-progress-text').textContent"
+            )
+            # 装一个 fetch 探针：之后"有没有偷偷调安装端点"就靠它断言
+            await cdp.evaluate("""(() => {
+              window.__posts = [];
+              const orig = window.fetch;
+              window.fetch = (url, opts) => {
+                if (opts && String(opts.method || '').toUpperCase() === 'POST') {
+                  window.__posts.push(String(url));
+                }
+                return orig(url, opts);
+              };
+              return true;
+            })()""")
+
+            # ---- 3d. 收起弹窗：下载转后台，胶囊接管 ----
+            await cdp.evaluate(
+                "(() => { const d = document.querySelector('#update-dialog');"
+                " [...d.querySelectorAll('.upd-actions .btn')]"
+                ".find(b => b.textContent.includes('后台继续')).click(); return true; })()"
+            )
+            await wait_until(cdp, "!document.querySelector('#update-dialog')", "弹窗已收起")
+            await wait_until(cdp, "!!document.querySelector('#update-pill')", "胶囊接管进度")
+
+            # ---- 3e. 等它下完：**弹窗不在场就不自动装**（安装器第一件事是
+            #          杀掉 Mikasa，用户不在场时不能替他按）----
+            done_status = wait_status(port, "done", "后台下载完成")
+            await wait_until(
+                cdp,
+                "document.querySelector('#update-pill').textContent.includes('已就绪')",
+                "胶囊转为「已就绪」",
+            )
+            posts_before_install = await cdp.evaluate("window.__posts.slice()")
+            pill_done = await cdp.evaluate("document.querySelector('#update-pill').textContent")
+            alive = api_get(port, "/api/health")  # 进程还活着（没人被悄悄杀掉）
+
+            # ---- 3f. 从胶囊重开 → 弹窗给「立即安装」，点了才装 ----
+            await cdp.evaluate("document.querySelector('#update-pill').click(); true")
+            await wait_until(cdp, DIALOG, "从胶囊重新打开弹窗")
+            await cdp.evaluate(
+                "(() => { const d = document.querySelector('#update-dialog');"
+                " [...d.querySelectorAll('.upd-actions .btn')]"
+                ".find(b => b.textContent.includes('立即安装')).click(); return true; })()"
+            )
             await wait_until(
                 cdp,
                 "document.querySelector('#update-dialog .upd-progress-text')"
                 ".textContent.includes('安装程序已启动')",
-                "下载完成并自动启动安装器",
+                "点「立即安装」后启动安装器",
                 timeout=60.0,
             )
+            posts_after_install = await cdp.evaluate("window.__posts.slice()")
             installed = await cdp.evaluate("""(() => {
               const d = document.querySelector('#update-dialog');
               return {
@@ -365,9 +518,11 @@ async def run(args):
               };
             })()""")
 
-            # ---- 3b. 服务端侧证据：文件真的落了盘、sha256 与假校验和一致 ----
-            status = api_get(port, "/api/update/download/status")
+            # ---- 3g. 服务端侧证据：续传真的发生了、落盘完整、sha256 对得上 ----
+            status = done_status
             downloaded = data_dir / "updates" / SETUP_NAME
+            updates_files = sorted(p.name for p in (data_dir / "updates").iterdir())
+            ranges = fake.ranges()
             digest_ok = (
                 downloaded.is_file()
                 and hashlib.sha256(downloaded.read_bytes()).hexdigest()
@@ -445,6 +600,33 @@ async def run(args):
                 bad.append(f"下载任务状态不对：{status}")
             if "%" not in progress_text or "MB" not in progress_text:
                 bad.append(f"进度文案没有百分比/体积：{progress_text}")
+            # ---- 订阅续传/接续（ADR-0024）----
+            if again_code != 202 or not again_body.get("adopted"):
+                bad.append(
+                    f"下载中再点一次应当幂等采纳（202 + adopted），实得：{again_code} {again_body}"
+                )
+            if len(first_ranges) != 1 or first_ranges[0]:
+                bad.append(f"幂等那次不该多打一次安装包请求：{first_ranges}")
+            if "%" not in pill_other:
+                bad.append(f"切到别的功能后胶囊没有显示进度：{pill_other!r}")
+            if "正在下载" not in resumed_text:
+                bad.append(f"回到问答页没有接上下载进度：{resumed_text!r}")
+            if any("/api/update/install" in u for u in posts_before_install):
+                bad.append(f"弹窗已收起却仍自动装了（安装器会杀掉应用）：{posts_before_install}")
+            if "已就绪" not in pill_done:
+                bad.append(f"下载完成后胶囊文案不对：{pill_done!r}")
+            if not alive.get("version"):
+                bad.append("下载完成后进程应当还活着")
+            if not any("/api/update/install" in u for u in posts_after_install):
+                bad.append(f"点「立即安装」没有调用安装端点：{posts_after_install}")
+            if not ranges or ranges[0]:
+                bad.append(f"第一次安装包请求不该带 Range：{ranges}")
+            if not any(r.startswith("bytes=") for r in ranges):
+                bad.append(f"掐断之后没有续传（只看到这些 Range）：{ranges}")
+            if len(ranges) < 2:
+                bad.append(f"续传请求数不对：{ranges}")
+            if updates_files != [SETUP_NAME]:
+                bad.append(f"更新目录里应当只有成品（半成品必须改名或删除）：{updates_files}")
             if not digest_ok:
                 bad.append(f"落盘文件缺失或 sha256 不符：{downloaded}")
             if installed["error"]:

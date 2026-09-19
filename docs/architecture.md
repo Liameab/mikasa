@@ -272,6 +272,14 @@ same release's `SHA256SUMS.txt`, and launches the wizard with double-click seman
 (`os.startfile`). A failed check stays silent (log + status endpoint only), results are cached for
 10 minutes, and the frontend offers "skip this version" plus a startup-check toggle in settings.
 
+Since ADR-0024 the download (and the task slot) is resumable and adoptable: the partial lives in
+`updates/<asset>.part`, later requests carry `Range: bytes=N-`, transport failures retry with backoff
+and continue from that offset, and the slot records worker liveness so a dead thread can be taken
+over — `POST /api/update/download` is therefore idempotent (202 with `adopted: true`) instead of a
+409. On the frontend one polling loop drives both the dialog and a topbar capsule, so closing the
+dialog, switching pages or reloading never interrupts anything, and the installer is only launched
+automatically when the dialog is still open (otherwise the capsule waits for a click).
+
 ## 9. Eval orchestration (one implementation for CLI and web)
 
 `eval/service.py::run_and_persist` is the shared "run it and persist it"

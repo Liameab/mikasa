@@ -49,6 +49,7 @@
 | ADR-0021 | Notes are ordinary documents: a `source_ref` marker, no schema change, force-ingest past content dedup | Accepted |
 | ADR-0022 | In-app updates: the client never sees a URL, checksums ship with the package, failed checks stay silent | Accepted |
 | ADR-0023 | A fourth source, DOAJ: key-free Chinese open-access journals, the licensing line, and no WAF bypassing | Accepted |
+| ADR-0024 | Resumable downloads, adoptable jobs: the "observation window" and slot self-healing (amends ADR-0022 points 3 and 7) | Accepted |
 
 ---
 
@@ -1214,6 +1215,9 @@ startup, if a newer release exists, show a dialog → one click downloads it →
    release account is not defeated (checksum and package share a source) — an accepted residual,
    recorded in limitations. Any failure deletes the partial file: nothing that "looks installable" is
    ever left behind.
+   (**Amended 2026-09-19, see ADR-0024**: a partial now exists only as a `.part` suffix and never
+   takes part in launching; and it is **kept** on transport failures — resume needs it. Only a
+   checksum mismatch, a size-cap breach or a security-policy rejection deletes it.)
 4. **Launching the installer is double-click semantics** (`os.startfile`) behind three gates: the file
    exists, it sits inside the data directory's `updates/`, and its name matches
    `Mikasa-Setup-*-win64.exe`. The wizard `taskkill`s the running Mikasa itself, so after "launch" this
@@ -1231,6 +1235,10 @@ startup, if a newer release exists, show a dialog → one click downloads it →
    window vanished, nothing happened". Esc and backdrop clicks are ignored mid-download; on failure the
    dialog explains itself and keeps "Open release page" within reach (manual download is the permanent
    fallback).
+   (**Superseded 2026-09-19 by ADR-0024**: in practice that second half meant "switch pages and the
+   whole thing disappears, and coming back does not reattach" — exactly the "it broke" the user
+   reported. The dialog is now closable: closing it means "keep going in the background", and the
+   progress lands in a topbar capsule that every page shows.)
 8. **This code has to ship in v0.1.1**: the old build does not contain it and cannot know a new release
    exists — this one still has to be installed by hand, and only then does "it tells me on startup"
    hold.
@@ -1239,7 +1247,9 @@ startup, if a newer release exists, show a dialog → one click downloads it →
 data), and it can be turned off — in a local-first product this is a **disclosed network behaviour**,
 written into the usage guide; downloads from github.com are slow from mainland China (18 seconds
 measured for a small file), so a large installer can take minutes — the progress bar and the
-"fall back to the release page" path exist for that; automatic install covers Windows only
+"fall back to the release page" path exist for that (**added 2026-09-19, see ADR-0024**: a dropped
+connection now resumes with `Range` and retries with backoff — "slow" remains, "one drop costs you
+minutes of re-downloading" does not); automatic install covers Windows only
 (`os.startfile`); `updates/` keeps only the most recent file (older residue is cleaned when the next
 download starts); and the release process gains one rule: **every release must ship
 `SHA256SUMS.txt`**, or existing users cannot use the automatic update at all.
@@ -1315,3 +1325,105 @@ registry by a guard test (adding DOAJ tripped exactly that: ticking it in the UI
 states); tests `tests/unit/papers/test_doaj.py` (new), `tests/unit/papers/test_papers_http.py` (new),
 `tests/unit/web/test_papers_api.py` (the guard test); E2E `tools/chrome_papers.py` (a fourth fake
 source).
+
+---
+
+## ADR-0024 Resumable downloads, adoptable jobs: the "observation window" and slot self-healing
+
+- Status: Accepted | v0.1.4 cycle (2026-09-19, after the user reported "downloads are painfully slow,
+  switching to another feature breaks it, and clicking again says 'the download has already started'")
+- Related: ADR-0022 (**this amends its points 3 and 7**; every other defence stands), ADR-0019 /
+  ADR-0020 (the download defences and the "loopback escape hatch" convention)
+
+**Problem**: the user's v0.1.3 tried to upgrade and hit three different things — slow, "breaks when I
+switch pages", and "can never download again":
+
+1. **The server was never interrupted.** The download runs inside a `BackgroundTasks` sync call (an
+   anyio worker thread), tied to neither the request nor the connection. Measured: the client read the
+   202 and hard-closed the connection, then made zero requests for 12 seconds — the download finished
+   anyway. What "broke" was the **UI**: the four feature pages are full page loads, so switching pages
+   tears down all JS (polling and dialog included), and coming back to the chat page had no "there is
+   still a job running" recovery path (the eval page has one; this code never got it).
+2. **"Can never download again" was a 409.** With a running job in the slot, `POST
+   /api/update/download` answered 409 and the frontend rendered it as "failed to start the download:
+   the download has already started". The slot recorded state but not **whether the worker thread was
+   still alive**, so a thread that vanished quietly left the slot stuck in `running` forever — with no
+   self-healing path.
+3. **Slow is real, and one drop costs everything.** Measured on this machine (through the system
+   proxy): ~300 KB/s single-stream, so the 83.7 MB installer takes 4–5 minutes, with a peer reset
+   caught in the middle. And a failed download deleted the partial file, had no `Range` resume and no
+   retry — **every drop restarted from zero**, which was the biggest waste of all.
+
+**Decisions**:
+
+1. **Resume.** The download lands in `Mikasa-Setup-<version>-win64.exe.part` and later requests carry
+   `Range: bytes=N-` (206 appends / 200 rewrites the whole file / 416 is treated as "already
+   complete", left to the checksum to judge). Transport failures retry with backoff (3 attempts,
+   2s/5s), and **both retries and later sessions resume from `.part`**. The partial is a **suffix
+   only** — `Path.with_suffix` would eat the `.exe` and leave a name that "looks like the installer",
+   so `launch_installer` gained an explicit gate refusing it: that invariant should not depend on a
+   regex coincidence in `SETUP_ASSET_RE`.
+2. **The checksum line does not move by a single byte.** It is still compared byte-for-byte against
+   the same release's `SHA256SUMS.txt`, and the file is **renamed only after verification**
+   (`os.replace`), so a bad file never gets the final name. A `.part` may be last round's stub, or the
+   remote asset may have been re-uploaded — this module cannot tell, so the **only** arbiter is
+   sha256: a mismatch deletes the whole partial and downloads once more (closing the "poison prefix"
+   loop — otherwise every click hits the same wall), and a second mismatch fails honestly.
+   Completeness is judged on the **final file size** (partial + this attempt's writes), not on "how
+   many bytes we wrote this time" — without that, resume would be killed by our own completeness check.
+3. **Slot self-healing.** Besides the state, `UpdateManager` now records **worker liveness**
+   (`worker_started/finished`, paired by the task wrapper) and **when the state last changed**. A dead
+   worker past the grace window (10s, covering the gap where BackgroundTasks starts the thread after
+   the response) lets a new job **take over** the slot; `done` with the file still present is not
+   taken over (that would waste 80 MB — the frontend should go install instead). Every slot carries a
+   token and writes with a stale token are dropped — otherwise a superseded zombie thread would
+   revert the new job's state, or even append into the same `.part`.
+4. **The POST is idempotent.** The download endpoint no longer answers 409: a live job returns 202
+   with `adopted: true` (the frontend just follows), and whether to re-download is decided by the
+   takeover rules. The frontend plays along: "Download and install" asks for the status first and only
+   follows when it is running/verifying/done, never POSTing first.
+5. **"Observation window".** The download is a server-side background job and the UI is just a window
+   onto it — the dialog **can be closed** (closing means "carry on in the background") and the topbar
+   keeps a cross-page capsule (all four pages show progress; clicking it reopens the dialog). Switching
+   pages, reloading and closing the dialog no longer interrupt anything, and returning to the chat page
+   reattaches automatically (unless the user explicitly dismissed it — the capsule stays either way).
+   The capsule is a **separate element**: it must not live inside `.health-pill`, which `initTopbar`
+   rewrites with `innerHTML=""` every 20 seconds. The other three pages mount the capsule only and
+   **never call `/api/update/check`**: with "check on startup" turned off, no page should quietly go
+   online.
+6. **No unattended install.** When the download finishes with the dialog open (the user is watching),
+   the installer still launches automatically; otherwise the capsule just becomes "update ready ·
+   click to install". Rationale: the installer's first act is to `taskkill` Mikasa (ADR-0022 point 4),
+   and killing someone's app while they are elsewhere is rude.
+7. **One lie removed along the way.** The frontend used to have a 30-minute deadline that declared
+   "download timed out" — while the server was still downloading. Gone: terminal states come from the
+   server, stalling is reported via the backend's `stalled`, and retries are shown honestly as
+   "connection dropped, retrying (attempt N)".
+
+**Explicitly not doing**:
+
+- **Multi-connection parallel downloads**: measured on the same link, 4 connections ≈442 KB/s versus
+  ~300 KB/s single-stream — only 1.4×, while the failure branches double (some CDN nodes answer
+  `501 Unsupported client range`). Resume plus retry is what pays on this link.
+- **Moving the download off `BackgroundTasks` into its own thread**: it demonstrably survives client
+  disconnects, and changing it would only cost test determinism (TestClient runs background tasks
+  synchronously).
+- **A cancel button**: a wedged download is covered by "single-chunk read timeout 60s → retry → error",
+  and slot self-healing keeps the button clickable.
+
+**Consequences**: a dropped connection no longer costs a re-download — the partial stays in
+`updates/<asset>.part` and the next attempt (even after a restart) resumes from it; the price is a
+~90 MB partial left on disk after a failure, until the next download cleans it up (recorded in
+limitations). Automatic install still covers Windows only. **This fix takes effect in the next
+release**: the build the user has contains the old code, so this upgrade still needs a manual install
+via the browser (browsers resume on their own).
+
+**Code**: `update/install.py` (`_part_path` / `_open(range_start)` / the three response branches in
+`_download_once` / retry and poison-prefix handling / `JobTicket` plus `UpdateManager` liveness and
+takeover), `web/routers/update.py` (the `_run_job` wrapper and the idempotent POST); frontend
+`static/js/update.js` (one tick loop driving both capsule and dialog, a closable dialog,
+`initUpdateBadge`), `documents.js` / `papers-page.js` / `eval.js` (one line each), `css/style.css`
+(`.upd-pill`); tests `tests/unit/update/test_install.py`, `tests/unit/web/test_update_api.py`; E2E
+`tools/chrome_update.py` (the fake source gained `Range` plus a "cut once at 1 MiB" switch, and five
+new assertion groups: idempotency / resume / cross-page capsule / dismissed dialog / install only on
+click).

@@ -22,6 +22,7 @@ import {
 import { openNoteEditor } from "./note-editor.js"; // 笔记编辑器（M6 ①）
 import { initReader, openDocument, updateLocation } from "./reader.js"; // 阅读器（两页共用）
 import { initOnboard } from "./onboard.js"; // 首启引导（空库时弹一次）
+import { initUpdateBadge } from "./update.js"; // 更新进度胶囊（观察到别处起的下载）
 
 const dropzone = $("#dropzone");
 const fileInput = $("#file-input");
@@ -140,6 +141,7 @@ async function onNoteSaved(doc) {
 /* ---------------- 启动 ---------------- */
 
 initTopbar("documents").then((health) => void initOnboard(health));
+initUpdateBadge(); // 应用更新进度（本页不打 check，只看本地状态）
 // 内嵌模式：阅读器挂进右栏，收起时交还上传/总览视图
 initReader(readerHost, {
   onClose: () => {

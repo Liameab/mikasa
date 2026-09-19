@@ -16,6 +16,7 @@ import { fetchKeyStatus, fetchSources, importPaper, saveKey, searchPapers } from
 import { createFilters } from "./papers-filters.js";
 import { citesText, renderDetail, renderEmpty } from "./papers-detail.js";
 import { initOnboard } from "./onboard.js";
+import { initUpdateBadge } from "./update.js"; // 更新进度胶囊（观察到别处起的下载）
 
 // 每页条数：20 → 50（2026-09-19）。二十条在大屏上一屏半就到底、"加载更多"
 // 点个不停；三源并发之后一页的成本主要是网络往返，条数翻倍几乎不增加等待。
@@ -398,6 +399,7 @@ function bind() {
 }
 
 initTopbar("papers").then((health) => void initOnboard(health));
+initUpdateBadge(); // 应用更新进度（本页不打 check，只看本地状态）
 bind();
 renderEmpty(detailBox);
 void refreshKeyStatus();
