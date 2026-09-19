@@ -8,7 +8,7 @@ fusion), Chinese-aware structural chunking, citation tracing, and a three-stage 
 pipeline — all hand-written, **no RAG framework**. The code is transparent and the evaluation numbers
 are reproducible.
 
-**Status**: 778 tests passing, ruff + mypy clean. Actively developed; Windows builds (portable zip and
+**Status**: 815 tests passing, ruff + mypy clean. Actively developed; Windows builds (portable zip and
 installer) are published, with in-app update checking built in.
 
 ## Highlights
@@ -156,7 +156,7 @@ API docs (Swagger) at http://127.0.0.1:8000/docs.
 - Python ≥ 3.11 (3.13 recommended); optional NVIDIA GPU for local inference;
 - Source comments and internal docs are written in **Chinese**; baseline gates are
   `ruff format`, `ruff check`, `mypy`, and `pytest`;
-- Current suite: **750 tests**, coverage ~93% (see the regression gate in `docs/evaluation.md`);
+- Current suite: **815 tests**, coverage ~93% (see the regression gate in `docs/evaluation.md`);
 - Zero-compilation install on Windows + CPython 3.13 (all dependencies ship prebuilt wheels;
   see `pyproject.toml` and ADR-0006/0008 for the version-pinning rationale).
 
