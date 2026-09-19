@@ -20,11 +20,15 @@ export function citesText(paper) {
   return `被引 ${paper.cited_by} 次`;
 }
 
-/** 空态：没选中任何结果时的提示。 */
+/** 空态：没选中任何结果时的提示（点行开浏览器、详情走按钮，见 papers-page.js）。 */
 export function renderEmpty(detail) {
   detail.replaceChildren(
     el("h2", null, "论文详情"),
-    el("div", { class: "empty" }, "点左侧任意一条结果，这里显示完整摘要与元数据"),
+    el(
+      "div",
+      { class: "empty" },
+      "点结果行会在浏览器打开论文原页；点行里的「详情」，这里显示完整摘要与导入"
+    ),
     el(
       "div",
       { class: "muted small", style: "text-align:center" },

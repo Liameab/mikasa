@@ -603,6 +603,7 @@ toast 刻意压在确认框之上（动作结果要在弹窗关掉后仍看得�
 `.pd-title` / `.pd-meta` / `.pd-body` / `.pd-actions` / `.pd-exits`
 
 找论文页补充（v0.1.4）：`.paper-history`（`.ph-chip` / `.ph-clear`）· `.pd-related` / `.pd-rel-head` / `.pd-rel-tab`（`.on`）/ `.pd-rel-status` / `.pd-rel-list` / `.pd-rel-item` / `.pd-rel-title` / `.pd-rel-meta` / `.pd-rel-import`
+找论文页翻页（2026-09-20）：`.paper-pager` / `.pg-nums` / `.pg-num`（`.on` = 当前页）/ `.pg-gap` / `.pg-jump` · `.paper-detail-btn`（行内「详情」按钮；点整行本身是在浏览器打开论文原页）
 
 笔记编辑器（M6 ①）：`.note-backdrop` · `.note-box` / `.note-head` / `.note-title` ·
 `.note-split` / `.note-input` / `.note-preview` · `.note-foot` / `.note-folder-wrap` /

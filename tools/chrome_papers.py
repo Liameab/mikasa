@@ -13,8 +13,10 @@
      该源收到的查询里确实带上了条件（不靠脆弱的 DOM 反推）；
   4. **能力对齐**：只勾 arXiv 时"被引最多"排序整项禁用（它没有被引数据），
      并给出说明文案；
-  5. 「加载更多」按**窗口大小**推进 offset → 两页零重复；
-  6. 点结果 → 右侧详情出现完整摘要/被引/来源；点「导入知识库」→ 入库 →
+  5. **翻页**（2026-09-20）：页码条显示"共 N 页"（按上游命中数算 + 封顶）、
+     下一页/跳页得到**另一批**结果（页间零重复）、翻过数据尽头时说实话；
+     点整行 = 浏览器新标签打开原页，右侧详情改由行内「详情」按钮打开；
+  6. 详情面板出现完整摘要/被引/来源；点「导入知识库」→ 入库 →
      结果行与详情面板同时转「已在库中」+ 去提问/去知识库出口；
   7. 无开放获取的那条：导入按钮提前禁用；重复导入走 sha256 跳过；
   8. 全程收集 console 错误与未捕获异常，有错退出码 1。
@@ -453,6 +455,19 @@ async def search(cdp, q: str) -> None:
     )
 
 
+async def open_detail(cdp, pick: str | None = None) -> None:
+    """点行内「详情」按钮打开右侧详情面板。
+
+    2026-09-20 起点整行是"浏览器打开论文原页"，看摘要/导入/相关论文都走这枚
+    按钮；pick 是挑行的 JS 表达式（缺省第一行）。
+    """
+    row = pick or "document.querySelectorAll('.paper-item')[0]"
+    await cdp.evaluate(
+        f"(() => {{ const row = {row};"
+        f" row.querySelector('.paper-detail-btn').click(); return true; }})()"
+    )
+
+
 async def run(args):
     tmp = Path(tempfile.mkdtemp(prefix="papers-e2e-"))
     log(f"临时目录：{tmp}")
@@ -551,7 +566,9 @@ async def run(args):
                 snippetShown: !!rows[0]?.querySelector('.paper-snippet'),
                 hasCites: (rows[0]?.querySelector('.paper-meta')?.textContent || '')
                   .includes('被引'),
-                moreShown: !document.querySelector('#paper-more').classList.contains('hidden'),
+                pagerShown: !document.querySelector('#paper-pager').classList.contains('hidden'),
+                pageStatus: document.querySelector('#paper-status').textContent || '',
+                detailBtns: document.querySelectorAll('.paper-item .paper-detail-btn').length,
               };
             })()""")
 
@@ -593,22 +610,59 @@ async def run(args):
             })()""")
             await wait_idle(cdp)
 
-            # ---- 5. 加载更多：按窗口大小推进 → 两页零重复 ----
+            # ---- 5. 翻页（2026-09-20）：页码条 + 跳页 + 页间零重复 ----
             await search(cdp, "水库坝")
-            await cdp.evaluate("document.querySelector('#paper-more').click(); true")
+            await wait_idle(cdp)
+            page1_refs = await cdp.evaluate(
+                "[...document.querySelectorAll('.paper-item')].map(r => r.dataset.ref)"
+            )
+            pager_first = await cdp.evaluate("""(() => ({
+              shown: !document.querySelector('#paper-pager').classList.contains('hidden'),
+              nums: [...document.querySelectorAll('#paper-pager .pg-num')].map(b => b.textContent),
+              current: document.querySelector('#paper-pager .pg-num.on')?.textContent || '',
+              status: document.querySelector('#paper-status').textContent || '',
+            }))()""")
+            # 下一页 → 第 2 页是**另一批**结果（不是追加），页内无重复
+            await cdp.evaluate(
+                "(() => { const b = [...document.querySelectorAll('#paper-pager button')]"
+                ".find(x => x.textContent === '下一页'); b.click(); return true; })()"
+            )
             await wait_until(
                 cdp,
-                "document.querySelectorAll('.paper-item').length > 20",
-                "第二页追加",
+                "document.querySelector('#paper-status').textContent.includes('第 2 /')",
+                "翻到第 2 页",
             )
             paging = await cdp.evaluate("""(() => {
-              const refs = [...document.querySelectorAll('.paper-item')]
-                .map(r => r.dataset.ref);
-              const uniq = new Set(refs);
-              const dup = refs.filter((r, i) => refs.indexOf(r) !== i);
-              return {count: refs.length, unique: uniq.size, dup: [...new Set(dup)].slice(0, 8),
-                      firstPageRefs: refs.slice(0, 4), secondPageRefs: refs.slice(20, 24)};
+              const refs = [...document.querySelectorAll('.paper-item')].map(r => r.dataset.ref);
+              return {count: refs.length, unique: new Set(refs).size, refs: refs.slice(0, 4)};
             })()""")
+            # 跳页：输入 3 → 跳转
+            await set_input(cdp, "#paper-page-input", "3")
+            await cdp.evaluate("document.querySelector('#paper-page-go').click(); true")
+            await wait_until(
+                cdp,
+                "document.querySelector('#paper-status').textContent.includes('第 3 /')",
+                "跳到第 3 页",
+            )
+            page3 = await cdp.evaluate("""(() => ({
+              refs: [...document.querySelectorAll('.paper-item')]
+                .slice(0, 4).map(r => r.dataset.ref),
+              current: document.querySelector('#paper-pager .pg-num.on')?.textContent || '',
+            }))()""")
+            # 翻过数据尽头（假源每源 60 条，真数据只有 5 页）：空页必须说实话，
+            # 不能编一个"结果到第 29 页为止"
+            await set_input(cdp, "#paper-page-input", "30")
+            await cdp.evaluate("document.querySelector('#paper-page-go').click(); true")
+            await wait_until(
+                cdp,
+                "document.querySelector('#paper-status').textContent.includes('没有结果')",
+                "空页提示",
+            )
+            empty_page = await cdp.evaluate("""(() => ({
+              status: document.querySelector('#paper-status').textContent || '',
+              text: document.querySelector('#paper-results .empty')?.textContent || '',
+              rows: document.querySelectorAll('.paper-item').length,
+            }))()""")
 
             # 截图点：结果满屏、筛选栏完整（末尾那张会拍在在途检索的瞬间，是空列表）
             shot = None
@@ -619,7 +673,18 @@ async def run(args):
                 shot = res["data"]
 
             # ---- 6. 详情面板 + 导入 + 已在库中 + 出口 ----
-            await cdp.evaluate("document.querySelectorAll('.paper-item')[0].click(); true")
+            # 第 5 步停在"空页"（那是它要验的），先重搜一次把结果找回来
+            await search(cdp, "水库坝")
+            # 6 之前先验"点整行 = 浏览器打开原页"（2026-09-20 的行为改动）：
+            # 打桩 window.open 收 URL——真开新标签会甩掉 CDP 的 target
+            opened = await cdp.evaluate("""(() => {
+              window.__opened = [];
+              window.open = (u) => { window.__opened.push(String(u)); return null; };
+              document.querySelectorAll('.paper-item')[0].click();
+              return window.__opened;
+            })()""")
+            # 看详情要按行里的「详情」按钮（点行不再填右侧面板）
+            await open_detail(cdp)
             detail = await cdp.evaluate("""(() => ({
               title: document.querySelector('#paper-detail .pd-title')?.textContent || '',
               body: document.querySelector('#paper-detail .pd-body')?.textContent || '',
@@ -646,10 +711,10 @@ async def run(args):
             # 特意点 **OpenAlex** 那一行：引证网络要 DOI 才能桥接，而假源里
             # 只有 OpenAlex 条目带 DOI（arXiv 是无 DOI 的预印本、DOAJ 假条目
             # 只有 ISSN）——这正是产品里的诚实降级路径，另有单测覆盖"没有 DOI"。
-            await cdp.evaluate(
-                "(() => { const row = [...document.querySelectorAll('.paper-item')]"
-                ".find(r => r.querySelector('.paper-src')?.textContent === 'OpenAlex');"
-                " row.click(); return true; })()"
+            await open_detail(
+                cdp,
+                "[...document.querySelectorAll('.paper-item')]"
+                ".find(r => r.querySelector('.paper-src')?.textContent === 'OpenAlex')",
             )
             await asyncio.sleep(0.4)
             await cdp.evaluate(
@@ -727,7 +792,7 @@ async def run(args):
             })()""")
             await asyncio.sleep(0.4)
             await search(cdp, "水库坝")
-            await cdp.evaluate("document.querySelectorAll('.paper-item')[0].click(); true")
+            await open_detail(cdp)  # 点整行是开浏览器，看详情走「详情」按钮
             await asyncio.sleep(0.3)
             no_oa = await cdp.evaluate("""(() => {
               const btn = document.querySelector('#paper-detail .btn.primary');
@@ -809,8 +874,35 @@ async def run(args):
                 bad.append(f"结果行信息不全：{page1}")
             if not page1["hasCites"]:
                 bad.append("结果行没有显示被引数据")
-            if not page1["moreShown"]:
-                bad.append("首屏应显示「加载更多」")
+            if not page1["pagerShown"]:
+                bad.append("首屏应显示翻页条")
+            if page1["detailBtns"] != page1["count"]:
+                bad.append(f"每行都该有「详情」按钮：{page1['detailBtns']}/{page1['count']}")
+            if "命中" not in page1["pageStatus"]:
+                bad.append(f"页脚状态行没显示各源命中数：{page1['pageStatus']}")
+            if not opened or not opened[0].startswith("http"):
+                bad.append(f"点结果行没有在浏览器打开论文原页：{opened}")
+            if not pager_first["shown"] or pager_first["current"] != "1":
+                bad.append(f"页码条不对：{pager_first}")
+            # 封顶 = 200 页/源 × 4 源 = 800（假源命中合计 72,600 → 1,452 页 → 封顶）
+            if not pager_first["nums"] or pager_first["nums"][-1] != "800":
+                bad.append(f"总页数应为封顶 800 页（假源命中合计 72,600）：{pager_first['nums']}")
+            if "第 1 / 800 页" not in pager_first["status"]:
+                bad.append(f"状态行没有页码：{pager_first['status']}")
+            if "封顶" not in pager_first["status"]:
+                bad.append(f"封顶这件事没有说明：{pager_first['status']}")
+            if any(ref in page1_refs for ref in paging["refs"]):
+                bad.append(f"第 2 页与第 1 页出现重复结果：{paging['refs']}")
+            if paging["count"] != paging["unique"]:
+                bad.append(f"第 2 页内部有重复：{paging}")
+            if paging["count"] != PAGE_SIZE:
+                bad.append(f"第 2 页应为 {PAGE_SIZE} 条，实际 {paging['count']}")
+            if page3["current"] != "3" or any(ref in page1_refs for ref in page3["refs"]):
+                bad.append(f"跳页没落到第 3 页（或与第 1 页重复）：{page3}")
+            if empty_page["rows"] != 0 or "没有结果" not in empty_page["status"]:
+                bad.append(f"翻过数据尽头时应当如实说「没有结果」：{empty_page}")
+            if "为止" in empty_page["text"] or "共" in empty_page["text"]:
+                bad.append(f"空页不该编一个具体末页：{empty_page['text']}")
             if not year_sent:
                 bad.append("年份筛选没有真的发到上游（openalex 收到的查询里没有该条件）")
             if not caps["citedDisabled"]:

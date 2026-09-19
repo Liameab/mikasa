@@ -234,3 +234,55 @@ def test_markup_is_stripped_from_title_and_abstract(monkeypatch):
     results, _ = doaj.DoajSource().search("x", 0, 1)
     assert results[0].title == "改性纳米零价铁 去除 硝酸盐 & 硫酸盐"
     assert results[0].abstract == "分为 1 # 与 2 # 两级，浓度 <5 mg/L"
+
+
+def _paged_doaj_fake(total: int, calls: list[tuple[int, int]]):
+    """按 page/pageSize 真实切片的假 DOAJ（深翻页只能从这里断言"取的是哪一页"）。"""
+
+    def fake_get(url: str, timeout: float) -> bytes:
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+        page = int(query.get("page", ["1"])[0])
+        size = int(query.get("pageSize", ["10"])[0])
+        calls.append((page, size))
+        rows = []
+        for n in range((page - 1) * size, min(page * size, total)):
+            r = _row()
+            r["bibjson"]["title"] = f"论文{n}"
+            rows.append(r)
+        return json.dumps({"total": total, "results": rows}).encode("utf-8")
+
+    return fake_get
+
+
+def test_deep_window_asks_for_the_page_containing_it(monkeypatch):
+    """深翻页（2026-09-20）：只取包含窗口的那一页，而不是从第 1 页取到 start。
+
+    旧实现受单页上限 100 拖累，第 8 页之后这个源就悄悄不出结果了。
+    """
+    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(doaj, "_http_get", _paged_doaj_fake(5_000, calls))
+
+    results, total = doaj.DoajSource().search("x", 450, 13)
+
+    assert calls == [(5, 100)]  # 450 // 100 + 1，一次请求
+    assert [r.title for r in results] == [f"论文{n}" for n in range(450, 463)]
+    assert total == 5_000
+
+
+def test_window_straddling_two_pages_fetches_both(monkeypatch):
+    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(doaj, "_http_get", _paged_doaj_fake(1_000, calls))
+
+    results, _ = doaj.DoajSource().search("x", 95, 13)
+
+    assert calls == [(1, 100), (2, 100)]
+    assert [r.title for r in results] == [f"论文{n}" for n in range(95, 108)]
+
+
+def test_stops_at_the_depth_limit_without_a_request(monkeypatch):
+    """超过深度上限：如实返回空，且**一个请求都不发**。"""
+    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(doaj, "_http_get", _paged_doaj_fake(50_000, calls))
+
+    assert doaj.DoajSource().search("x", 10_000, 13) == ([], None)
+    assert calls == []

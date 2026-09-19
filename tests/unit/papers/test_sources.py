@@ -267,6 +267,63 @@ def _paged_openalex_fake(total: int):
     return fake_get
 
 
+def _deep_openalex_fake(total: int, calls: list[tuple[int, int]]):
+    """带调用记录的按页切片假源：深翻页只能从这里断言"取的是哪一页"。"""
+    import json
+    import urllib.parse
+
+    def fake_get(url: str, timeout: float) -> bytes:
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+        page = int(query.get("page", ["1"])[0])
+        per_page = int(query.get("per-page", ["10"])[0])
+        calls.append((page, per_page))
+        start = (page - 1) * per_page
+        works = [
+            {"id": f"https://openalex.org/W{n:09d}", "display_name": f"w{n}"}
+            for n in range(start, min(start + per_page, total))
+        ]
+        return json.dumps({"meta": {"count": total}, "results": works}).encode("utf-8")
+
+    return fake_get
+
+
+def test_openalex_deep_window_asks_for_the_page_containing_it(monkeypatch):
+    """深翻页（2026-09-20）：只取**包含窗口的那一页**，而不是从第 1 页取到 start。
+
+    旧实现受单页上限 200 拖累，start ≥ 200 就永远取不满——该源从第 ~16 页起
+    悄悄不再出结果（用户报"翻不了几页"的根因之一）。
+    """
+    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(openalex, "_http_get", _deep_openalex_fake(20_000, calls))
+
+    results, total = openalex.OpenAlexSource().search("x", 9000, 13)
+
+    assert calls == [(46, 200)]  # 9000 // 200 + 1，一次请求
+    assert [r.id for r in results] == [f"W{n:09d}" for n in range(9000, 9013)]
+    assert total == 20_000
+
+
+def test_openalex_window_straddling_two_pages_fetches_both(monkeypatch):
+    """窗口跨页时补取下一页（195+13 越过 200 的边界）。"""
+    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(openalex, "_http_get", _deep_openalex_fake(1000, calls))
+
+    results, _ = openalex.OpenAlexSource().search("x", 195, 13)
+
+    assert calls == [(1, 200), (2, 200)]
+    assert [r.id for r in results] == [f"W{n:09d}" for n in range(195, 208)]
+
+
+def test_openalex_stops_at_the_documented_depth(monkeypatch):
+    """超过 page×per-page = 1 万的文档上限：如实返回空，且**一个请求都不发**。"""
+    calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(openalex, "_http_get", _deep_openalex_fake(50_000, calls))
+
+    results, total = openalex.OpenAlexSource().search("x", 10_000, 13)
+
+    assert results == [] and total is None and calls == []
+
+
 def test_openalex_search_params_and_select(monkeypatch):
     """请求参数与 select 瘦身列表（窗口切片的正确性由对齐测试覆盖）。"""
     captured: dict[str, str] = {}

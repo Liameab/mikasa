@@ -11,6 +11,10 @@
        "哪些来源不支持"写进说明，与服务端下发的 notes 互为呼应；
      - "只看开放获取"在所有所选来源都天然全 OA 时显示为**已勾选且禁用**
        （语义是"已满足"而不是"不支持"——两种情况的文案必须分开）。
+
+   发表时间只留**日期选择器**（2026-09-20 用户要求，原来还有"不限/近3年/
+   近5年/近10年"四个快捷档）：原生 `<input type="date">` 点开是日历、
+   也能直接手输，快捷档是重复的一条路，去掉更干净。
    ========================================================================= */
 
 import { $, el } from "./common.js";
@@ -25,20 +29,6 @@ const LANGS = [
   { key: "zh", label: "中文" },
   { key: "en", label: "英文" },
 ];
-
-/** 日期选择器是否有值（空值不算"用户要求了时间范围"）。 */
-function _hasDate(range) {
-  return Boolean($(range).value);
-}
-
-/** 快捷档 → ISO 日期区间（近 N 年 = 今天往前推 N 年，到今天为止）。 */
-function _presetRange(years) {
-  const today = new Date();
-  const from = new Date(today);
-  from.setFullYear(today.getFullYear() - years);
-  const iso = (d) => d.toISOString().slice(0, 10);
-  return { from: iso(from), to: iso(today) };
-}
 
 export function createFilters({ onChange }) {
   let catalog = [];
@@ -133,9 +123,6 @@ export function createFilters({ onChange }) {
     for (const id of ["#p-date-from", "#p-date-to"]) {
       $(id).disabled = !yearCov.any;
     }
-    for (const chip of document.querySelectorAll("#p-presets .s-chip")) {
-      chip.disabled = !yearCov.any;
-    }
     $("#p-year-note").textContent = yearCov.any
       ? yearCov.missing.length
         ? `${yearCov.missing.join("、")} 只能按年过滤，其结果为整年范围`
@@ -160,13 +147,6 @@ export function createFilters({ onChange }) {
     renderSorts();
     renderLangs();
     renderYearAndOa();
-  }
-
-  /** 快捷档高亮（传 null = 手改日期后全部熄灭，表示"自定义区间"）。 */
-  function markPresets(active) {
-    for (const chip of document.querySelectorAll("#p-presets .s-chip")) {
-      chip.classList.toggle("on", chip === active);
-    }
   }
 
   /** 组装请求体的 filters 片段：**只放用户真的设过的条件**。 */
@@ -215,29 +195,14 @@ export function createFilters({ onChange }) {
       renderAll();
       onChange({ reSearch: true });
     });
+    // 日期框：改完（选日历或手输）就重查——原生 date 输入的日历弹层
+    // 在选中/失焦时才派发 change，所以"点日历"和"打字"共用这一条路径
     for (const id of ["#p-date-from", "#p-date-to"]) {
       $(id).addEventListener("change", () => {
-        markPresets(null); // 手改日期 = 离开快捷档
         renderAll();
         onChange({ reSearch: true });
       });
     }
-    $("#p-presets").addEventListener("click", (ev) => {
-      const chip = ev.target.closest("button[data-range]");
-      if (!chip || chip.disabled) return;
-      const years = chip.dataset.range;
-      if (years === "any") {
-        $("#p-date-from").value = "";
-        $("#p-date-to").value = "";
-      } else {
-        const { from, to } = _presetRange(Number(years));
-        $("#p-date-from").value = from;
-        $("#p-date-to").value = to;
-      }
-      markPresets(chip);
-      renderAll();
-      onChange({ reSearch: true });
-    });
     $("#p-oa-only").addEventListener("change", () => {
       renderYearAndOa();
       onChange({ reSearch: true });
@@ -265,6 +230,8 @@ export function createFilters({ onChange }) {
     readFilters,
     readSources,
     isReady: () => ready,
+    /** 当前选中的来源个数（翻页深度上限按它算，见 papers-page.js 的 pageCap） */
+    sourceCount: () => selected.size,
     /** 排序是否可用（无被引数据时按被引排序整项禁用） */
     sortAvailable: () => coverage((c) => c.cited_sort).any,
   };

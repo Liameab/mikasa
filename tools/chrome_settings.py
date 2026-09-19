@@ -85,6 +85,25 @@ async def run(args):
             panel_vis = await cdp.evaluate(
                 "!document.querySelector('#settings-panel').classList.contains('hidden')"
             )
+            # 2b. 标题栏置顶（2026-09-20 用户反馈"往下翻就点不到退出了"）：
+            #     滚到底之后，标题与 ✕ 必须仍贴在面板顶部且可点
+            sticky = await cdp.evaluate("""(() => {
+              const panel = document.querySelector('#settings-panel');
+              const head = panel.querySelector('.s-head');
+              const btn = document.querySelector('#s-close').getBoundingClientRect();
+              const panelTop = panel.getBoundingClientRect().top;
+              const before = head.getBoundingClientRect().top;
+              panel.scrollTop = panel.scrollHeight;          // 滚到底
+              const after = head.getBoundingClientRect().top;
+              const out = {
+                scrolled: panel.scrollTop > 0,
+                before, after, panelTop,
+                headStuck: Math.abs(after - panelTop) <= 2,
+                closeClickable: btn.bottom > panelTop && btn.top < panelTop + 60,
+              };
+              panel.scrollTop = 0;                            // 还原，别影响后面的步骤
+              return out;
+            })()""")
             await cdp.evaluate(
                 f"const i = document.querySelector('#s-nick'); i.value = {json.dumps(NICK)}; "
                 "i.dispatchEvent(new Event('change')); true"
@@ -167,6 +186,7 @@ async def run(args):
                 "userWhoBubbles": n_user,
                 "whoBefore": who0,
                 "panelVisible": panel_vis,
+                "stickyHead": sticky,
                 "whoAfterNick": who1,
                 "msgFontPx": font_px,
                 "bgColorVar": bg_var,
@@ -183,6 +203,12 @@ async def run(args):
                 print(f"截图已写: {args.out_shot}", file=sys.stderr)
 
             bad = []
+            if not sticky["scrolled"] or not sticky["headStuck"] or not sticky["closeClickable"]:
+                bad.append(
+                    f"设置面板滚到底后标题栏没置顶（或 ✕ 点不到）："
+                    f"before={sticky['before']:.0f} after={sticky['after']:.0f} "
+                    f"panelTop={sticky['panelTop']:.0f} scrolled={sticky['scrolled']}"
+                )
             if who1.split(" · ")[0] != NICK:
                 bad.append(f"历史气泡署名没换成 {NICK}")
             if font_px != "17px":

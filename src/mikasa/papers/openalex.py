@@ -38,6 +38,8 @@ _SELECT = (
 
 # OpenAlex 单页上限（超出会 400）；深翻页时窗口可能取不满，has_more 自然为假
 _MAX_PER_PAGE = 200
+# page×per-page 的文档上限：再深只能走 cursor，而 cursor 跳不到任意页
+_MAX_OFFSET = 10_000
 
 # 单请求超时（秒）：15 秒对本机到这些站点的链路太紧（实测同一 URL 在
 # 0.8–22.5 秒之间浮动，2026-09-19）。取 20 秒 + 网络级重试一次；
@@ -211,41 +213,55 @@ class OpenAlexSource:
         *,
         filters: PaperFilters | None = None,
     ) -> tuple[list[PaperResult], int | None]:
-        # **窗口对齐**（2026-09-16 两轮才修对，教训记在下面）：OpenAlex 只有
-        # page/per-page，没有原生 offset，而页边界固定在 per-page 的整数倍上
-        # ——凑不出"边界刚好落在 start"。
+        # **窗口对齐**（2026-09-16 两轮才修对；2026-09-20 又加深了一层）：
+        # OpenAlex 只有 page/per-page，没有原生 offset，而页边界固定在 per-page
+        # 的整数倍上——凑不出"边界刚好落在 start"。
         #   · 旧实现 `page = start // count + 1` 只在 start 是 count 整数倍时
         #     成立（两源各拿一半、恒 10 条时侥幸正确）；N 源轮转后 start 一般
         #     不是 count 的倍数，取回的窗口整体左移 → 翻页重复（E2E 实测
         #     40 条里 5 条重复）。
         #   · 第一版修法按 count 对齐页号、却按 per-page 取页，两者不是同一
         #     倍数，照样错位。
-        # 最终：**从第 1 页一直取到 start+count 为止，再切片** —— 一次请求、
-        # 与页边界无关。OpenAlex 按"每次查询 10 credits"计费、与 per-page 无关，
-        # 多取不额外花钱；代价只是多传一点流量。
-        # 超过单页上限（200）的深翻页取不满 → has_more 自然为假，该源的深翻
-        # 到此为止（如实降级，不假装后面还有）。
-        per_page = min(_MAX_PER_PAGE, start + count)
-        params = urllib.parse.urlencode(
-            {
-                "search": q,
-                "per-page": per_page,
-                "page": 1,
-                "sort": _sort_param(filters),
-                "select": _SELECT,
-                **_filter_params(filters),
-            }
-        )
-        data = _load_json(_http_get(f"{_base_url()}/works?{params}", timeout=_TIMEOUT))
-        works = data.get("results")
-        if not isinstance(works, list):
-            raise PaperError("OpenAlex 返回内容无法解析（缺少 results 列表）")
-        results = [_normalize(w) for w in works if isinstance(w, dict)]
-        window = results[start : start + count]
-        # meta.count = 上游命中总数（与窗口无关）：界面用它显示"命中 N 条"，
-        # 让"这库到底有多大"可见——这是知网那种规模感里我们唯一能诚实给出的部分
-        meta = data.get("meta")
-        total = meta.get("count") if isinstance(meta, dict) else None
+        #   · 第二版"从第 1 页取到 start+count 再切片"对齐是对的，但受单页
+        #     上限 200 拖累：start ≥ 200 就永远取不满（该源从第 ~16 页起悄悄
+        #     不再出结果）。2026-09-20 用户要"翻得越多越好"，于是改成**只取
+        #     包含窗口的那一页**（窗口跨页时再取下一页），深度从 200 条抬到
+        #     文档允许的一万条。
+        per_page = _MAX_PER_PAGE if start + count > _MAX_PER_PAGE else start + count
+        page = start // per_page + 1
+        skip = start - (page - 1) * per_page
+
+        def _page(number: int) -> tuple[list[PaperResult], int | None]:
+            params = urllib.parse.urlencode(
+                {
+                    "search": q,
+                    "per-page": per_page,
+                    "page": number,
+                    "sort": _sort_param(filters),
+                    "select": _SELECT,
+                    **_filter_params(filters),
+                }
+            )
+            data = _load_json(_http_get(f"{_base_url()}/works?{params}", timeout=_TIMEOUT))
+            works = data.get("results")
+            if not isinstance(works, list):
+                raise PaperError("OpenAlex 返回内容无法解析（缺少 results 列表）")
+            # meta.count = 上游命中总数（与窗口无关）：界面用它显示"命中 N 条"，
+            # 让"这库到底有多大"可见——知网那种规模感里我们唯一能诚实给出的部分
+            meta = data.get("meta")
+            count_total = meta.get("count") if isinstance(meta, dict) else None
+            return [_normalize(w) for w in works if isinstance(w, dict)], count_total
+
+        # 第 N 页的 page×per-page 不能超过 1 万（文档限制，再深只能走 cursor，
+        # 而 cursor 没法"跳到任意页"）——所以到这里就如实说"本页没有"，
+        # 由服务层的窗口公式留洞，界面上该源的命中数仍在
+        if start >= _MAX_OFFSET:
+            return [], None
+
+        rows, total = _page(page)
+        if skip + count > per_page:  # 窗口跨在两页上
+            rows += _page(page + 1)[0]
+        window = rows[skip : skip + count]
         return window, total if isinstance(total, int) else None
 
     def fetch(self, paper_id: str) -> PaperResult:

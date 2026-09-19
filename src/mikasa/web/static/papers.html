@@ -1,9 +1,12 @@
 <!DOCTYPE html>
 <!-- ============================================================================
      Mikasa —— 找论文页（M8，在线论文检索）
-     布局：左侧筛选栏（年份 / 排序 / 来源多选 / 只看开放获取 / 密钥）
-     + 中间结果列表 + 右侧详情面板（点一条看完整摘要与元数据再决定导不导）。
-     三个来源（arXiv / OpenAlex / CORE）与它们的能力由 /api/papers/sources
+     布局：左侧筛选栏（发表时间 / 排序 / 来源多选 / 语言 / 只看开放获取 / 密钥）
+     + 中间结果列表（翻页）+ 右侧详情面板。
+     **点结果行 = 浏览器新标签打开论文原页**（2026-09-20 用户要求：找论文的
+     第一动作是去读它）；右侧详情改由行内「详情」按钮打开——摘要、导入知识库、
+     相关论文/被引/参考文献都在那里。
+     四个来源（arXiv / OpenAlex / CORE / DOAJ）与它们的能力由 /api/papers/sources
      下发，前端不硬编码——不支持的能力置灰并给说明，绝不摆一个点了不生效
      的选项（见 js/papers-filters.js）。
      JS 入口：/static/js/papers-page.js
@@ -36,16 +39,18 @@
       <h2>筛选</h2>
       <div class="p-filter">
         <span class="p-filter-label">发表时间</span>
-        <div id="p-presets" class="s-chips">
-          <button class="s-chip on" type="button" data-range="any">不限</button>
-          <button class="s-chip" type="button" data-range="3">近 3 年</button>
-          <button class="s-chip" type="button" data-range="5">近 5 年</button>
-          <button class="s-chip" type="button" data-range="10">近 10 年</button>
-        </div>
+        <!-- 只留日期选择器（2026-09-20 用户要求）：原来的"不限/近3年/近5年/近10年"
+             四个快捷档拿掉了——Chrome 原生 date 输入点开就是日历、也能直接手输，
+             两件事一个人做完，比"档 + 两个框"这套更直观 -->
         <div class="p-year">
-          <input id="p-date-from" type="date" aria-label="起始日期">
-          <span class="muted">至</span>
-          <input id="p-date-to" type="date" aria-label="结束日期">
+          <label class="p-year-row">
+            <span class="muted small">起</span>
+            <input id="p-date-from" type="date" aria-label="起始日期">
+          </label>
+          <label class="p-year-row">
+            <span class="muted small">至</span>
+            <input id="p-date-to" type="date" aria-label="结束日期">
+          </label>
         </div>
         <div id="p-year-note" class="p-note"></div>
       </div>
@@ -106,8 +111,16 @@
       <div id="paper-status" class="muted small"></div>
       <div id="paper-notes" class="p-note"></div>
       <div id="paper-results" class="paper-results"></div>
-      <div id="paper-more-row">
-        <button id="paper-more" class="btn ghost hidden" type="button">加载更多</button>
+      <!-- 翻页（2026-09-20 用户要求，取代"加载更多"）：页码条渲染在
+           js/papers-page.js，深处封顶也在那边把关 -->
+      <div id="paper-pager" class="paper-pager hidden">
+        <div id="paper-pager-nums" class="pg-nums"></div>
+        <div class="pg-jump">
+          <span class="muted small">跳至</span>
+          <input id="paper-page-input" type="number" min="1" step="1" aria-label="跳转到第几页">
+          <span class="muted small">页</span>
+          <button id="paper-page-go" class="btn ghost" type="button">跳转</button>
+        </div>
       </div>
     </section>
 

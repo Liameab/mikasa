@@ -56,6 +56,8 @@ _TIMEOUT = 20.0
 
 # 单页上限（官方支持 100）：深翻页时窗口可能取不满，has_more 自然为假
 _MAX_PER_PAGE = 100
+# 深翻页上限：官方没写明，按与 OpenAlex 同量级保守取（见 openalex._MAX_OFFSET）
+_MAX_OFFSET = 10_000
 
 _throttle = threading.Lock()
 _last_ok = 0.0
@@ -223,19 +225,32 @@ class DoajSource:
         filters: PaperFilters | None = None,
     ) -> tuple[list[PaperResult], int | None]:
         query = q.replace('"', " ").strip() + _year_clause(filters)
-        # 窗口对齐：DOAJ 只有 page/pageSize 没有原生 offset → 从第 1 页取够
-        # start+count 再切片（与 OpenAlex 同一条纪律，见那边的长篇注释）
-        per_page = min(_MAX_PER_PAGE, start + count)
-        params = urllib.parse.urlencode({"pageSize": per_page, "page": 1})
-        url = f"{_base_url()}/{urllib.parse.quote(query, safe='')}?{params}"
-        data = _load_json(_http_get(url, timeout=_TIMEOUT))
-        rows = data.get("results")
-        if not isinstance(rows, list):
-            raise PaperError("DOAJ 返回内容无法解析（缺少 results 列表）")
-        results = [_normalize(r) for r in rows if isinstance(r, dict)]
-        window = results[start : start + count]
-        total = data.get("total")
-        return window, total if isinstance(total, int) else None
+        # 窗口对齐：DOAJ 只有 page/pageSize 没有原生 offset → 取**包含窗口的那
+        # 一页**再切片（窗口跨页时再取下一页）。与 OpenAlex 同一套纪律，那边
+        # 有完整的三轮教训注释；2026-09-20 之前两处都是"从第 1 页取到
+        # start+count"，受单页上限拖累、深翻页会悄悄没结果。
+        per_page = _MAX_PER_PAGE if start + count > _MAX_PER_PAGE else start + count
+        page = start // per_page + 1
+        skip = start - (page - 1) * per_page
+
+        def _page(number: int) -> tuple[list[PaperResult], int | None]:
+            params = urllib.parse.urlencode({"pageSize": per_page, "page": number})
+            url = f"{_base_url()}/{urllib.parse.quote(query, safe='')}?{params}"
+            data = _load_json(_http_get(url, timeout=_TIMEOUT))
+            rows = data.get("results")
+            if not isinstance(rows, list):
+                raise PaperError("DOAJ 返回内容无法解析（缺少 results 列表）")
+            total = data.get("total")
+            return [_normalize(r) for r in rows if isinstance(r, dict)], (
+                total if isinstance(total, int) else None
+            )
+
+        if start >= _MAX_OFFSET:  # 见 openalex.py 的说明：太深就如实留空
+            return [], None
+        results, total = _page(page)
+        if skip + count > per_page:
+            results += _page(page + 1)[0]
+        return results[skip : skip + count], total
 
     def fetch(self, paper_id: str) -> PaperResult:
         if not validate_id(paper_id):

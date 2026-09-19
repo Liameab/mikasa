@@ -680,6 +680,15 @@ table.list td.num { text-align: right; font-variant-numeric: tabular-nums; }
   padding: 8px 12px;
   font-weight: 600;
   border-bottom: 1px solid var(--border);
+  /* 置顶（2026-09-20 用户反馈："往下翻就点不到退出了"）：整块面板
+     （max-height + overflow-y:auto）才是滚动容器，标题栏原本跟着一起滚。
+     sticky 后标题与 ✕ 恒在；底色必须给，否则内容从下面透上来。
+     z-index:1 是**面板内**的局部层叠，与全站阶梯无关。 */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-raised);
+  border-radius: 10px 10px 0 0;
 }
 .settings-panel .s-body { padding: 10px 12px 12px; }
 .settings-panel .s-row {
@@ -1141,8 +1150,54 @@ a.paper-title:hover { color: var(--accent); }
 
 .paper-status { margin-top: 5px; }
 
-#paper-more-row { text-align: center; margin-top: 8px; }
-#paper-more-row .btn { font-size: 12px; padding: 5px 14px; }
+/* ---- 翻页条（2026-09-20 用户要求：看得见总页数、能跳页，取代"加载更多"）----
+   页码是按钮不是链接（点了发一次检索请求，不换页），所以自己长一副胶囊形状；
+   当前页沿用"选中"的语言（珊瑚色描边 + 淡底），与结果行的 .on 同一套观感。 */
+.paper-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.pg-nums { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.pg-num {
+  min-width: 28px;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.pg-num:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.pg-num.on {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(204, 120, 92, 0.12);
+  font-weight: 600;
+}
+.pg-num:disabled { cursor: default; opacity: 0.55; }
+.pg-gap { font-size: 12px; color: var(--muted); padding: 0 2px; }
+/* 跳页输入：与筛选栏的日期框同一套输入语言（底 / 描边 / 焦点色） */
+.pg-jump { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.pg-jump input {
+  width: 58px;
+  background: var(--bg-inset);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  outline: none;
+}
+.pg-jump input:focus { border-color: var(--focus); }
+
+/* 结果行里的「详情」：贴到行首右端（点整行是开浏览器，看摘要得按它） */
+.paper-detail-btn { margin-left: auto; font-size: 12px; padding: 3px 10px; }
 
 /* ---- 找论文页：左筛选栏 ---- */
 .p-filter { margin-bottom: 14px; }
@@ -1159,10 +1214,15 @@ a.paper-title:hover { color: var(--accent); }
 .p-check { display: flex; align-items: center; gap: 7px; font-size: 13px; padding: 3px 0; cursor: pointer; }
 .p-check input { accent-color: var(--accent); margin: 0; }
 .p-check.disabled { color: var(--muted); cursor: not-allowed; }
-/* 年份区间：两个数字输入并排 */
-.p-year { display: flex; align-items: center; gap: 6px; }
-.p-year input {
-  width: 74px;
+/* 发表时间：起 / 至 各占一行（2026-09-20）。
+   原来是"两个年份数字框并排"（74px 够写 2020），换成原生 date 输入后
+   74px 会把日期截成"2021/"——窄栏里两个日历框并排怎么调都挤，
+   索性上下两行各占满，点起来也宽。 */
+.p-year { display: flex; flex-direction: column; gap: 6px; }
+.p-year-row { display: flex; align-items: center; gap: 6px; }
+.p-year-row input {
+  flex: 1;
+  min-width: 0;
   background: var(--bg-inset);
   color: var(--text);
   border: 1px solid var(--border);
@@ -1172,7 +1232,7 @@ a.paper-title:hover { color: var(--accent); }
   padding: 4px 8px;
   outline: none;
 }
-.p-year input:focus { border-color: var(--focus); }
+.p-year-row input:focus { border-color: var(--focus); }
 .p-year .muted { font-size: 12px; }
 /* 能力提示：某个来源不支持该选项时的说明（"给了选项却不生效"比不支持更坏） */
 .p-note { font-size: 11px; color: var(--muted); margin-top: 4px; line-height: 1.45; }
