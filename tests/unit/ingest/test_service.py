@@ -194,6 +194,41 @@ def test_missing_file_raises(tmp_path, offline_settings):
 # ---------------------------------------------------------------------------
 
 
+def test_reindex_aborts_when_a_copy_is_missing(tmp_path, offline_settings):
+    """副本少了一个 → reindex **中止**，绝不清库（2026-09-20 补的第二道闸）。
+
+    第一道闸只挡"uploads 全空"，挡不住"少了一个副本"——而那才是更容易被忽略的
+    丢数据路径：清库 → 重灌时那一行没有来源 → 永久消失（笔记尤其：uploads 副本
+    就是它唯一的副本，原文也跟着没了）。
+    """
+    _write_note(tmp_path, "a.md", CONTENT_A)
+    _write_note(tmp_path, "b.md", "# 第二篇\n\n朴素贝叶斯假设特征条件独立。")
+    svc = _svc(offline_settings)
+    svc.ingest_paths([tmp_path])
+    (offline_settings.uploads_dir / "b.md").unlink()  # 模拟清理工具/误删
+
+    with pytest.raises(ZhiwenError, match="找不到副本"):
+        svc.reindex()
+
+    with open_db(offline_settings.db_path) as conn:
+        assert repo.count_documents(conn) == 2  # 库原样未动，两篇都还在
+
+
+def test_reindex_accepts_a_copy_found_by_title(tmp_path, offline_settings):
+    """副本被改名（stem 仍等于标题）不算丢——与读侧同口径的第二跳，别误报。"""
+    _write_note(tmp_path, "a.md", CONTENT_A)
+    svc = _svc(offline_settings)
+    svc.ingest_paths([tmp_path])
+    with open_db(offline_settings.db_path) as conn:
+        title = repo.list_documents(conn)[0].title
+    renamed = offline_settings.uploads_dir / "a.md"
+    renamed.rename(offline_settings.uploads_dir / f"{title}.md")
+
+    rebuilt = svc.reindex()  # 不抛即通过（按标题 + sha 验身找到副本）
+
+    assert len(rebuilt.ingested) == 1
+
+
 def test_reindex_rebuilds_from_uploads(tmp_path, offline_settings):
     _write_note(tmp_path, "a.md", CONTENT_A)
     _write_note(tmp_path, "b.md", "# 第二篇\n\n朴素贝叶斯假设特征条件独立。")
@@ -246,6 +281,53 @@ def test_same_name_replace_keeps_folder_and_title(tmp_path, offline_settings):
         assert docs[0].title == "用户整理名"  # 改名保留
         assert docs[0].folder_id == folder  # 文件夹归属保留
         assert docs[0].chunk_count == 3  # 内容确已更新（不是幂等跳过）
+
+
+def test_stale_file_path_still_replaces_instead_of_duplicating(tmp_path, offline_settings):
+    """历史脏 file_path 下重传同名文件 = 替换，不是新增（2026-09-20 修）。
+
+    真实来路：仓库改名 / `data/` 搬家会让库里 file_path 指向废弃的旧目录
+    （本项目实测 23 行里 21 行如此）。**读侧**一直按文件名兜底，那份文档照样
+    读得出来；而**写侧**当时只按全路径找旧行 → 判成"新文件" → 同名替换变成
+    插第二行：多一篇重复、丢组织属性、索引里还是旧正文。
+
+    修法在写侧（脏键在那儿）：按全路径找不到就按名兜底，找到先把键修回真实
+    副本路径，再走原本的同名替换。
+    """
+    note = _write_note(tmp_path, "a.md", CONTENT_A)
+    svc = _svc(offline_settings)
+    svc.ingest_paths([tmp_path])
+    stale = r"D:\Code\MyProject1\data\uploads\a.md"  # 改名前的旧项目路径
+    with open_db(offline_settings.db_path) as conn:
+        doc = repo.list_documents(conn)[0]
+        folder = repo.create_kb_folder(conn, "论文")
+        repo.set_document_title(conn, doc.id, "用户整理名")
+        repo.move_document(conn, doc.id, folder)
+        repo.set_document_file_path(conn, doc.id, stale)  # 模拟历史脏值
+
+    note.write_text(CONTENT_A + "\n## 附录\n\n补充一段。\n", encoding="utf-8")
+    result = svc.ingest_paths([tmp_path])
+
+    assert result.ingested == [str(note)]
+    with open_db(offline_settings.db_path) as conn:
+        docs = repo.list_documents(conn)
+        assert len(docs) == 1  # 关键：替换而不是插第二行
+        assert docs[0].title == "用户整理名"  # 组织属性照旧继承
+        assert docs[0].folder_id == folder
+        assert docs[0].chunk_count == 3  # 内容确已更新
+        # 顺带把脏键修回了真实副本路径（下一跳不必再兜底）
+        assert docs[0].file_path == str(offline_settings.uploads_dir / "a.md")
+
+
+def test_upload_name_lookup_treats_wildcards_literally(tmp_path, offline_settings):
+    """文件名里的 `%` / `_` 不能被当通配符（所以这条查找不走 SQL LIKE）。"""
+    _write_note(tmp_path, "100%_笔记.md", CONTENT_A)
+    svc = _svc(offline_settings)
+    svc.ingest_paths([tmp_path])
+    with open_db(offline_settings.db_path) as conn:
+        assert repo.get_document_by_upload_name(conn, "100%_笔记.md") is not None
+        assert repo.get_document_by_upload_name(conn, "100XY笔记.md") is None
+        assert repo.get_document_by_upload_name(conn, "100%Z笔记.md") is None
 
 
 def test_reindex_keeps_folder_and_title(tmp_path, offline_settings):

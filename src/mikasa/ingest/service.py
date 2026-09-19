@@ -195,6 +195,24 @@ class IngestService:
         replaced_id: int | None = None  # 同名替换待删的旧行（文件就位后才删，见下）
         with open_db(self.settings.db_path) as conn:
             existing = repo.get_document_by_path(conn, str(copy_path))
+            if existing is None:
+                # 写侧与读侧同口径（2026-09-20 修）：file_path 可能是**历史脏值**
+                # （仓库改名 / data 搬家都留下过），只按全路径找会把"这份文件的新
+                # 版本"判成新文件 → 插出第二行：多一篇重复、丢文件夹与标题、索引
+                # 里还是旧正文，而读侧按名兜底照样读得出来，用户看到的就是同一份
+                # 文档出现两次。找到就地把这个键修回真实副本路径（写侧的脏键在
+                # 这儿，修法也落在这儿，别让每个调用方各自打补丁）。
+                existing = repo.get_document_by_upload_name(conn, copy_path.name)
+                if existing is not None:
+                    assert existing.id is not None  # 从库里读出来的行，主键必在
+                    logger.info(
+                        "修复历史脏 file_path：文档 #%s 的 %r → %r",
+                        existing.id,
+                        existing.file_path,
+                        str(copy_path),
+                    )
+                    repo.set_document_file_path(conn, existing.id, str(copy_path))
+                    # 后面只用到标题/文件夹/来源/哈希，都不受这次路径修复影响
             if existing is not None:
                 if existing.file_sha256 == sha and not force:
                     return "skipped", 0, 0
@@ -336,7 +354,21 @@ class IngestService:
             )
         self._reindex_keep = {}
         with open_db(self.settings.db_path) as conn:
-            for doc in repo.list_documents(conn):
+            docs = repo.list_documents(conn)
+            lost = self._docs_without_copies(docs, uploads)
+            if lost:
+                # **第二道闸（2026-09-20）**：每行都得在 uploads 里找得到副本。
+                # 只挡"uploads 全空"不够——清库之后才发现某一行的副本不在，那一行
+                # 就再也重建不出来（笔记尤其：uploads 副本是它唯一的副本，文件删了
+                # 连原文都没了）。宁可在动手前停下来，让用户先恢复或先显式删掉那几篇。
+                names = "\n".join(f"  · {d.title}" for d in lost[:10])
+                more = f"\n  …（共 {len(lost)} 篇）" if len(lost) > 10 else ""
+                raise ZhiwenError(
+                    f"这些文档在 uploads 里找不到副本，reindex 已中止（清库后它们无法重建）：\n"
+                    f"{names}{more}\n"
+                    f"请先从备份恢复 data/uploads/；若确实不再需要，请在知识库页逐篇删除后再重建。"
+                )
+            for doc in docs:
                 if doc.file_path:
                     # 用文件名做键：file_path 可能是脏历史值，但副本名稳定
                     self._reindex_keep[PureWindowsPath(doc.file_path).name] = _KeptProps(
@@ -350,6 +382,31 @@ class IngestService:
         summary = self.ingest_paths([uploads], force=True)
         self._sync_meta()
         return summary
+
+    def _docs_without_copies(self, docs: list[Document], uploads: Path) -> list[Document]:
+        """哪些文档行在 uploads 里找不到对应副本（reindex 前的安全闸）。
+
+        两跳解析与读侧 `_resolve_upload_file` 同口径：
+          ① 按 file_path 的**文件名**比（file_path 本身可能是历史脏值，
+             而副本名稳定——与"同名替换判定按名兜底"同一取舍）；
+          ② 回退按标题：uploads 下 stem 与标题相同的候选，再用 sha256 验身
+             （只看名字不验身，同名不同内容会被误判成"副本还在"）。
+        """
+        files = [p for p in uploads.iterdir() if p.is_file()] if uploads.is_dir() else []
+        names = {p.name for p in files}
+        by_stem: dict[str, list[Path]] = {}
+        for path in files:
+            by_stem.setdefault(path.stem, []).append(path)
+
+        lost: list[Document] = []
+        for doc in docs:
+            if doc.file_path and PureWindowsPath(doc.file_path).name in names:
+                continue
+            candidates = by_stem.get(doc.title or "", [])
+            if doc.file_sha256 and any(sha256_file(p) == doc.file_sha256 for p in candidates):
+                continue
+            lost.append(doc)
+        return lost
 
     # ------------------------------------------------------------------
     # 内部步骤

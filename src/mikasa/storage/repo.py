@@ -10,6 +10,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Iterable
+from pathlib import PureWindowsPath
 
 import numpy as np
 
@@ -66,6 +67,26 @@ def get_document(conn: sqlite3.Connection, doc_id: int) -> Document | None:
 def get_document_by_path(conn: sqlite3.Connection, file_path: str) -> Document | None:
     row = conn.execute("SELECT * FROM documents WHERE file_path = ?", (file_path,)).fetchone()
     return _row_to_document(row) if row else None
+
+
+def get_document_by_upload_name(conn: sqlite3.Connection, name: str) -> Document | None:
+    """按 uploads 副本的**文件名**找行（写侧"同名替换"判定用）。
+
+    file_path 是**不可信的历史值**：仓库改名、`data/` 搬家在本项目都发生过
+    （曾经 23 行里有 21 行指向废弃的旧项目目录）。uploads 是平铺的、文件名就是
+    那份副本的唯一键，**读侧** `_resolve_upload_file` 一直按名兜底；写侧只按全
+    路径找的话，拿同名文件覆盖一篇路径已过期的文档会被判成"这是一个新文件"，
+    于是插出第二行——多一篇重复、丢组织属性、索引里还是旧正文（2026-09-20 修）。
+
+    **不用 SQL LIKE**：文件名里带 `%` 或 `_` 时（Windows 合法，本项目文件名里
+    就有 `_`）LIKE 会把它当通配符。个人语料是几十行的规模，逐行比名字更省心。
+    同样用 `PureWindowsPath`：脏值是反斜杠形式，POSIX 下 `Path(...).name` 会把
+    整串当成一个文件名而失配（与读侧同一取舍）。
+    """
+    for row in conn.execute("SELECT * FROM documents ORDER BY id DESC"):
+        if PureWindowsPath(str(row["file_path"] or "")).name == name:
+            return _row_to_document(row)
+    return None
 
 
 def get_document_by_sha(conn: sqlite3.Connection, file_sha256: str) -> Document | None:
