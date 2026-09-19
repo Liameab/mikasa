@@ -1,7 +1,7 @@
 {
   "name": "mikasa-golden",
-  "corpus_sha256": "b8de6c0d3821718aa46c64508d82f6d44963937dce4f96a233fa611b62de4804",
-  "created": "2026-09-11",
+  "corpus_sha256": "65213bf5ce966989c81de04ea8aa7e436a6482382a1fa24f469729a0ce2784a5",
+  "created": "2026-09-19",
   "items": [
     {
       "id": "q001",
@@ -508,7 +508,7 @@
       "question": "语料建议的论文阅读方法是怎样的？读完一篇要追问什么问题？",
       "difficulty": "hard",
       "gold_chunk_ids": [
-        50
+        55
       ],
       "notes": "四段式笔记=动机-方法-实验-局限；追问=方法放进自己 RAG 项目消融实验怎么设计。",
       "reason": null

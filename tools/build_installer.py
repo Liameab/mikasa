@@ -65,25 +65,32 @@ def app_version() -> str:
     return match.group(1)
 
 
-def append_checksum(path: Path) -> Path | None:
+def append_checksum(path: Path) -> Path:
     """把刚编译出的 Setup.exe 追加进 dist/SHA256SUMS.txt。
 
     为什么写在这里而不是 make_release.py：那个脚本跑在编译**之前**，它写校验和
     时 Setup.exe 还不存在——于是清单里只有 zip 与内层 exe，而绝大多数用户下载的
     偏偏是 Setup.exe，成了唯一没有校验和的产物（2026-09-11 发布前复查发现）。
 
-    幂等：同名行先删再追加，重编译不会留两行。清单不存在则返回 None——那份清单
-    归 make_release.py 管，这里不凭空造一份只含 Setup 的残缺版。
+    幂等：同名行先删再追加，重编译不会留两行。
+
+    **清单不存在就创建**（2026-09-19 发布前复查）：原先这里返回 None、让清单
+    归 make_release.py 独管，于是**两个脚本的执行顺序**决定了清单完不完整——
+    先编译安装包、后打包，make_release 会把清单整份覆盖成不含 Setup 的版本，
+    而应用内更新恰恰在清单里查 Setup 的哈希（install.py 的 expected_sha256），
+    结果是**所有用户的一键更新都失败在"校验和文件里没有该记录"**，且发布时
+    看不出来（本地双击安装包一切正常）。现在本函数创建缺失的清单，
+    make_release 那边也改成只覆盖自己负责的行，任意顺序都能得到完整清单。
     """
     sums = path.parent / "SHA256SUMS.txt"
-    if not sums.is_file():
-        return None
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    kept = [
-        line
-        for line in sums.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.endswith("  " + path.name)
-    ]
+    kept: list[str] = []
+    if sums.is_file():
+        kept = [
+            line
+            for line in sums.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.endswith("  " + path.name)
+        ]
     kept.append(f"{digest}  {path.name}")
     # newline="\n"：与 make_release.write_checksums 同一纪律（CRLF 会让
     # Linux/macOS 上的 sha256sum -c 整份读不了），见那边的注释
@@ -125,8 +132,7 @@ def main() -> int:
         raise SystemExit(f"ISCC 报成功但没找到产物：{out}")
     print(f"安装向导已生成：{out.relative_to(REPO_ROOT)}（{out.stat().st_size / 1e6:.0f} MB）")
     sums = append_checksum(out)
-    if sums is not None:
-        print(f"校验和已更新：{sums.relative_to(REPO_ROOT)}")
+    print(f"校验和已更新：{sums.relative_to(REPO_ROOT)}")
     return 0
 
 

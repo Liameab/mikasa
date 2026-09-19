@@ -169,17 +169,36 @@ def write_checksums(zip_path: Path, exe_path: Path) -> Path:
     企业发布的惯例是把校验和与包一起给出；没有它，用户遇到"下载不完整导致
     装不上"时无从判断，只能反复重下。
 
+    **只覆盖自己负责的两行，其余行原样保留**（2026-09-19 发布前复查）：本函数
+    原先整份覆盖，而 Setup.exe 的哈希由 build_installer.py 追加。两个脚本的
+    **执行顺序**于是决定了清单完不完整——先编译安装包、后打包，最终清单里就没有
+    Setup 那一行，而应用内更新恰恰在清单里查它的哈希（install.py 的
+    expected_sha256），**所有用户的一键更新都会失败在"校验和文件里没有该记录"**，
+    且本地双击安装包一切正常、发布时看不出来。保留外来行之后任意顺序都对，同时
+    顺手清掉指向已不存在文件的旧行（换了版本号之后上一次的 Setup 行）。
+
     **行尾必须是 LF**（`newline="\n"`）：默认在 Windows 上会写成 CRLF，而
     `sha256sum -c` 在 Linux/macOS 上读 CRLF 清单会**整份失败**
     （`'name'$'\r': No such file or directory`）——2026-09-19 独立复算时实测
     踩中。校验和文件是给跨平台下载者用的，行尾不能跟着构建机走。
     """
     lines = []
+    names = set()
     for path in (zip_path, exe_path):
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         lines.append(f"{digest}  {path.name}")
+        names.add(path.name)
     out = zip_path.parent / "SHA256SUMS.txt"
-    out.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    # 外来行（安装包那一行归 build_installer.py 管）保留；指向已删文件的旧行丢掉
+    kept: list[str] = []
+    if out.is_file():
+        for line in out.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            name = line.split("  ", 1)[-1].strip().lstrip("*")
+            if name not in names and (out.parent / name).is_file():
+                kept.append(line)
+    out.write_text("\n".join(lines + kept) + "\n", encoding="utf-8", newline="\n")
     return out
 
 
