@@ -258,6 +258,11 @@ class NoteUpdateIn(BaseModel):
 
     title: str = Field(max_length=120, description="笔记标题（非空）")
     body: str = Field(description="Markdown 正文（长度校验同 NoteIn）")
+    rev: str | None = Field(
+        default=None,
+        max_length=32,
+        description="乐观锁令牌：GET 笔记时下发，保存时回传；不一致说明别处改过（409）",
+    )
 
     @field_validator("body")
     @classmethod

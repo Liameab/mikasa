@@ -57,14 +57,51 @@ def test_markdown_setext_heading_at_eof(tmp_path: Path):
     assert not any("===" in t for t in texts), "下划线不能混进正文段落"
 
 
-def test_markdown_skips_fenced_code(tmp_path: Path):
+def test_markdown_indexes_fenced_code_as_a_plain_paragraph(tmp_path: Path):
+    """代码块进索引，但**不参与结构解析**（2026-09-20 改）。
+
+    旧行为是整块跳过，代价是两条实事：整篇只有代码的笔记产不出任何可检索段落
+    （保存被 400 拒）、混合笔记里搜代码搜不到。跳过当初真正的动机是"代码里的
+    `#` 会被读成标题"——那是解析问题，所以现在整块按纯文本收进来，
+    同时钉住两件事：代码进了段落、代码里的 `#` 没有变成标题路径。
+    """
     md = tmp_path / "code.md"
-    code = "# 标题\n\n```python\nprint('含噪代码不该入段')\n```\n\n真实正文。"
+    code = "# 标题\n\n```python\n# 这是代码里的井号\nprint('now searchable')\n```\n\n真实正文。"
     md.write_text(code, encoding="utf-8")
     doc = load_markdown(md)
+
     texts = [p.text for p in doc.paragraphs]
     assert "真实正文。" in texts
-    assert not any("print(" in t for t in texts)
+    code_para = next((p for p in doc.paragraphs if "print(" in p.text), None)
+    assert code_para is not None, "代码块应当作为段落进索引（可检索）"
+    assert "# 这是代码里的井号" in code_para.text  # 代码原文保留
+    assert code_para.heading_path == "标题"  # 归属外层标题，而不是把 `#` 当新标题
+
+
+def test_markdown_code_only_still_yields_a_paragraph(tmp_path: Path):
+    """整篇只有代码块也要有可检索段落（笔记保存不再被 400 拒）。"""
+    md = tmp_path / "only-code.md"
+    md.write_text("```python\nprint('只有代码')\n```\n", encoding="utf-8")
+    doc = load_markdown(md)
+    assert [p.text for p in doc.paragraphs] == ["print('只有代码')"]
+
+
+def test_markdown_keeps_repeated_lines(tmp_path: Path):
+    """结构化格式不做"重复行清理"：三个同构表格的分隔行必须都在（2026-09-20）。
+
+    那条启发式是给 PDF 转文本的页眉页脚写的——套在 Markdown 上会把第 2、3 个
+    `| --- | --- |` 从**索引**里删掉（文件不动，但检索用的那份缺了几行）。
+    """
+    md = tmp_path / "tables.md"
+    md.write_text(
+        "# 三个表\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n"
+        "| c | d |\n| --- | --- |\n| 3 | 4 |\n\n"
+        "| e | f |\n| --- | --- |\n| 5 | 6 |\n",
+        encoding="utf-8",
+    )
+    doc = load_markdown(md)
+    joined = "\n".join(p.text for p in doc.paragraphs)
+    assert joined.count("| --- | --- |") == 3  # 一处都不能少
 
 
 # ---------------------------------------------------------------------------

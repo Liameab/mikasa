@@ -147,6 +147,10 @@ export async function openNoteEditor({ docId = null, onSaved = null } = {}) {
   // 404；source_ref 是跨编辑稳定的身份，用来把新 id 找回来（见 resolveNoteId）
   let targetId = docId;
   let targetRef = null;
+  // 打开时那一版的乐观锁令牌（GET /api/notes 下发）：保存时回传，让服务端判断
+  // "我打开之后有没有别人改过"。**保存成功后编辑器即关闭**，所以拿到新 rev 的
+  // 时机是下次打开，不需要保存响应回传。
+  let loadedRev = null;
   let pendingConfirm = false;
   let saving = false; // 保存请求在途：此时"放弃修改"是假承诺（PUT 已经发出去了）
   let previewTimer = null;
@@ -220,6 +224,7 @@ export async function openNoteEditor({ docId = null, onSaved = null } = {}) {
     cancelBtn.disabled = true;
     saveBtn.textContent = "保存中…";
     const payload = { title, body: editor.value };
+    if (editing && loadedRev) payload.rev = loadedRev; // 乐观锁：服务端据此判"别处改过没有"
     if (!editing) payload.folder_id = folderSelect.value ? Number(folderSelect.value) : null;
 
     let doc = null;
@@ -235,8 +240,27 @@ export async function openNoteEditor({ docId = null, onSaved = null } = {}) {
         const fresh = await resolveNoteId(targetRef);
         if (!backdrop.isConnected) return;
         if (fresh !== null && fresh !== targetId) {
+          // **重投前先看一眼盘上那份还是不是我打开的那一版**（乐观锁的真落点：
+          // 同名替换会把 id 换掉，所以"有人先存过"在服务端表现为换 id，而不是
+          // rev 不一致）。不是 → 停下来问用户，绝不"最后写入者胜"：
+          // uploads 副本是笔记唯一的副本，覆盖掉就没了。
+          const now = await callApi("GET", `/api/notes/${fresh}`);
+          if (!backdrop.isConnected) return;
+          const disk = now.ok ? now.body?.body : null;
+          if (typeof disk === "string" && disk !== snapshot.body) {
+            toast(
+              `保存失败：这条笔记在别处被改过了（多半是另一个标签页）——` +
+                `已拦下这次保存，免得覆盖那份改动。请复制你写的正文，关掉后重新打开再粘贴。`,
+              "error"
+            );
+            return;
+          }
           targetId = fresh;
-          res = await callApi("PUT", `/api/notes/${targetId}`, payload);
+          // 重投不带 rev：库里那版内容与打开时一致（上面刚确认过），
+          // 多半就是"响应丢了、同一份内容再送一次"。
+          const retry = { ...payload };
+          delete retry.rev;
+          res = await callApi("PUT", `/api/notes/${targetId}`, retry);
         }
       }
       if (!res.ok) {
@@ -324,6 +348,7 @@ export async function openNoteEditor({ docId = null, onSaved = null } = {}) {
     titleInput.value = loaded.body.document.title || "";
     targetRef = loaded.body.document.source_ref || null;
     editor.value = loaded.body.body;
+    loadedRev = loaded.body.rev || null;
     snapshot = { title: titleInput.value.trim(), body: editor.value };
   } else {
     try {

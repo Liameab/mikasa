@@ -184,7 +184,7 @@ def _cut_reference_tail(page_texts: list[str]) -> list[str]:
 
 def load_markdown(path: Path) -> LoadedDocument:
     """Markdown：按 H1-H3 标题生成 heading_path，段落 = 空行分隔。"""
-    text = _read_text(path)
+    text = _read_text(path, strip_repeats=False)  # 结构化格式不做重复行清理（见 _read_text）
     lines = text.splitlines()
 
     paragraphs: list[Para] = []
@@ -211,11 +211,23 @@ def load_markdown(path: Path) -> LoadedDocument:
         raw = lines[i]
         line = raw.strip()
         if _FENCED_CODE.match(raw.strip()):
-            # 跳过围栏代码块（对问答帮助不大，且含噪）
+            # 围栏代码块：整块按**纯文本段落**收进索引（2026-09-20 改）。
+            # 旧行为是整块跳过，理由写的是"对问答帮助不大"——代价却是两件实事：
+            # 整篇只有代码的笔记一个可检索段落都产不出（保存被 400 拒），混合笔记
+            # 里搜代码搜不到（参见 limitations 的"笔记：编辑器里看到的，不总是
+            # 检索用的那份"）。跳过当初真正的动机是"代码里的 `#` 会被读成标题"，
+            # 而那是**解析**问题：这里整块当一个段落，根本不做标题/围栏解析，
+            # 于是既能搜、又不会把代码读成结构。
+            flush_buffer()
+            code: list[str] = []
             i += 1
             while i < len(lines) and not _FENCED_CODE.match(lines[i].strip()):
+                code.append(lines[i])
                 i += 1
-            i += 1
+            i += 1  # 跳过收尾围栏；缺收尾围栏时 i 已越界，循环自然结束
+            body = "\n".join(line.rstrip() for line in code).strip("\n")
+            if body.strip():
+                paragraphs.append(Para(text=body, heading_path=_path_of(heading_stack)))
             continue
         atx = _ATX_HEADING.match(line)
         setext_next = False
@@ -447,7 +459,15 @@ def _drop_page_furniture(page_texts: list[str]) -> list[str]:
 _DEDUP_MAX_BYTES = 64 * 1024 * 1024
 
 
-def _read_text(path: Path) -> str:
+def _read_text(path: Path, *, strip_repeats: bool = True) -> str:
+    """读文本 + 保守清洗。
+
+    strip_repeats=False 用于**结构化**格式（Markdown）：那里的"重复行"往往是
+    合法内容——一篇含三个同构表格的笔记，`| --- | --- |` 分隔行会在索引里被删掉
+    第 2、3 个（文件不动，但检索用的那份缺了几行）。这条启发式原本是为 PDF 转
+    文本的页眉页脚写的（见 strip_repeated_lines 的 docstring），不该套在结构化
+    格式上。纯文本（.txt）保留它：用户手里那份 txt 很可能是从 PDF 转来的。
+    """
     size = path.stat().st_size
     raw = path.read_bytes()
     text = decode_text(raw)
@@ -459,6 +479,8 @@ def _read_text(path: Path) -> str:
             "文件较大（%.0f MB），跳过重复行清理以控制内存占用——页眉页脚可能残留",
             size / 1e6,
         )
+        return text
+    if not strip_repeats:
         return text
     # 页眉/页脚等噪声做保守清理（PDF 已做逐页处理，此处兜底）
     return strip_repeated_lines(text)

@@ -152,18 +152,30 @@ def test_create_note_empty_body_400(client):
     assert _uploads_files(settings) == []
 
 
-def test_create_note_code_only_body_400_with_note_flavoured_hint(client):
-    """整篇围栏代码块 → 400，文案要说明"代码块不进检索"，且不留残渣。
+def test_create_note_code_only_body_is_indexed(client):
+    """整篇只有代码块：**保存成功且可检索**（2026-09-20 改）。
 
-    这条路与上面那条**不是同一条**：路由层的空白判定放行（正文字符非空），
-    写盘 → ingest 解析出 0 段落才抛"文档为空"，全靠 `finally` 清干净临时目录。
-    所以"无残渣"的断言挂在这里才有意义（空正文那条根本走不到写盘）。
+    旧行为是 400（文案写着"代码块不进检索"）——根因在 loader 整块跳过围栏代码块。
+    现在代码作为**纯文本段落**进索引，笔记链路跟着受益：代码笔记存得下、也搜得到。
     """
     c, settings = client
-    resp = _create(c, body="```python\nprint(1)\n```\n")
+    resp = _create(c, body="```python\ndef quick_sort(a):\n    return a\n```\n")
+    assert resp.status_code == 201, resp.text
+    doc = resp.json()["document"]
+    assert "quick_sort" in _chunk_text(settings, doc["id"])
+
+
+def test_create_note_heading_only_body_400_with_note_flavoured_hint(client):
+    """整篇只有标题 → 400，文案说清是"只有标题"（代码块那条路已不再触发它）。
+
+    这条路仍要走一遍：正文字符非空（路由层放行）→ 写盘 → 解析出 0 段落才抛
+    "文档为空"，全靠 finally 清干净临时目录。
+    """
+    c, settings = client
+    resp = _create(c, body="# 只有标题\n\n## 还有一个\n")
     assert resp.status_code == 400, resp.text
     detail = resp.json()["detail"]
-    assert "代码块" in detail, detail
+    assert "标题" in detail, detail
     assert _rows(settings) == []
     assert _uploads_files(settings) == []
     assert _web_tmp_leftovers(settings) == [], "入库失败也必须把 web-tmp 独占子目录收干净"
@@ -277,6 +289,50 @@ def test_update_note_reverting_body_leaves_one_row_and_one_file(client):
     # 用正文里的句子断言：`# 快速排序` 那行被 markdown loader 当结构性标题
     # 吃掉（只进 heading_path，不进 chunk 正文），属既有 loader 行为
     assert "分治思想" in _chunk_text(settings, back.json()["document"]["id"])
+
+
+def test_update_note_rejects_a_stale_rev(client):
+    """乐观锁（2026-09-20）：回传的 rev 与库里当前那版不符 → 409，且不改库。
+
+    注意真实的"另一个标签页先存了"在**服务端表现为换 id**（同名替换 = 删旧行
+    插新行），所以那条路径由前端在"按标记找回后、重投之前"比对盘上正文拦住
+    （见 note-editor.js 的注释）；服务端这道闸管的是"同一个 id、内容却已变"
+    的情形（外部进程改过副本、或客户端手里的 rev 过期）。
+    """
+    c, settings = client
+    note_id = _create(c).json()["document"]["id"]
+    assert c.get(f"/api/notes/{note_id}").json()["rev"]  # GET 必须下发令牌
+
+    resp = c.put(
+        f"/api/notes/{note_id}",
+        json={"title": "快排笔记", "body": BODY + "\n改了", "rev": "deadbeefdeadbeef"},
+    )
+
+    assert resp.status_code == 409
+    assert "别处改过" in resp.json()["detail"]
+    assert "改了" not in c.get(f"/api/notes/{note_id}").json()["body"]  # 库没动
+
+
+def test_update_note_accepts_the_current_rev(client):
+    """带着**当前** rev 保存照常通过（锁不能把正常编辑挡住）。"""
+    c, settings = client
+    note_id = _create(c).json()["document"]["id"]
+    rev = c.get(f"/api/notes/{note_id}").json()["rev"]
+
+    resp = c.put(
+        f"/api/notes/{note_id}", json={"title": "快排笔记", "body": BODY + "\n改了", "rev": rev}
+    )
+
+    assert resp.status_code in (200, 201)
+    assert "改了" in c.get(f"/api/notes/{_rows(settings)[0].id}").json()["body"]
+
+
+def test_update_note_without_rev_still_works(client):
+    """不带 rev 的调用（旧构建 / 重投路径）行为不变——不能因为加锁把路堵死。"""
+    c, _ = client
+    note_id = _create(c).json()["document"]["id"]
+    resp = c.put(f"/api/notes/{note_id}", json={"title": "快排笔记", "body": BODY + "\n无 rev"})
+    assert resp.status_code in (200, 201)
 
 
 def test_update_and_get_reject_non_note_documents(client):

@@ -917,6 +917,20 @@ def _is_plain_filename(name: str) -> bool:
     return bool(name) and name not in {".", ".."} and Path(name).name == name and "\\" not in name
 
 
+def _note_rev(doc: Document) -> str:
+    """笔记的乐观锁令牌：**由内容哈希派生**（不直接吐 `file_sha256`）。
+
+    只取内容做派生，不掺 id / updated_at：同名替换会换 id（删旧行插新行），
+    而 updated_at 是秒级精度、同一秒内的两次保存看起来一模一样——用它们做版本
+    号会出现"自己刚存完却被判成别人改过"的假冲突。内容一变 rev 必变，这正是
+    "我打开的那一版还在不在"要判的东西。
+
+    用途见 `update_note`：两个标签页同编一条笔记时，后保存的那个收到 409 而不是
+    静默覆盖前一个（2026-09-20 用户点名要修的那条）。
+    """
+    return hashlib.sha256(f"note:{doc.file_sha256 or ''}".encode()).hexdigest()[:16]
+
+
 def _get_note(conn, doc_id: int) -> Document:
     """按 id 取笔记行；不存在或不是笔记 → 404（不泄露"这个 id 存在但不是笔记"）。"""
     doc = repo.get_document(conn, doc_id)
@@ -951,9 +965,12 @@ def _ingest_note_file(
 ) -> JSONResponse:
     """笔记入库的统一入口：复用上传尾链，只把"文档为空"翻成笔记用户看得懂的话。
 
-    整篇都是围栏代码块 / 只有标题时，loader 一个可检索段落都产不出来 →
+    整篇只有标题 / 全是空行时，loader 一个可检索段落都产不出来 →
     尾链抛「入库失败：ZhiwenError: 文档为空（无任何可检索段落）」——对写笔记的
-    人这是天书：得知道"代码块不进检索"这条已知行为才看得懂。
+    人这是天书：得知道"哪些东西进不了索引"才看得懂。
+
+    （2026-09-20 起围栏代码块**会**作为纯文本段落进索引，所以"整篇只有代码"
+    不再走这条路——本函数的文案只说剩下的那种：只有标题。）
     """
     try:
         return ingest_web_file(
@@ -972,8 +989,8 @@ def _ingest_note_file(
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "正文里没有可被检索的段落——整篇都是代码块或标题吗？"
-                    "代码块不进检索（见使用说明 6c），补一段说明文字再保存"
+                    "正文里没有可被检索的段落——只有标题、或全是空行吗？"
+                    "补一段正文（代码块也可以）再保存"
                 ),
             ) from exc
         raise
@@ -1039,6 +1056,19 @@ def update_note(
         uploads = settings.uploads_dir
         with open_db(settings.db_path) as conn:
             doc = _get_note(conn, doc_id)
+            # 乐观锁（2026-09-20）：编辑器回传它**打开那一版**的 rev，与库里现在的
+            # 对不上就拒绝——两个标签页同编一条笔记时，后保存的那个从此收到 409，
+            # 而不是把前一个的改动静默覆盖掉（uploads 副本是笔记唯一的副本，
+            # 覆盖不可恢复）。只在**回传了** rev 时判：旧构建不带它，不能因此断路。
+            if body.rev is not None and body.rev != _note_rev(doc):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "这条笔记在你打开之后被别处改过了（多半是另一个标签页）——"
+                        "已拦下这次保存，免得覆盖那份改动。"
+                        "请复制你写的正文，关掉编辑器重新打开这篇，再粘贴保存。"
+                    ),
+                )
             safe_name = PureWindowsPath(doc.file_path or "").name
             if not _is_plain_filename(safe_name):
                 raise HTTPException(
@@ -1125,4 +1155,5 @@ def get_note(
         raise HTTPException(
             status_code=404, detail="笔记副本暂时读不到（可能被其他程序占用），请稍后重试"
         ) from exc
-    return {"document": _public_document(doc), "body": decode_text(raw)}
+    # rev：编辑器保存时回传，用于"别处改过没有"的判定（见 _note_rev）
+    return {"document": _public_document(doc), "body": decode_text(raw), "rev": _note_rev(doc)}
