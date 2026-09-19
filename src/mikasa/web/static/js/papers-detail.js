@@ -11,7 +11,7 @@
 
 import { el } from "./common.js";
 
-const SOURCE_LABEL = { arxiv: "arXiv", openalex: "OpenAlex", core: "CORE" };
+const SOURCE_LABEL = { arxiv: "arXiv", openalex: "OpenAlex", core: "CORE", doaj: "DOAJ" };
 
 /** 被引数：0 与"不知道"是两回事，文案必须分开。 */
 export function citesText(paper) {
@@ -67,7 +67,9 @@ export function renderDetail(detail, paper, { onImport }) {
       el("span", { class: "paper-cites" }, citesText(paper)),
       " · ",
       SOURCE_LABEL[paper.source] || paper.source,
-      paper.oa ? " · 开放获取" : " · 无开放获取全文"
+      // 三种情况要分开说：有直链 PDF / 开放获取但只有落地页（DOAJ 常态）/
+      // 压根不是开放获取。混成一句会把"能自己去出版商页面拿"说成"没有"。
+      paper.pdf_url ? " · 开放获取" : paper.oa ? " · 开放获取（该来源未提供直链 PDF）" : " · 无开放获取全文"
     )
   );
 
@@ -88,9 +90,13 @@ export function renderDetail(detail, paper, { onImport }) {
   } else {
     const btn = el("button", { class: "btn primary", type: "button" }, "导入知识库");
     if (!paper.pdf_url) {
-      // 提前禁用：点了才吃 409 是更差的体验（ADR-0019 点 8 的先例）
+      // 提前禁用：点了才吃 409 是更差的体验（ADR-0019 点 8 的先例）。
+      // 禁用原因分两种——开放获取但只有落地页（DOAJ 收录的多数中文刊）、
+      // 与根本不是开放获取。文案不同，用户才知道下一步该点哪儿。
       btn.disabled = true;
-      btn.title = "该论文没有开放获取全文";
+      btn.title = paper.oa
+        ? "这篇是开放获取，但来源只给了文献页链接：点「打开原页」去出版商页面阅读或下载"
+        : "该论文没有开放获取全文";
     }
     btn.addEventListener("click", () => void onImport(paper, btn));
     actions.append(btn);

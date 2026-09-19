@@ -245,7 +245,7 @@ Four layers of upload safety (`web/routers/documents.py`): sanitize_filename
 over-limit, 413 → temp file unlinked in a finally block; at the DB layer
 `file_path` is redacted, closing off path probes.
 
-**Online paper search** (M7/M8, ADR-0019/0020) sits in `papers/`: a three-source
+**Online paper search** (M7/M8/ADR-0023) sits in `papers/` — four sources: arXiv, OpenAlex, CORE plus DOAJ (added 2026-09-19: a key-free open-access journal directory, and the landing place for Chinese OA journals), fetched in parallel behind a 30-second page deadline. The original paragraph:: a three-source
 search service (arXiv Atom, OpenAlex and CORE JSON, normalised into one
 `PaperResult`), rotating-interleaved pagination with per-source degradation, and
 a defended PDF downloader (public-address check per redirect hop, PDF sniffing,

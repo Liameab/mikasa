@@ -2,13 +2,13 @@
 """无头 Chrome「找论文」页 E2E 验收（M8，独立页 + 多源 + 筛选 + 详情）。
 
 自起一台隔离服务器（offline profile + MIKASA_DATA_DIR 指向临时目录），
-三个来源全部用**本地假源**替换（arXiv/OpenAlex/CORE 的 base URL 都是调用
-时读环境变量），假源同时扮三家的检索 API、单条查询与 PDF 主机（回环 http
+四个来源全部用**本地假源**替换（arXiv/OpenAlex/CORE/DOAJ 的 base URL 都是
+调用时读环境变量），假源同时扮四家的检索 API、单条查询与 PDF 主机（回环 http
 ——正是 papers/download.py 给 E2E 留的逃生门）。真实 Web 进程 + 真实浏览器
 走一遍用户流程：
 
-  1. 三栏布局齐备；来源列表由 `/api/papers/sources` 渲染（三个复选框）；
-  2. 检索 → 结果按**三源轮转**出现（arXiv/OpenAlex/CORE 各一）；
+  1. 三栏布局齐备；来源列表由 `/api/papers/sources` 渲染（四个复选框）；
+  2. 检索 → 结果按**四源轮转**出现（arXiv/OpenAlex/CORE/DOAJ 各一）；
   3. **筛选真的发出去了**：改年份/换排序后，从假源的 `/__recorded` 断言
      该源收到的查询里确实带上了条件（不靠脆弱的 DOM 反推）；
   4. **能力对齐**：只勾 arXiv 时"被引最多"排序整项禁用（它没有被引数据），
@@ -83,7 +83,7 @@ def _pdf_bytes() -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# 本地假源（扮 arXiv + OpenAlex + CORE + PDF 主机）
+# 本地假源（扮 arXiv + OpenAlex + CORE + DOAJ + PDF 主机）
 # ---------------------------------------------------------------------------
 
 
@@ -134,6 +134,11 @@ class _FakeSources(BaseHTTPRequestHandler):
         elif parts.path.startswith("/core/works/"):
             self._record("core", parts.query)
             self._core_fetch(parts.path)
+        elif parts.path.startswith("/doaj/"):
+            # DOAJ 的检索串在**路径**里（/doaj/<query>?pageSize=&page=），
+            # 与另外三个源不同——假源要照它的形状服务
+            self._record("doaj", parts.path)
+            self._doaj_search(parts.path)
         elif parts.path.startswith("/pdf/"):
             self._send_pdf()
         else:
@@ -249,6 +254,36 @@ class _FakeSources(BaseHTTPRequestHandler):
         n = int(path.rsplit("/", 1)[-1]) - 7000
         self._send(json.dumps(self._core_work(n, pdf=n != 1)).encode("utf-8"), "application/json")
 
+    # ---- DOAJ：检索串在路径里，返回 {total, results: [{id, bibjson}]} ----
+
+    def _doaj_item(self, n: int) -> dict:
+        return {
+            "id": f"{n:032x}",  # 32 位十六进制（与真实 DOAJ 的 id 同形状）
+            "bibjson": {
+                "title": f"DOAJ 测试论文 {n}：开放获取中文期刊",
+                "year": str(2000 + (n % 26)),
+                "abstract": f"这是第 {n} 篇 DOAJ 假论文的摘要（中文期刊，开放获取）。",
+                "author": [{"name": f"杜阿甲{n}"}, {"name": f"杜阿乙{n}"}],
+                "journal": {"title": "开放获取测试期刊", "language": ["ZH"]},
+                "identifier": [{"id": "1000-0000", "type": "pissn"}],
+                # 真实 DOAJ 的 link 全是落地页（没有直链 PDF）——假源照此，
+                # 好让 E2E 顺带验证"开放获取但没有直链 PDF"的那条文案
+                "link": [{"type": "fulltext", "url": "https://example.org/doaj-item"}],
+            },
+        }
+
+    def _doaj_search(self, path: str) -> None:
+        # 反查形如 /doaj/id:<32位>；检索形如 /doaj/<词>
+        if path.startswith("/doaj/id:"):
+            start, limit = 1, 1  # 反查只要一条
+        else:
+            start, limit = 1, CORPUS
+        payload = {
+            "total": CORPUS * 10,
+            "results": [self._doaj_item(i) for i in range(start, limit + 1)],
+        }
+        self._send(json.dumps(payload).encode("utf-8"), "application/json")
+
 
 class FakeSources:
     """假源的生命周期管理（后台线程 + 动态端口）。"""
@@ -275,13 +310,14 @@ class FakeSources:
             self._httpd.server_close()
 
     def env(self) -> dict:
-        """三个来源的 base URL 覆盖（调用时读取，见各来源模块头）。"""
+        """四个来源的 base URL 覆盖（调用时读取，见各来源模块头）。"""
         base = f"http://127.0.0.1:{self.port}"
         return {
             "MIKASA_PAPERS_ARXIV_BASE": f"{base}/arxiv",
             "MIKASA_PAPERS_ARXIV_PDF_BASE": self.pdf_base,
             "MIKASA_PAPERS_OPENALEX_BASE": f"{base}/openalex",
             "MIKASA_PAPERS_CORE_BASE": f"{base}/core",
+            "MIKASA_PAPERS_DOAJ_BASE": f"{base}/doaj",
         }
 
     def recorded(self) -> dict:
@@ -454,7 +490,7 @@ async def run(args):
             # ---- 1. 三栏布局 + 来源目录渲染 ----
             await wait_until(
                 cdp,
-                "document.querySelectorAll('#p-sources input[data-source]').length === 3",
+                "document.querySelectorAll('#p-sources input[data-source]').length === 4",
                 "来源复选框由目录渲染（3 个）",
             )
             layout = await cdp.evaluate("""(() => {
@@ -480,7 +516,7 @@ async def run(args):
               const rows = [...document.querySelectorAll('.paper-item')];
               return {
                 count: rows.length,
-                sources: rows.slice(0, 3).map(r => r.querySelector('.paper-src').textContent),
+                sources: rows.slice(0, 4).map(r => r.querySelector('.paper-src').textContent),
                 firstTitle: rows[0]?.querySelector('.paper-title')?.textContent || '',
                 firstMeta: rows[0]?.querySelector('.paper-meta')?.textContent || '',
                 snippetShown: !!rows[0]?.querySelector('.paper-snippet'),
@@ -651,13 +687,18 @@ async def run(args):
                 bad.append(f"三栏布局没生效（grid 列数 {layout['cols']}）")
             if layout["navActive"] != "papers":
                 bad.append(f"顶栏没有高亮「找论文」：{layout['navActive']}")
-            if layout["checked"] != 3 or layout["sourceLabels"] != ["arXiv", "OpenAlex", "CORE"]:
+            if layout["checked"] != 4 or layout["sourceLabels"] != [
+                "arXiv",
+                "OpenAlex",
+                "CORE",
+                "DOAJ",
+            ]:
                 bad.append(f"来源目录渲染不对：{layout}")
             if page1["count"] != PAGE_SIZE:
                 bad.append(f"第一页应为 {PAGE_SIZE} 条，实际 {page1['count']}")
             if not first_status["totalsShown"]:
                 bad.append(f"状态行没显示各源命中总数：{first_status['text']}")
-            if page1["sources"] != ["arXiv", "OpenAlex", "CORE"]:
+            if page1["sources"] != ["arXiv", "OpenAlex", "CORE", "DOAJ"]:
                 bad.append(f"首三条不是三源轮转：{page1['sources']}")
             if not page1["snippetShown"] or page1["firstMeta"].count("·") < 2:
                 bad.append(f"结果行信息不全：{page1}")

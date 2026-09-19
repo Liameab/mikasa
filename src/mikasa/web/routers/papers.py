@@ -31,6 +31,7 @@ from mikasa.papers import PaperError, PaperFilters, fetch_paper, source_catalog
 from mikasa.papers import search as papers_search
 from mikasa.papers.arxiv import validate_id as validate_arxiv_id
 from mikasa.papers.core import validate_id as validate_core_id
+from mikasa.papers.doaj import validate_id as validate_doaj_id
 from mikasa.papers.download import download_pdf
 from mikasa.papers.openalex import validate_id as validate_openalex_id
 from mikasa.storage import repo
@@ -56,6 +57,7 @@ _ID_VALIDATORS = {
     "arxiv": validate_arxiv_id,
     "openalex": validate_openalex_id,
     "core": validate_core_id,
+    "doaj": validate_doaj_id,
 }
 
 

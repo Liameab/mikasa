@@ -105,3 +105,13 @@ def test_guess_encoding_candidates_are_restricted():
     from mikasa.utils.text import guess_encoding
 
     assert guess_encoding("中文笔记 abc".encode("gbk")) in ("gbk", "gb18030")
+
+
+def test_strip_markup_removes_tags_and_restores_entities():
+    """标记剥除：删标签、还原实体、折叠空白——**不渲染富文本**。"""
+    from mikasa.utils.text import strip_markup
+
+    assert strip_markup("a <sub>1</sub> b") == "a 1 b"
+    assert strip_markup("A &amp; B &lt;5 mg/L") == "A & B <5 mg/L"
+    assert strip_markup("  多  <i>空</i>  白  ") == "多 空 白"
+    assert strip_markup("") == ""

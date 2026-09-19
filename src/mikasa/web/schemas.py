@@ -149,7 +149,11 @@ class PaperSearchIn(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     q: str = Field(min_length=1, max_length=200, description="检索词（中文或英文）")
-    sources: list[Literal["arxiv", "openalex", "core"]] | None = Field(
+    # 来源名单与 `papers.service.SOURCES` 的注册表必须同步——**加新来源时
+    # 这里漏改的表现是"前端勾了它、请求直接 422"**（2026-09-19 加 DOAJ 时
+    # 实测踩中）。tests/unit/web/test_papers_api.py 有一条守卫测试把两张表
+    # 钉在一起，以后不用靠记性。
+    sources: list[Literal["arxiv", "openalex", "core", "doaj"]] | None = Field(
         default=None,
         min_length=1,
         max_length=8,
@@ -171,7 +175,10 @@ class PaperImportIn(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    source: Literal["arxiv", "openalex", "core"] = Field(description="来源（id 必属单一来源）")
+    # 与 PaperSearchIn.sources 同一张名单（同样的漂移风险，同一守卫测试覆盖）
+    source: Literal["arxiv", "openalex", "core", "doaj"] = Field(
+        description="来源（id 必属单一来源）"
+    )
     id: str = Field(
         min_length=1,
         max_length=64,

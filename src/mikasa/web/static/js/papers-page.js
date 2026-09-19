@@ -20,7 +20,7 @@ import { initOnboard } from "./onboard.js";
 // 每页条数：20 → 50（2026-09-19）。二十条在大屏上一屏半就到底、"加载更多"
 // 点个不停；三源并发之后一页的成本主要是网络往返，条数翻倍几乎不增加等待。
 const PAGE_SIZE = 50;
-const SOURCE_LABEL = { arxiv: "arXiv", openalex: "OpenAlex", core: "CORE" };
+const SOURCE_LABEL = { arxiv: "arXiv", openalex: "OpenAlex", core: "CORE", doaj: "DOAJ" };
 
 /** 各源上游命中总数 → "OpenAlex 命中 69,966 条"（拿不到总数的源不出现）。 */
 function totalsText(totals) {

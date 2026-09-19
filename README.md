@@ -8,7 +8,7 @@ fusion), Chinese-aware structural chunking, citation tracing, and a three-stage 
 pipeline — all hand-written, **no RAG framework**. The code is transparent and the evaluation numbers
 are reproducible.
 
-**Status**: 738 tests passing, ruff + mypy clean. Actively developed; Windows builds (portable zip and
+**Status**: 778 tests passing, ruff + mypy clean. Actively developed; Windows builds (portable zip and
 installer) are published, with in-app update checking built in.
 
 ## Highlights
@@ -127,8 +127,9 @@ Open http://127.0.0.1:8000/ — four pages:
   newly ingested documents are searchable immediately. You can also **write Markdown notes right
   here** — type on the left, watch it render on the right, save, and the note is citable by the next
   question (and editable later).
-- **Find papers** — search arXiv, OpenAlex and CORE at once with year/language/open-access filters
-  and citation- or date-sorting, read a result's full abstract in the detail pane, and import its
+- **Find papers** — search arXiv, OpenAlex, CORE and DOAJ at once (three of the four need no key;
+  DOAJ is what brings in Chinese open-access journals) with year/language/open-access filters and
+  citation- or date-sorting, read a result's full abstract in the detail pane, and import its
   open-access PDF straight into the corpus (import, then ask about it right away). Results you have
   already imported are marked "already in your library". Each source declares what it supports, so
   options it cannot honour are disabled with a reason rather than silently ignored — a CNKI-like
@@ -155,7 +156,7 @@ API docs (Swagger) at http://127.0.0.1:8000/docs.
 - Python ≥ 3.11 (3.13 recommended); optional NVIDIA GPU for local inference;
 - Source comments and internal docs are written in **Chinese**; baseline gates are
   `ruff format`, `ruff check`, `mypy`, and `pytest`;
-- Current suite: **738 tests**, coverage ~93% (see the regression gate in `docs/evaluation.md`);
+- Current suite: **750 tests**, coverage ~93% (see the regression gate in `docs/evaluation.md`);
 - Zero-compilation install on Windows + CPython 3.13 (all dependencies ship prebuilt wheels;
   see `pyproject.toml` and ADR-0006/0008 for the version-pinning rationale).
 

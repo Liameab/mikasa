@@ -197,8 +197,11 @@ EvalJobManager（单槽状态机，threading.Lock）都活在进程内——
 → 后缀白名单 415 → `read(max+1)` 超限 413 → 临时文件 finally unlink；
 DB 层 `file_path` 脱敏，杜绝路径探针。
 
-**在线找论文**（M7/M8，ADR-0019/0020）住在 `papers/`：三源检索服务（arXiv Atom +
-OpenAlex 与 CORE 的 JSON，归一成一份 `PaperResult`）、轮转交错的翻页与逐源降级、
+**在线找论文**（M7/M8/ADR-0023）住在 `papers/`：四源检索服务——arXiv（Atom）与
+OpenAlex/CORE/DOAJ（JSON）各写一个来源模块，**归一成同一份 `PaperResult`**；
+并发取源 + 30 秒页级截止（挂住的源如实跳过）。DOAJ 是 2026-09-19 加入的第四个源：
+免密钥的开放获取期刊目录，中文 OA 期刊的落脚点（决策与授权边界见 ADR-0023）。
+其余不变：轮转交错的翻页与逐源降级、
 一个有防线的 PDF 下载器（逐跳复验公网地址、PDF 嗅探、50 MB 上限）。
 每个来源声明自己的能力（`SourceCaps`：年份过滤、被引排序、时间排序、语言过滤、
 开放获取处理方式），做不到的条件以 `notes` 如实回报——降级要说出来，绝不静默

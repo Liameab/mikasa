@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 
 from mikasa.papers.arxiv import ArxivSource
 from mikasa.papers.core import CoreSource
+from mikasa.papers.doaj import DoajSource
 from mikasa.papers.errors import PaperError
 from mikasa.papers.openalex import OpenAlexSource
 from mikasa.papers.sources import PaperFilters, PaperResult, PaperSource
@@ -46,6 +47,8 @@ SOURCES: dict[str, PaperSource] = {
     "arxiv": ArxivSource(),
     "openalex": OpenAlexSource(),
     "core": CoreSource(),
+    # 2026-09-19 追加：免密钥的开放获取期刊目录（中文 OA 期刊的落脚点）
+    "doaj": DoajSource(),
 }
 
 

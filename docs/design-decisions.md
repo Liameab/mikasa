@@ -48,6 +48,7 @@
 | ADR-0020 | "Find papers" becomes a page of its own: three sources, declared capabilities, an honest paging contract | Accepted |
 | ADR-0021 | Notes are ordinary documents: a `source_ref` marker, no schema change, force-ingest past content dedup | Accepted |
 | ADR-0022 | In-app updates: the client never sees a URL, checksums ship with the package, failed checks stay silent | Accepted |
+| ADR-0023 | A fourth source, DOAJ: key-free Chinese open-access journals, the licensing line, and no WAF bypassing | Accepted |
 
 ---
 
@@ -1252,3 +1253,65 @@ z-index 95), `DESIGN.md` + `docs/zh-CN/DESIGN.md` (the new rung and components);
 `tests/unit/update/test_release.py`, `tests/unit/update/test_install.py`,
 `tests/unit/web/test_update_api.py`; E2E `tools/chrome_update.py` (new: a fake GitHub, a throttled fake
 download, and no executable ever launched).
+
+---
+
+## ADR-0023 A fourth source, DOAJ: key-free Chinese open-access journals, and where the licensing line sits
+
+- Status: Accepted | the v0.1.3 cycle (2026-09-19; the user asked for "someone installs it and it just
+  works, without going off to register for anything")
+- Related: ADR-0019 / ADR-0020 (source protocol, capability declarations, interleaved paging — this
+  entry only appends a source to the registry, the protocol is untouched), ADR-0022 (the other half
+  of the same product demand: updating should also just work)
+
+**Problem**: each of the three existing sources has a gate — OpenAlex has required a free key since
+2026 (anonymous access gets a small trial allowance and then answers 429), CORE's anonymous rate
+limit is tight, and arXiv only carries English preprints. For "install it and it works", Chinese
+journals were simply missing, and asking people to register for a key first is exactly the
+experience the user rejected.
+
+**Decision**:
+
+1. **Integrate DOAJ**, the official directory of open-access journals: **no key**, an official REST
+   API, metadata declared CC0. Measured working for Chinese ("充填体" → 185 hits, matching Chinese
+   journals such as 工业水处理). Appended to the end of the registry — registry order is interleaving
+   order, and moving earlier entries would shift the global position mapping of existing sources.
+2. **Capabilities are declared from measurement, not from documentation**: the year range works
+   through query syntax (measured 185 → 115); sorting by citations/recency and language filtering
+   **timed out in testing**, so all three are declared unsupported — the UI greys them out with a
+   reason. Better to offer three fewer options than to pretend a filter works.
+3. **"Open access" and "one-click importable" are different things.** Every `link[]` we sampled was
+   a publisher landing page (0 of 25 ended in `.pdf`), so `pdf_url` is only set when a `.pdf` link
+   really appears. The UI therefore has three states rather than two: direct PDF (importable) /
+   open access but landing page only (import disabled, "open the original page") / not open access.
+4. **The licensing line is documented in code and docs** (the user asked directly): a source may be
+   integrated only if it explicitly permits programmatic access — DOAJ (metadata CC0), OpenAlex
+   (CC0), arXiv (official API terms, identifiable UA, polite rate limits), CORE (an open-access
+   aggregator whose API terms allow it). **Not** CNKI/Wanfang/NCPSSD and the like: their records are
+   commercially licensed or served through internal endpoints, and scraping them is a breach.
+5. **Bypassing bot detection is explicitly out of scope.** The most tempting candidate was the
+   National Center for Philosophy and Social Sciences Documentation (free Chinese journals, strong
+   social-science coverage); its search endpoint is anonymous JSON — but it sits behind a
+   **ChinaNetCenter WAF**: a real browser gets results while a plain HTTP client gets an empty shell
+   (same URL, same parameters: 265 hits in headless Chrome, `total: 0` from urllib). Getting past
+   that means solving the WAF's challenge cookie, which is working *against* the site's own bot
+   protection rather than a technical hurdle — so it is not done. (Its predecessor, NSSD, suspended
+   service on 2024-07-11 and folded into the current site.)
+6. **Upstream metadata is untrusted input; strip markup before display.** DOAJ passes paper HTML
+   straight through its abstract field (measured: the UI showed `1<sup>#</sup>`), hence
+   `utils/text.strip_markup` — it removes tags, restores entities and collapses whitespace, and
+   **does not render rich text** (rendering would import an XSS surface).
+
+**Consequences**: Chinese literature finally has a zero-configuration source, at the cost that its
+full texts mostly live on the publisher's page (point 3); the source count is now four, and the
+30-second page deadline plus parallel fetching (papers/service.py) keep "one more source" from
+meaning "one more wait"; the two hardcoded source lists in `schemas.py` are now pinned to the
+registry by a guard test (adding DOAJ tripped exactly that: ticking it in the UI produced a 422).
+
+**Code**: `papers/doaj.py` (new), `papers/service.py` (registry, parallel fetch, page deadline),
+`papers/http.py` (shared UA + network-level retry, which retries only network errors and 406),
+`utils/text.py` (`strip_markup`), `web/schemas.py` (both source lists), `web/routers/papers.py`
+(`_ID_VALIDATORS`), frontend `papers-page.js` / `papers-detail.js` (labels and the three full-text
+states); tests `tests/unit/papers/test_doaj.py` (new), `tests/unit/papers/test_papers_http.py` (new),
+`tests/unit/web/test_papers_api.py` (the guard test); E2E `tools/chrome_papers.py` (a fourth fake
+source).

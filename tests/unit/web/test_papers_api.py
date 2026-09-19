@@ -488,3 +488,27 @@ def test_papers_settings_none_untouched(client):
     resp = c.put("/api/papers/settings", json={})
     assert resp.json() == {"has_api_key": True}
     assert os.environ.get("OPENALEX_API_KEY") == "sk-keep"
+
+
+def test_search_schema_accepts_every_registered_source():
+    """守卫：schema 的来源名单必须覆盖注册表里的每一个来源。
+
+    2026-09-19 加 DOAJ 时实测踩中——注册表加了、schema 的 Literal 没加，
+    前端勾上它就是一个 422（"服务端不认识这个来源"），而且只在真点的时候
+    才暴露。两张表各写一份是必要的（pydantic 要 Literal 才能给 422 文案），
+    所以要有一条测试把它们钉在一起。
+    """
+    from typing import get_args
+
+    from mikasa.papers import source_catalog
+    from mikasa.web.schemas import PaperImportIn, PaperSearchIn
+
+    registered = {item["name"] for item in source_catalog()}
+    # 检索请求体：list[Literal[...]] | None
+    annotation = PaperSearchIn.model_fields["sources"].annotation
+    inner = next(a for a in get_args(annotation) if a is not type(None))
+    search_allowed = set(get_args(get_args(inner)[0]))
+    # 导入请求体：裸 Literal[...]（导入只能指一个来源）
+    import_allowed = set(get_args(PaperImportIn.model_fields["source"].annotation))
+    for label, allowed in (("检索", search_allowed), ("导入", import_allowed)):
+        assert registered <= allowed, f"{label} schema 缺少这些来源：{sorted(registered - allowed)}"

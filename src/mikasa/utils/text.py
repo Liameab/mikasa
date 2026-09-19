@@ -12,6 +12,7 @@ Windows 环境的中文文档常见坑（GBK 编码、PDF 页眉页脚、粘连�
 
 from __future__ import annotations
 
+import html
 import re
 import unicodedata
 
@@ -142,3 +143,20 @@ def fold_title(text: str, limit: int = 20) -> str:
     """
     folded = " ".join(text.split())
     return folded if len(folded) <= limit else folded[:limit]
+
+
+# 标记剥除：来源 API 的标题/摘要是"富文本转义过的"纯字符串。DOAJ 的中文
+# 期刊摘要实测带 <sub>/<sup>/<i> 一类标签（2026-09-19 界面上直接显示成
+# `1<sup>#</sup>`）——它把论文 HTML 里的标记原样塞进了元数据字段。
+_TAG_RE = re.compile(r"<[^>]{1,200}>")
+
+
+def strip_markup(text: str) -> str:
+    """去掉字符串里的 HTML 标记并还原实体（`&amp;` → `&`）。
+
+    只做"变成可读纯文本"这一件事：**不渲染富文本**——上游元数据是不可信
+    输入，把它当 HTML 渲染就是把 XSS 面引进来；标签直接删掉、实体还原成
+    字符，剩下的就是人要读的那句话。删标签后多余的空白一并折叠。
+    """
+    without_tags = _TAG_RE.sub(" ", text)
+    return " ".join(html.unescape(without_tags).split())
