@@ -3,7 +3,7 @@
 
 产物：dist/Mikasa-v<版本>-win64.zip，解压后的结构：
 
-    Mikasa-v0.1.1-win64/
+    Mikasa-v0.1.2-win64/
       Install.bat          ← 双击它安装（会问要不要建桌面快捷方式）
       install.ps1
       Uninstall.bat        ← 安装时也会被拷进安装目录
@@ -151,7 +151,7 @@ def build_release_dir(version: str) -> Path:
 
 def zip_dir(folder: Path) -> Path:
     """压缩。写入时把顶层目录一起带上——解压出来是一个文件夹而不是一堆散件。"""
-    # 不能用 with_suffix(".zip")：它替换**最后一个后缀**，而 "Mikasa-v0.1.1-win64"
+    # 不能用 with_suffix(".zip")：它替换**最后一个后缀**，而 "Mikasa-v0.1.2-win64"
     # 的 ".0-win64" 会被当成后缀 → 得到 "Mikasa-v0.1.zip"（2026-09-11 实测踩中）。
     zip_path = folder.parent / (folder.name + ".zip")
     if zip_path.exists():
