@@ -111,7 +111,7 @@ _ver_match = _re.search(r'__version__\s*=\s*"([^"]+)"', _ver_src)
 if _ver_match is None:
     raise SystemExit("读不到 __version__（src/mikasa/__init__.py 改了写法？）")
 _version = _ver_match.group(1)
-# FixedFileInfo 要 4 段整数："0.1.4" → (0, 1, 4, 0)
+# FixedFileInfo 要 4 段整数："0.1.5" → (0, 1, 5, 0)
 _quad = tuple(int(p) for p in _version.split(".")) + (0, 0, 0, 0)
 
 _vi_dir = ROOT / "build"

@@ -4,5 +4,5 @@
 技术选型与设计决策见 docs/design-decisions.md 与 docs/architecture.md。
 """
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 __all__ = ["__version__"]
