@@ -59,6 +59,24 @@
         <button id="s-models-refresh" class="icon-btn" type="button" title="读取本机 Ollama 模型列表">↻</button>
         <datalist id="s-model-options"></datalist>
       </label>
+      <!-- 本机（Ollama）专属的两个旋钮：只在这条来源下出现（api 档没有这两个概念）。
+           思考模式：实测同一个问题 开=14.2s 且可能答不上、关=1.4s
+           上下文长度：越大能塞进越多检索块，也越慢越吃显存 -->
+      <label class="s-row hidden" id="s-local-row">
+        <span class="s-name">本机选项</span>
+        <select id="s-think" title="思考模式：本机模型实测开关相差 10 倍（关=快）">
+          <option value="">思考：模型默认</option>
+          <option value="off">思考：关闭（快）</option>
+          <option value="on">思考：开启（慢，难题更稳）</option>
+        </select>
+        <select id="s-num-ctx" title="上下文长度：越大能塞进越多检索块，也越慢越吃显存">
+          <option value="">上下文：Ollama 默认</option>
+          <option value="4096">上下文 4096</option>
+          <option value="8192">上下文 8192</option>
+          <option value="16384">上下文 16384</option>
+          <option value="32768">上下文 32768</option>
+        </select>
+      </label>
       <label class="s-row">
         <span class="s-name">API 密钥</span>
         <input id="s-api-key" type="password" placeholder="粘贴密钥" autocomplete="off">

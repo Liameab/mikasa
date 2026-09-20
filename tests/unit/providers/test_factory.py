@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 import sys
-import types
 
 import pytest
 
@@ -24,6 +23,7 @@ from mikasa.providers import (
     MockLLM,
     NoEmbedding,
     NoReranker,
+    OllamaNativeLLM,
     OpenAICompatLLM,
     RerankerProvider,
     get_embedding,
@@ -116,10 +116,14 @@ def test_api_reranker_http_error_wrapped(monkeypatch):
 
 
 def test_factory_dispatches_local(local_settings):
-    """local：LLM/embedding 分派到 OpenAICompatLLM / LocalFastEmbed。"""
+    """local：LLM 走 **Ollama 原生接口**、embedding 走 LocalFastEmbed。
+
+    2026-09-20 起 local 档不再是 OpenAICompatLLM：思考模式与上下文长度这两个
+    旋钮只有原生接口认（兼容面静默忽略，实测同一个问题 14.2s vs 1.4s）。
+    """
     llm = get_llm(local_settings.llm)
     embedding = get_embedding(local_settings.embedding)
-    assert isinstance(llm, OpenAICompatLLM)
+    assert isinstance(llm, OllamaNativeLLM)
     assert isinstance(embedding, LocalFastEmbed)
     assert llm.model == local_settings.llm.model
     assert embedding.model == local_settings.embedding.model
@@ -240,46 +244,18 @@ def test_local_reranker_missing_dependency_raises(api_settings, monkeypatch):
         reranker.rerank("q", ["doc"], top_n=3)
 
 
-def test_local_llm_without_key_injects_placeholder(local_settings, monkeypatch):
-    """local（Ollama）免密钥：构造客户端时注入占位 key（ADR-0014）。
+def test_local_llm_needs_no_key(local_settings):
+    """local（Ollama）免密钥（ADR-0014）：原生通道**根本没有密钥这回事**。
 
-    不联网：用假 openai 模块接管 _get_client 的延迟导入，捕获构造参数
-    断言注入值。前提由配置档保证：local 的 api_key_env="" → api_key 恒
-    None——豁免点选在 provider 层（若在 settings 层放行，api 档忘填
-    密钥会被静默放行，见 ADR-0014）。
+    旧断言盯的是"OpenAI 客户端被塞了占位 key `ollama`"——那是兼容面的形态。
+    local 改走 Ollama 原生接口后（2026-09-20，为了思考模式与上下文长度两个旋钮），
+    密钥概念从这条链路上消失：构造即用、不碰 openai SDK。
+    api 档"必须有密钥"那条闸门仍由 OpenAICompatLLM 把守（见上面的 api 用例）。
     """
-    captured: dict[str, object] = {}
-
-    class _FakeResponse:
-        choices = [types.SimpleNamespace(message=types.SimpleNamespace(content="你好"))]
-        usage = None
-
-    class _FakeOpenAI:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-        @property
-        def chat(self):
-            return self
-
-        @property
-        def completions(self):
-            return self
-
-        def create(self, **kwargs):
-            del kwargs
-            return _FakeResponse()
-
-    fake_module = types.ModuleType("openai")
-    fake_module.OpenAI = _FakeOpenAI  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "openai", fake_module)
-
     llm = get_llm(local_settings.llm)
     assert local_settings.llm.api_key is None  # 前提：local 无密钥可用
-    out = llm.complete([{"role": "user", "content": "hi"}], temperature=0.1, max_tokens=8)
-    assert out.text == "你好"
-    assert captured["api_key"] == "ollama"  # 占位 key：Ollama /v1 只要求非空
-    assert str(captured["base_url"]).endswith("/v1")
+    assert isinstance(llm, OllamaNativeLLM)
+    assert llm.model == local_settings.llm.model
 
 
 # ---------------------------------------------------------------------------

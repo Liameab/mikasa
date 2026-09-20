@@ -10,6 +10,7 @@ from mikasa.config.settings import EmbeddingConfig, LLMConfig, RerankerConfig, V
 from mikasa.errors import ConfigError
 from mikasa.providers.embedding import ApiEmbedding, EmbeddingProvider, LocalFastEmbed, NoEmbedding
 from mikasa.providers.llm import Completion, LLMProvider, MockLLM, OpenAICompatLLM
+from mikasa.providers.ollama import OllamaNativeLLM
 from mikasa.providers.reranker import ApiReranker, LocalReranker, NoReranker, RerankerProvider
 from mikasa.providers.vision import NoVision, OpenAICompatVision, VisionProvider
 
@@ -25,6 +26,7 @@ __all__ = [
     "NoEmbedding",
     "NoReranker",
     "NoVision",
+    "OllamaNativeLLM",
     "OpenAICompatLLM",
     "OpenAICompatVision",
     "RerankerProvider",
@@ -40,8 +42,13 @@ def get_llm(config: LLMConfig) -> LLMProvider:
     """依据配置构造 LLM 提供方实例（mock / api / local）。"""
     if config.backend == "mock":
         return MockLLM(config)
-    if config.backend in ("api", "local"):
+    if config.backend == "api":
         return OpenAICompatLLM(config)
+    if config.backend == "local":
+        # local 档必须走 Ollama **原生**接口：思考模式与上下文长度这两个旋钮
+        # 只有原生接口认（OpenAI 兼容面会静默忽略，见 OllamaNativeLLM 的实测数据）。
+        # 把非 Ollama 的本机服务（LM Studio / vLLM）指过来的话，请用 api 档 + 自定义地址。
+        return OllamaNativeLLM(config)
     raise ConfigError(f"未知 LLM backend：{config.backend}")
 
 

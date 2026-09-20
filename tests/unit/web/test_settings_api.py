@@ -147,6 +147,59 @@ def test_put_validation_is_chinese_422(client):
     assert resp.status_code == 422
 
 
+def test_put_local_persists_think_and_num_ctx(client):
+    """本机旋钮必须落进覆盖层并能读回——面板上那两个开关不能只是装饰。
+
+    2026-09-20 用户报障的正是"本机慢且答得少"：思考模式与上下文长度这两个旋钮
+    只有在配置里真的存下来、并传进 Ollama 原生请求，才谈得上可调。
+    """
+    c, _settings = client
+    resp = c.put(
+        "/api/settings/model",
+        json={
+            "backend": "local",
+            "base_url": "http://127.0.0.1:11434/v1",
+            "model": "qwen3:8b",
+            "think": False,
+            "num_ctx": 8192,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["think"] is False
+    assert resp.json()["num_ctx"] == 8192
+
+    # 读回（面板打开时的取数口）
+    body = c.get("/api/settings/model").json()
+    assert body["think"] is False and body["num_ctx"] == 8192
+
+    # 内存里的配置也换了（热生效），并且只动 llm 段
+    new = c.app.state.settings
+    assert new.llm.think is False and new.llm.num_ctx == 8192
+    assert new.embedding.backend == "none"
+
+    # 落盘可见：覆盖层里就是这两个键（下次启动仍然生效）
+    overlay = user_config_path().read_text(encoding="utf-8")
+    assert "think: false" in overlay
+    assert "num_ctx: 8192" in overlay
+
+
+def test_put_local_can_follow_model_defaults(client):
+    """两个旋钮传 null = 跟随默认（"没配置"与"关掉"是两件事）。"""
+    c, _settings = client
+    resp = c.put(
+        "/api/settings/model",
+        json={
+            "backend": "local",
+            "base_url": "http://127.0.0.1:11434/v1",
+            "model": "qwen3:8b",
+            "think": None,
+            "num_ctx": None,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["think"] is None and resp.json()["num_ctx"] is None
+
+
 def test_put_local_backend_defaults_no_key_env(client):
     """local（Ollama）免密钥：api_key_env 归空，密钥字段被忽略。"""
     c, _settings = client
@@ -236,14 +289,42 @@ def test_probe_uses_stored_key_when_omitted(client, fake_probe):
     assert fake_probe[0].seen_key == "sk-stored"
 
 
-def test_probe_local_backend_is_keyless(client, fake_probe):
+def test_probe_local_backend_uses_the_native_channel(client, monkeypatch):
+    """local 探测必须走 **Ollama 原生通道**，且不需要密钥。
+
+    2026-09-20 起 local 档的正式问答走原生接口（思考/上下文两个旋钮只有它认）。
+    探测如果还走兼容面，就会给出与真实使用不符的结论——实测 qwen3:8b 在兼容面
+    上光推理就 14 秒，用户的"测试连接"必然 20 秒超时（真实报障就是这个）。
+    """
     c, _settings = client
+    created: list = []
+
+    class FakeNative:
+        def __init__(self, config, *, timeout: float | None = None) -> None:
+            self.config = config
+            self.timeout = timeout
+            created.append(self)
+
+        def complete(self, messages, *, temperature: float, max_tokens: int):
+            return SimpleNamespace(text="你好")
+
+    monkeypatch.setattr("mikasa.web.routers.settings.OllamaNativeLLM", FakeNative)
     resp = c.post(
         "/api/settings/model/test",
-        json={"backend": "local", "base_url": "http://localhost:11434/v1", "model": "qwen3:8b"},
+        json={
+            "backend": "local",
+            "base_url": "http://localhost:11434/v1",
+            "model": "qwen3:8b",
+            "think": False,
+            "num_ctx": 8192,
+        },
     )
     assert resp.json()["ok"] is True
-    assert fake_probe[0].seen_key is None  # 占位 key 由 provider 层注入（ADR-0014）
+    assert len(created) == 1
+    # 面板上的两个本机旋钮原样传到探测请求里（否则探测的就不是用户要用的那条路）
+    assert created[0].config.think is False
+    assert created[0].config.num_ctx == 8192
+    assert created[0].config.api_key is None  # local 无密钥
 
 
 def test_probe_failure_translated_to_ok_false(client, monkeypatch):
@@ -305,3 +386,24 @@ def test_ollama_models_default_url_and_failure(client, monkeypatch):
     assert seen["base_url"] == "http://localhost:11434/v1"  # 缺省 = local 档默认端点
     assert resp.status_code == 502
     assert "Ollama 服务不可达" in resp.json()["error"]["message"]
+
+
+def test_probe_rejects_lan_addresses(client):
+    """面板的 base_url 过出网闸门：内网段拒绝（SSRF）。
+
+    这些端点任何网页都能触发（`--host 0.0.0.0` 下同网段也能）——不加闸就是
+    一个内网探活扫描器：请求 `?base_url=http://192.168.1.1` 会如实区分
+    "拒绝连接 / 超时"，`http://169.254.169.254/v1` 也会被打（2026-09-20 审查实测）。
+    策略与论文下载器共用（utils/net.py）。想指向局域网模型服务请直接改配置文件。
+    """
+    c, _ = client
+    for bad in ("http://192.168.1.1/v1", "http://10.0.0.5:8000/v1", "http://169.254.169.254/v1"):
+        resp = c.post(
+            "/api/settings/model/test",
+            json={"backend": "api", "base_url": bad, "model": "m", "api_key": "sk-x"},
+        )
+        assert resp.status_code == 422, f"{bad} 应被拒绝：{resp.text}"
+        assert "安全策略" in resp.json()["detail"]
+    # 回环（本机 Ollama / 假源）必须照常放行——只是探测结果由下游如实给
+    ok = c.get("/api/settings/ollama/models?base_url=http://127.0.0.1:9/v1")
+    assert ok.status_code in (200, 502), ok.text

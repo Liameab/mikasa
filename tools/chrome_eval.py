@@ -26,14 +26,11 @@ local 档一轮要几分钟且结果不可复现。这里起一台**本机回环
 import argparse
 import asyncio
 import base64
-import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -46,6 +43,7 @@ from tools.chrome_corpus import (  # noqa: E402
     wait_until,
 )
 from tools.chrome_probe import CDP, log, wait_json_list  # noqa: E402
+from tools.fake_llm import make_handler, serve  # noqa: E402
 
 REPO_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MIKASA_EXE = REPO_ROOT / ".venv" / "Scripts" / "mikasa.exe"
@@ -105,51 +103,7 @@ def _fake_reply(system: str, user: str) -> str:
     return "根据资料中的说明：[1] 这是端到端验收用的模拟回答。"
 
 
-class _FakeLLMHandler(BaseHTTPRequestHandler):
-    """假 OpenAI 兼容端点：POST /v1/chat/completions（非流式）。"""
-
-    calls = 0  # 类级计数：收尾时打印，便于判断"到底调没调模型"
-
-    def log_message(self, *args):  # noqa: D102 - 静音 http.server 的 stderr 噪声
-        pass
-
-    def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler 的接口名
-        if not self.path.rstrip("/").endswith("/chat/completions"):
-            self.send_error(404)
-            return
-        length = int(self.headers.get("Content-Length") or 0)
-        body = json.loads(self.rfile.read(length) or b"{}")
-        messages = body.get("messages") or []
-        system = next((m.get("content", "") for m in messages if m.get("role") == "system"), "")
-        user = next((m.get("content", "") for m in messages if m.get("role") == "user"), "")
-        _FakeLLMHandler.calls += 1
-        payload = {
-            "id": "chatcmpl-fake-eval",
-            "object": "chat.completion",
-            "created": 0,
-            "model": body.get("model", "fake-eval-1"),
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {"role": "assistant", "content": _fake_reply(system, user)},
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        }
-        data = json.dumps(payload).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-
-
-def _start_fake_llm(port: int) -> ThreadingHTTPServer:
-    """起假模型服务（守护线程；finally 里 shutdown）。"""
-    server = ThreadingHTTPServer(("127.0.0.1", port), _FakeLLMHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    return server
+_FAKE = make_handler(_fake_reply)  # 按提示词分流；两种协议都答（见 fake_llm 模块头）
 
 
 async def click(cdp, selector: str, what: str) -> None:
@@ -184,7 +138,7 @@ async def run(args):
         args.fake_port = args.fake_port or free_port()
 
         # 0) 假模型服务先起好：App 一起来（含预检）就能用
-        fake = _start_fake_llm(args.fake_port)
+        fake = serve(_FAKE, args.fake_port)
         log(f"假模型服务：http://127.0.0.1:{args.fake_port}/v1/chat/completions")
 
         # 1) 隔离配置 + 灌示例语料（内置题库的 47 道可答题与它逐块对齐）
@@ -383,7 +337,7 @@ async def run(args):
             if cdp.errors:
                 bad.append("console 有错误：" + "；".join(cdp.errors[:3]))
 
-        log(f"假模型共被调用 {_FakeLLMHandler.calls} 次")
+        log(f"假模型共被调用 {len(_FAKE.calls)} 次")
         if bad:
             log("验收未过：\n  - " + "\n  - ".join(bad))
             log("服务日志尾：\n" + (tmp / "serve.log").read_text(encoding="utf-8")[-2000:])

@@ -21,6 +21,7 @@ import os
 import threading
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import ValidationError
@@ -38,8 +39,9 @@ from mikasa.config.settings import (
 )
 from mikasa.errors import ProviderError, ZhiwenError, strip_paths
 from mikasa.providers.llm import OpenAICompatLLM
-from mikasa.providers.ollama import fetch_ollama_tags
+from mikasa.providers.ollama import OllamaNativeLLM, fetch_ollama_tags
 from mikasa.providers.vision import OpenAICompatVision
+from mikasa.utils.net import default_port, reject_reason
 from mikasa.web.deps import get_services, get_settings
 from mikasa.web.schemas import ModelSettingsIn, ModelTestIn, VisionSettingsIn, VisionTestIn
 
@@ -69,12 +71,39 @@ def _model_payload(settings: Settings) -> dict[str, Any]:
         "model": settings.llm.model,
         "api_key_env": settings.llm.api_key_env or "",
         "has_api_key": settings.llm.api_key is not None,
+        # local 档的两个旋钮（api 档为 None）：前端据此回填「思考模式 / 上下文长度」
+        "think": settings.llm.think,
+        "num_ctx": settings.llm.num_ctx,
         "profile": settings.profile,
         "embedding_model": settings.embedding.model,
         # locked：配置来自 --config / config.yaml 时面板不可写（PUT 会 400），
         # 前端据此把表单置灰——"能填但保存无效"比直接禁用更气人。
         "locked": settings.config_path is not None,
     }
+
+
+def _guard_base_url(base_url: str) -> None:
+    """面板里用户可填的 base_url 要先过出网闸门（SSRF）。
+
+    策略本体在 `utils/net.py`（与论文下载器共用）：**公网或回环放行，内网段拒绝**。
+    为什么面板也要这道闸：这些端点任何网页都能触发（`--host 0.0.0.0` 下同网段
+    也能），不加闸就等于给了一个"内网探活扫描器 + 云元数据探测"的原语
+    （2026-09-20 审查实测）。想指向局域网里的模型服务，请直接编辑配置文件——
+    面板这条路刻意只放行公网与本机。
+    """
+    parts = urlsplit(base_url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise HTTPException(status_code=422, detail="API 地址必须是 http(s)://… 的完整地址")
+    reason = reject_reason(
+        parts.hostname,
+        parts.port or default_port(parts.scheme),
+        allow_loopback=True,
+        # 解析不了不算拒绝：探测端点"恒 200 + ok:false"的契约要保住，
+        # 让用户看到"连不上"而不是参数错误（见 utils/net.py 的说明）
+        strict_resolution=False,
+    )
+    if reason is not None:
+        raise HTTPException(status_code=422, detail=f"API 地址不被允许：{reason}")
 
 
 def _key_env_name(body: ModelSettingsIn) -> str:
@@ -103,6 +132,11 @@ def _validated_llm_fields(body: ModelSettingsIn) -> dict[str, Any]:
         "api_key_env": _key_env_name(body),
         "model": model,
     }
+    if body.backend == "local":
+        # 思考模式与上下文长度是本地档专属：**显式写进覆盖层**（面板即真相）。
+        # api 档不写——省得给云端也塞两个没有意义的键。
+        fields["think"] = body.think
+        fields["num_ctx"] = body.num_ctx
     try:
         LLMConfig(**fields)
     except ValidationError as exc:
@@ -180,6 +214,7 @@ def test_model_settings(
         raise HTTPException(status_code=422, detail="模型名不能为空")
     if not base_url:
         raise HTTPException(status_code=422, detail="API 地址（base_url）不能为空")
+    _guard_base_url(base_url)  # SSRF：内网段拒绝（见 helper docstring）
 
     env_name = body.api_key_env.strip()
     if body.api_key:
@@ -204,8 +239,19 @@ def test_model_settings(
                 temperature=0.0,
                 max_tokens=8,  # 探测只要"有回应"，不求内容
                 timeout_seconds=20.0,
+                # 带上用户当前的两个本机旋钮：否则本机思考型模型会把 20 秒预算
+                # 全花在推理上（实测 qwen3:8b 光推理就 14 秒），探测必然超时
+                think=body.think,
+                num_ctx=body.num_ctx,
             )
-            llm = OpenAICompatLLM(cfg, max_retries=0)  # 硬上限：一次 20s，不排队重试
+            # 走**与正式问答同一条通道**：local 用 Ollama 原生接口（思考/上下文
+            # 两个参数只有它认），api 用 OpenAI 兼容客户端。探测的意义正是"这条路
+            # 通不通"，选错通道会给出与真实使用不符的结论。
+            llm = (
+                OllamaNativeLLM(cfg)
+                if body.backend == "local"
+                else OpenAICompatLLM(cfg, max_retries=0)  # 硬上限：一次 20s，不排队重试
+            )
             started = time.monotonic()
             result = llm.complete(
                 [{"role": "user", "content": "你好"}], temperature=0.0, max_tokens=8
@@ -233,6 +279,7 @@ def ollama_models(base_url: str = "") -> dict[str, Any]:
     文案就是 doctor 那份"怎么启动 Ollama"的指引。
     """
     target = base_url.strip() or "http://localhost:11434/v1"
+    _guard_base_url(target)  # SSRF：内网段拒绝（见 helper docstring）
     try:
         models = fetch_ollama_tags(target)
     except RuntimeError as exc:
@@ -388,6 +435,7 @@ def test_vision_settings(body: VisionTestIn) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="视觉模型名不能为空")
     if not base_url:
         raise HTTPException(status_code=422, detail="API 地址（base_url）不能为空")
+    _guard_base_url(base_url)  # SSRF：内网段拒绝（见 helper docstring）
     env_name = body.api_key_env.strip()
     if body.api_key:
         key: str | None = body.api_key

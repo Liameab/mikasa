@@ -94,6 +94,11 @@ class ModelSettingsIn(BaseModel):
     model: str = Field(default="", max_length=200, description="模型名")
     api_key_env: str = Field(default="", max_length=100, description="密钥所在环境变量名")
     api_key: str | None = Field(default=None, max_length=500, description="None=不改/空串=清除")
+    # local 档专属（api 档忽略）：None = 不写进请求、跟随默认——"没配置"与"关掉"是两件事
+    think: bool | None = Field(default=None, description="None=模型默认；False=关思考（快）")
+    num_ctx: int | None = Field(
+        default=None, ge=2048, le=131072, description="None=Ollama 默认；否则为上下文 token 数"
+    )
 
 
 class ModelTestIn(BaseModel):
@@ -109,6 +114,8 @@ class ModelTestIn(BaseModel):
     model: str = Field(default="", max_length=200)
     api_key_env: str = Field(default="", max_length=100)
     api_key: str | None = Field(default=None, max_length=500, description="缺省=用已存密钥")
+    think: bool | None = Field(default=None, description="local：思考模式（None=模型默认）")
+    num_ctx: int | None = Field(default=None, ge=2048, le=131072, description="local：上下文长度")
 
 
 class VisionSettingsIn(BaseModel):

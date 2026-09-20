@@ -165,7 +165,19 @@ class AnswerConfig(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    """生成端大模型配置。backend: api / local（Ollama，OpenAI 兼容）/ mock。"""
+    """生成端大模型配置。backend: api / local（Ollama 原生接口）/ mock。
+
+    `think` / `num_ctx` 是 **local 档专属**的两个旋钮（api 档忽略）。实测（2026-09-20，
+    Ollama 0.34.2 + qwen3:8b，同一问题）：
+
+      - `think: false` **1.4s** 给出答案；`think: true` 14.2s 且把 400 token 的输出
+        预算全烧在推理上、答案为空——**同一个问题快 10 倍**，这是本机最划算的一刀；
+      - `num_ctx` 只在 Ollama 原生接口生效：默认 4096（本机实测），调大能塞进更多
+        检索块，代价是更慢、更吃显存。
+
+    两者都是 `None` 时**不写进请求**（跟随模型 / Ollama 默认）——"没配置"与"关掉"
+    是两件事。
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -176,6 +188,8 @@ class LLMConfig(BaseModel):
     temperature: float = 0.1
     max_tokens: int = 1024
     timeout_seconds: float = 60.0
+    think: bool | None = None
+    num_ctx: int | None = None
 
     @property
     def api_key(self) -> str | None:

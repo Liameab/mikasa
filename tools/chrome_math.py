@@ -32,8 +32,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -43,6 +41,7 @@ from tools.chrome_corpus import (  # noqa: E402
     wait_until,
 )
 from tools.chrome_probe import CDP, log, wait_json_list  # noqa: E402
+from tools.fake_llm import make_handler, serve  # noqa: E402
 
 REPO_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MIKASA_EXE = REPO_ROOT / ".venv" / "Scripts" / "mikasa.exe"
@@ -98,80 +97,7 @@ judge:
 """
 
 
-class _FakeLLMHandler(BaseHTTPRequestHandler):
-    """假 OpenAI 兼容端点：按 stream 与否分别回 SSE / 整包（问答走流式）。"""
-
-    calls = 0
-
-    def log_message(self, *args):
-        pass
-
-    def _reply_body(self, body: dict) -> bytes:
-        model = body.get("model", "fake-math-1")
-        if body.get("stream"):
-            parts = []
-            for i in range(0, len(ANSWER), 40):
-                chunk = {
-                    "id": "chunk",
-                    "object": "chat.completion.chunk",
-                    "created": 0,
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {"content": ANSWER[i : i + 40]},
-                            "finish_reason": None,
-                        }
-                    ],
-                }
-                parts.append(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n")
-            stop = {
-                "id": "chunk",
-                "object": "chat.completion.chunk",
-                "created": 0,
-                "model": model,
-                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-            }
-            parts.append(f"data: {json.dumps(stop, ensure_ascii=False)}\n\n")
-            parts.append("data: [DONE]\n\n")
-            return "".join(parts).encode("utf-8")
-        payload = {
-            "id": "chatcmpl-fake",
-            "object": "chat.completion",
-            "created": 0,
-            "model": model,
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {"role": "assistant", "content": ANSWER},
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        }
-        return json.dumps(payload).encode("utf-8")
-
-    def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler 的接口名
-        if not self.path.rstrip("/").endswith("/chat/completions"):
-            self.send_error(404)
-            return
-        length = int(self.headers.get("Content-Length") or 0)
-        body = json.loads(self.rfile.read(length) or b"{}")
-        _FakeLLMHandler.calls += 1
-        data = self._reply_body(body)
-        self.send_response(200)
-        self.send_header(
-            "Content-Type", "text/event-stream" if body.get("stream") else "application/json"
-        )
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
-
-
-def _start_fake_llm(port: int) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer(("127.0.0.1", port), _FakeLLMHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    return server
+_FAKE = make_handler(ANSWER)  # 假模型端点类（calls 里留取证记录）
 
 
 async def run(args):
@@ -184,7 +110,7 @@ async def run(args):
         args.cdp_port = args.cdp_port or free_port()
         args.fake_port = args.fake_port or free_port()
 
-        fake = _start_fake_llm(args.fake_port)
+        fake = serve(_FAKE, args.fake_port)
         log(f"假模型服务：http://127.0.0.1:{args.fake_port}/v1/chat/completions")
 
         data_dir = (tmp / "data").as_posix()

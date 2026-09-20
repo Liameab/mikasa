@@ -93,6 +93,9 @@ function syncKeyRow() {
   const isLocal = activePreset === "ollama";
   $("#s-api-key").closest(".s-row").classList.toggle("hidden", isLocal);
   $("#s-models-refresh").classList.toggle("hidden", !isLocal);
+  // 本机选项（思考模式 / 上下文长度）：api 档没有这两个概念，跟着来源显隐。
+  // 服务端也只认 local 档的这两个字段（见 settings.py 的 _validated_llm_fields）。
+  $("#s-local-row").classList.toggle("hidden", !isLocal);
 }
 
 function applyPreset(name) {
@@ -133,6 +136,10 @@ export async function refreshModelSettings() {
   $("#s-api-key").value = "";
   $("#s-base-url").value = current.base_url || "";
   $("#s-model").value = current.model || "";
+  // 本机旋钮回填：null/undefined → 空选项（"跟随默认"，与"关掉"是两件事）
+  $("#s-think").value =
+    current.think === null || current.think === undefined ? "" : current.think ? "on" : "off";
+  $("#s-num-ctx").value = current.num_ctx ? String(current.num_ctx) : "";
   const hint = $("#s-model-hint");
   if (current.backend === "mock") {
     hint.textContent = "当前是离线体验档（mock，不调用真实模型）：选一个来源，保存后即可问答。";
@@ -148,7 +155,15 @@ export async function refreshModelSettings() {
   setResult("");
 
   const locked = !!current.locked;
-  for (const id of ["#s-base-url", "#s-model", "#s-api-key", "#s-save-btn", "#s-test-btn"]) {
+  for (const id of [
+    "#s-base-url",
+    "#s-model",
+    "#s-api-key",
+    "#s-think",
+    "#s-num-ctx",
+    "#s-save-btn",
+    "#s-test-btn",
+  ]) {
     $(id).disabled = locked;
   }
   document.querySelectorAll("#s-provider .s-chip").forEach((chip) => {
@@ -166,6 +181,13 @@ function collectFields() {
     model: ($("#s-model").value || "").trim(),
     api_key_env: preset.keyEnv,
   };
+  if (preset.backend === "local") {
+    // 两个本机旋钮：空选项 = null = 不写进请求（跟随模型/Ollama 默认）
+    const think = $("#s-think").value;
+    body.think = think === "" ? null : think === "on";
+    const ctx = $("#s-num-ctx").value;
+    body.num_ctx = ctx ? Number(ctx) : null;
+  }
   if (keyDirty) body.api_key = $("#s-api-key").value;
   return body;
 }
