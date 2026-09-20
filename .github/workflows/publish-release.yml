@@ -1,0 +1,52 @@
+name: Publish a release draft
+
+# 用途：把已经建好的 draft Release **转正**。
+#
+# 为什么单开一条路：`release.yml` 在 tag 上把安装包、zip 与校验和建好、挂进
+# 一个 draft，等人看过再发布——而"看过点发布"这一步原先只存在于浏览器里。
+# 浏览器打不开 Releases 页、或者手上没有可用 PAT 时（workflow_dispatch 一样要
+# token 才能触发），就往 main 推一个**提交消息里带 `[publish-release]` 标记**的
+# 普通提交：推送走 SSH key，不需要任何额外凭据。
+#
+# 说明文案：`.github/release-notes/<tag>.md` 存在就用它，否则保留 GitHub 按提交
+# 自动生成的那份。发布同时置为 latest（应用的「检查更新」看的就是它）。
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: contains(github.event.head_commit.message, '[publish-release]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Publish the newest draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # 最新的那份草稿（按创建时间倒序取第一个）
+          tag=$(gh release list --json tagName,isDraft,createdAt \
+            --jq '[.[] | select(.isDraft)] | sort_by(.createdAt) | reverse | first | .tagName')
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "::error::没有草稿 Release 可发布——先推 tag 让 release.yml 建出草稿"
+            exit 1
+          fi
+
+          notes=".github/release-notes/${tag}.md"
+          if [ -f "$notes" ]; then
+            echo "用仓库里的说明：$notes"
+            gh release edit "$tag" --draft=false --latest --notes-file "$notes"
+          else
+            echo "仓库里没有 $notes，保留自动生成的说明"
+            gh release edit "$tag" --draft=false --latest
+          fi
+
+          # 回读现场：发布后这三个数字就是"对外可用"的证据
+          gh release view "$tag" --json tagName,isDraft,isLatest,assets \
+            --jq '"tag=\(.tagName)  draft=\(.isDraft)  latest=\(.isLatest)  " + ([.assets[] | "\(.name)(\(.size))"] | join("  "))'
