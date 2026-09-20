@@ -34,15 +34,24 @@ DEFAULT_OUT = REPO_ROOT / "THIRD_PARTY_NOTICES.md"
 # 带 copyleft 条款的许可证：分发它们不是"附个声明"就能了事，要单独点名
 COPYLEFT_HINTS = ("AGPL", "GPL", "LGPL", "MPL", "EUPL", "SSPL")
 
-# 随包内置的**前端**资源（扫描 Python 包看不到，故在此手工维护）。
-# 新增 vendor 资源必须补一行——清单漏报第三方许可，是分发层面的合规问题。
-FRONTEND_ASSETS = [
+# 随包内置的**非 Python 资源**（扫描 Python 包看不到，故在此手工维护）。
+# 新增 vendor 资源/第三方随包文件必须补一行——清单漏报第三方许可，是分发层面的合规问题。
+BUNDLED_ASSETS = [
     {
         "name": "KaTeX",
         "version": "0.18.7",
         "license": "MIT",
         "dir": REPO_ROOT / "src" / "mikasa" / "web" / "static" / "vendor" / "katex",
         "purpose": "数学公式渲染（renderToString 纯字符串渲染，离线，无运行时依赖）",
+    },
+    {
+        "name": "Inno Setup 简体中文翻译（ChineseSimplified.isl）",
+        "version": "6.5.0+",
+        "license": "Inno Setup License（社区翻译，随 Inno Setup 分发）",
+        "dir": REPO_ROOT / "packaging" / "languages",
+        "purpose": "安装向导的中文界面：Inno 不自带非官方翻译，CI 上那份 6.7.1 就没有",
+        "license_note": "文件头部注明来源与维护者（jrsoftware.org/files/istrans，"
+        "Zhenghan Yang），随 packaging/languages/ 一起分发。",
     },
 ]
 
@@ -160,7 +169,7 @@ def render(packages: list[dict]) -> str:
         "不是照 pyproject 抄的（pyproject 只列直接依赖，会漏掉全部传递依赖）。",
         "",
         f"组件总数：**{len(packages)}**"
-        + (f"（另有 {len(FRONTEND_ASSETS)} 个随包前端资源）" if FRONTEND_ASSETS else ""),
+        + (f"（另有 {len(BUNDLED_ASSETS)} 个随包非 Python 资源）" if BUNDLED_ASSETS else ""),
         "",
     ]
     if copyleft:
@@ -191,29 +200,29 @@ def render(packages: list[dict]) -> str:
         lines += package["texts"]
         lines.append("")
 
-    if FRONTEND_ASSETS:
+    if BUNDLED_ASSETS:
         lines += [
-            "## 随包内置的前端资源",
+            "## 随包内置的非 Python 资源",
             "",
-            "这些不是 Python 包（扫描反查看不到），因此**手工维护**：新增 vendor 资源"
-            "必须在此补一行，否则清单会漏报。",
+            "这些不是 Python 包（扫描反查看不到），因此**手工维护**：新增 vendor 资源或"
+            "随包第三方文件必须在此补一行，否则清单会漏报。",
             "",
             "| 组件 | 版本 | 许可证 | 位置 | 用途 |",
             "| --- | --- | --- | --- | --- |",
         ]
-        for asset in FRONTEND_ASSETS:
+        for asset in BUNDLED_ASSETS:
             rel = asset["dir"].relative_to(REPO_ROOT).as_posix()
             lines.append(
                 f"| {asset['name']} | {asset['version']} | {asset['license']} "
                 f"| `{rel}/` | {asset['purpose']} |"
             )
-        lines += ["", "### 前端资源许可证正文", ""]
-        for asset in FRONTEND_ASSETS:
+        lines += ["", "### 这些资源的许可证正文", ""]
+        for asset in BUNDLED_ASSETS:
             license_file = asset["dir"] / "LICENSE"
             body = (
                 license_file.read_text(encoding="utf-8").strip()
                 if license_file.is_file()
-                else "(见该目录下的 LICENSE 文件)"
+                else asset.get("license_note", "(见该组件随包文件内的说明)")
             )
             lines += [
                 f"#### {asset['name']} {asset['version']} — {asset['license']}",
