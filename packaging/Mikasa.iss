@@ -67,7 +67,14 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; 选了英文、装完打开还是中文，看起来像 bug（2026-09-11 反馈）。删掉它，
 ; 顺带省一步：Inno 只在语言数 ≥2 时才弹"选择安装语言"那个对话框。
 ; 哪天真做了应用多语言，再把它加回来。
-Name: "chinese"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+;
+; **语言文件随仓库带**（packaging/languages/），不用编译器那份
+; （`compiler:Languages\ChineseSimplified.isl`）：简体中文属于 Inno 的"非官方
+; 翻译"可选组件，装 Inno 时不勾就没有——本机（Inno 7）有，CI 上 choco 静默装的
+; 6.7.1 没有，指过去就是首次发版的失败现场（2026-09-20：
+; `Error on line 70 … Couldn't open include file ...\Languages\ChineseSimplified.isl`）。
+; 这份是官方社区翻译（头部注明 6.5.0+，UTF-8），Inno 6.5+ 与 7 都能用。
+Name: "chinese"; MessagesFile: "languages\ChineseSimplified.isl"
 
 [Tasks]
 ; 只有桌面快捷方式做成勾选项（用户明确要的"安装时问一句"）。
