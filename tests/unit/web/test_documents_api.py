@@ -632,3 +632,68 @@ def test_huge_int_path_is_404_not_500(client):
     assert c.get(f"/api/chunks/{huge}").status_code == 404
     assert c.delete(f"/api/documents/{huge}").status_code == 404
     assert c.patch(f"/api/documents/{huge}", json={"title": "x"}).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 跨站写请求闸门（origin_guard，2026-09-20 全量审查发现）
+# ---------------------------------------------------------------------------
+
+
+def test_cross_site_write_is_rejected(client):
+    """带跨站 Origin 的写请求 → 403；同源/无 Origin（脚本）照常。
+
+    单机无鉴权是已记录的形态，但"任何网页都能对本机端点发简单请求"是另一回事：
+    `POST /api/update/install` 会 taskkill 本应用、评测端点能盲烧 LLM 额度，
+    而且这些请求**不需要预检**就能送达（CORS 简单请求）。
+    """
+    c, _ = client
+    evil = {"Origin": "https://evil.example"}
+    assert c.post("/api/eval/runs", headers=evil).status_code == 403
+    assert (
+        c.post("/api/documents", files={"file": ("a.md", b"# x\n")}, headers=evil).status_code
+        == 403
+    )
+    # Origin: null（沙箱 iframe / file:// 页）同样拒
+    assert c.post("/api/eval/runs", headers={"Origin": "null"}).status_code == 403
+
+    # 同源（应用自身）与"不带 Origin 的客户端"（curl / 脚本 / E2E 工具）放行：
+    # 用 404/422 之类与闸门无关的状态证明请求已经进到路由层
+    same = {"Origin": "http://testserver"}
+    assert c.post("/api/eval/runs", headers=same).status_code != 403
+    assert c.post("/api/eval/runs").status_code != 403  # 无 Origin
+
+
+def test_cross_site_read_is_allowed(client):
+    """只拦写：GET 带跨站 Origin 不拒（读端点本来也没有副作用）。"""
+    c, _ = client
+    assert c.get("/api/documents", headers={"Origin": "https://evil.example"}).status_code == 200
+
+
+def test_rename_refreshes_index_tokens(client):
+    """改名要刷新 BM25 词空间里的《标题》前缀（2026-09-20 全量审查修复）。
+
+    旧行为只改显示标题：新名字在 BM25 里零命中、旧名字仍然命中（引用卡却显示
+    新名字）。同一个用户动作两条路径结果不同——笔记编辑器保存走
+    `ingest_one(title=...)`（正确），树里的「重命名」走 PATCH（原先漂移）。
+    """
+    from mikasa.storage import repo as _repo
+    from mikasa.storage.db import open_db as _open_db
+
+    c, settings = client
+    resp = c.post(
+        "/api/documents", files={"file": ("旧名.md", "# 傅里叶变换\n\n内容若干。\n".encode())}
+    )
+    doc_id = resp.json()["document"]["id"]
+
+    with _open_db(settings.db_path) as conn:
+        before = _repo.chunks_by_document(conn, doc_id)[0].tokens
+
+    assert c.patch(f"/api/documents/{doc_id}", json={"title": "FFT 速查"}).status_code == 200
+
+    with _open_db(settings.db_path) as conn:
+        after = _repo.chunks_by_document(conn, doc_id)[0].tokens
+    old_joined, new_joined = "".join(before), "".join(after)
+    # 标题取自正文首个 `#`（loader 规则），所以旧 tokens 里是「傅里叶变换」
+    assert "傅里叶变换" in old_joined and "FFT" not in old_joined
+    # 只换《标题》前缀：heading_path（正文的 H1）本来就该保持不变
+    assert "《FFT 速查》" in new_joined and "《傅里叶变换》" not in new_joined

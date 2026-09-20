@@ -230,8 +230,13 @@ worked around (each fix would change the loader for **every** Markdown document 
 - **Every save rebuilds the row.** Same-name replacement deletes the old document row and inserts a new
   one, so `documents.id` changes and older answers' citation chips point at chunk ids that no longer
   exist (the chip still opens, the lookup 404s). This is the same consequence re-uploading a file has.
-- **Two tabs editing one note is last-write-wins.** There is no optimistic locking; SQLite's
-  `datetime('now')` has second granularity and would be a useless version stamp.
+- **Two tabs editing one note: there *is* an optimistic lock, but the real stop is client-side**
+  (added 2026-09-17; this line corrected 2026-09-20). GET returns a `rev` derived from the content
+  hash, the editor sends it back, and a mismatch is a 409 — but because same-name replacement
+  changes the row id, what actually stops a concurrent save on the server is the client's
+  "re-find the note, then compare the on-disk body before re-submitting" step (see the comment in
+  note-editor.js). Two tabs open on the same note: the later save is refused with an actionable
+  message instead of silently overwriting.
 - **The uploads copy is the only copy.** Unlike an imported paper, a note has no user-side original to
   fall back on. Deleting `data/uploads/`, clearing `data/`, or re-indexing with the copy missing loses
   the note permanently — back up `data/` first.
@@ -576,3 +581,93 @@ pair — far less than a "reinstall Ollama" detour would have.
 **Side note from the same report (not a bug)**: token counts for that successful DeepSeek call are
 `NULL` in `qa_messages` because free mode streams and streaming responses carry no `usage` — a
 documented limitation, not data loss. Use the provider's own usage page for exact numbers.
+
+## 8. Real Bug Cases from Released Builds (Continued, 2026-09-20, evening)
+
+### v0.1.6 would not open: an orphaned `websockets` stub left behind by an upgrade
+
+**What the user saw**: after installing v0.1.6 the app refused to open and showed
+"服务启动超时" (server startup timeout) — while **the same code run from source worked fine**
+(925 tests + ruff + mypy all green). No backend test could catch this, because the failure does not
+exist outside a frozen build.
+
+**Root cause chain** (all of it visible in the app's own log):
+
+1. The install directory's `_internal\websockets\` contained **only a leftover `speedups.pyd`**
+   from the previous version (timestamp 09-20 01:59 = the v0.1.5 build). Inno's upgrade is a
+   *copy-over*: files the new build no longer ships stay on disk.
+2. CPython treats a directory without `__init__.py` as a **namespace package** — so
+   `import websockets` *succeeded* while `__version__` did not exist:
+   `ImportError: cannot import name '__version__' from 'websockets' (unknown location)`.
+3. uvicorn's rule is "if the import succeeds, use the websockets implementation"
+   (`protocols/websockets/auto.py` → `websockets_sansio_impl.py`'s
+   `from websockets import __version__`) → ImportError → **the server thread died instantly** →
+   25 seconds later the readiness check timed out and the dialog appeared.
+
+**The key insight: websockets being absent is *safe*.** `auto.py`'s `except ImportError` falls back
+gracefully (and with neither websockets nor wsproto it sets `AutoWebSocketsProtocol = None` — the
+server runs normally, since nothing here serves WebSockets). **Shipping a broken one is the worst
+case.** In other words, "the build machine happened to have websockets installed" should never have
+been able to affect this app's startup at all.
+
+**Fixes — three layers, all of them needed**:
+
+| Layer | Change | What it removes |
+| --- | --- | --- |
+| Build | `packaging/Mikasa.spec` explicitly `excludes` websockets / wsproto | the "does the build machine have it" variable |
+| Runtime | `ws="none"` in the uvicorn config in `entry.py` and the CLI (no WS endpoints here; streaming is SSE) | loading the WS protocol stack at all |
+| Install | `packaging/Mikasa.iss` gains `[InstallDelete]`: wipe `{app}\_internal` before copying the new payload | the leftovers themselves — the next incident would just pick a different file |
+
+**The sentinel that was missing**: `tools/smoke_frozen.py` — it **actually launches the frozen exe**
+(`cmd /c start` = the double-click shape, with no std handles), polls `/api/health`, checks the app
+log for tracebacks, and asserts the payload contains **no** `websockets` directory. Required before
+publishing.
+
+**One-line lesson: green source does not mean a packaged build opens.** Anything that only exists in
+a frozen environment (std handles, trimmed dependencies, paths, upgrade leftovers) is invisible to
+the test suite no matter how complete it is — the release process needs a "start the real artifact"
+gate. The same hole bit once before, on 2026-09-15: `sys.stdout=None` crashing uvicorn, again only
+reproducible in the double-click shape.
+
+## 9. The 2026-09-20 full review (four parallel passes): what was fixed, what remains
+
+The user asked for a thorough sweep — "if there is a bug or a logic problem, fix it immediately". Four
+read-only passes (core pipeline + evaluation / web + security / ingest + storage + providers /
+frontend + release chain) reported 21 findings; **17 were verified and fixed** (each with a
+regression test), and 4 are recorded below as honest boundaries.
+
+### Fixed (all locked by regression tests)
+
+| Problem | Consequence | Fix |
+| --- | --- | --- |
+| Refusal accuracy counted **failed items** as clean refusals | "5 of 16 timed out" still reported 100% | new `failed_unanswerable`, subtracted from the numerator |
+| `refusal_accuracy()` denominator disagreed with the docs/report | one run: CLI printed 12/16, the report computed 75%, the card 80% | denominator is now the total unanswerable count |
+| The report's anomaly table was broken by newlines in judge output | the whole table garbled — the table a human reviews | `_table` collapses cells to one line and escapes `\|` |
+| A missing "faithfulness" line was coerced to "not faithful", and the metric had no consumer | unknown written as a verdict; a ghost metric documented but absent | tri-state `bool \| None` + a row in the report and metrics_json |
+| Paper import did not sanitise the source id (old arXiv ids contain `/`) | **ingested successfully but answered 409 "document just deleted"**; `..` was a latent traversal | slashes are replaced before sanitising |
+| Three outbound settings endpoints had no host allow-list | an internal-network prober / cloud-metadata primitive | reuse the paper downloader's gate (public + loopback) |
+| No Origin check | any web page could send simple requests to `127.0.0.1:8787` (install updates → taskkill the app, burn LLM quota) | new `CrossSiteWriteGuard`: cross-site writes → 403 |
+| The update status endpoint returned the installer's **absolute path** | leaked `C:\Users\<real name>\…` (the frontend only needed a boolean) | now `ready: bool` |
+| Four exceptions skipped path redaction | `HTTPException.detail` bypasses strip_paths and echoed absolute paths | `strip_paths` everywhere |
+| A write-time OSError left a web-tmp half-product behind | contradicts the "no half-products on failure" promise | the exclusive subdirectory is removed in `except` |
+| An interrupted ingest left rows `pending` forever and the retry was deduped away | "re-uploading does nothing"; missing vectors degrade the whole library to BM25-only | both dedup gates now skip only `done` rows |
+| An interrupted reindex lost organisation properties | titles/folders/`note:` markers silently reset to defaults | the map is persisted before clearing (`index_dir/reindex-keep.json`) and restored by the next run |
+| Renaming did not refresh the 《title》 prefix inside BM25 tokens | the new name could not be found, the old one still could | PATCH now refreshes tokens (vectors are not recomputed — see below) |
+| Streaming generation had no exception translation | a mid-stream failure surfaced as "internal server error" | `_iter_stream` wraps the iteration in ProviderError |
+| An empty upstream `choices` raised IndexError | 500 instead of a clean 502 | both call sites check explicitly |
+| Web ingestion never wrote meta.json | for web-only libraries, doctor's consistency check silently skipped | the ingest tail now calls `services.ingest.sync_meta()` |
+| An empty question was silently replaced with "？" | a missing `question:` in the YAML quietly dragged recall down | `validate_kind` raises (both classes) |
+
+### Boundaries that remain (recorded, not yet scheduled)
+
+- **Renaming does not recompute vectors**: BM25 finds the document under its new name immediately, but
+  the vector still represents the old title (recomputing means re-embedding the whole document, a cost
+  a rename should not carry). Re-ingest the document if exact consistency matters.
+- **The tokens in the library and the query-side tokenizer can differ**: `chunks.tokens` is a snapshot
+  from ingest time and the tokenizer's name is not recorded — if setuptools ≥82 breaks jieba, the query
+  side falls back to bigrams that overlap the stored tokens by only 48–54% (measured), retrieval
+  degrades silently, and doctor only checks whether jieba imports *now*.
+- **The panel refuses private-network model servers** (the price of the SSRF gate): point it at a LAN
+  Ollama by editing the config file — the panel deliberately allows only public hosts and loopback.
+- **`.tmp-e2e` / `.tmp-pytest`**: temp directories the E2E tools and pytest leave in the repo (the
+  sandbox cannot delete them here) — drop them in the bin.

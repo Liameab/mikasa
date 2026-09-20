@@ -24,7 +24,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 import socket
 import urllib.error
 import urllib.parse
@@ -33,6 +32,7 @@ from pathlib import Path
 
 from mikasa.papers.errors import PaperError
 from mikasa.papers.http import USER_AGENT
+from mikasa.utils.net import reject_reason
 
 _PDF_MAX_BYTES = 50 * 1024 * 1024
 _DOWNLOAD_TIMEOUT = 90.0
@@ -46,23 +46,14 @@ _DEFAULT_PORTS = {"https": 443, "http": 80}
 
 
 def _check_host(host: str, port: int, *, resolve=socket.getaddrinfo) -> None:
-    """校验主机解析结果：须解析到公网地址，或（仅 http 时）回环地址。
+    """校验主机解析结果：须解析到公网地址（SSRF 防线）。
 
+    策略本体已提到 `utils/net.py`（设置面板同样要用），这里只做异常翻译。
     resolve 参数可注入：单测传假 addrinfo 列表，零真实 DNS。
     """
-    try:
-        infos = resolve(host, port, type=socket.SOCK_STREAM)
-    except OSError as exc:
-        raise PaperError(f"论文下载目标无法解析（{host}）：{exc}") from exc
-    for info in infos:
-        sockaddr = info[4]
-        if not sockaddr:
-            continue
-        ip = ipaddress.ip_address(str(sockaddr[0]))
-        # 内网/链路本地/保留段统一挡在门外（10/8、172.16/12、192.168/16、
-        # 169.254/16、组播等 is_global 都判 False，见 Python 文档）
-        if not ip.is_global:
-            raise PaperError("论文下载目标解析到了内网地址，已拒绝（安全策略）")
+    reason = reject_reason(host, port, allow_loopback=False, resolve=resolve)
+    if reason is not None:
+        raise PaperError(f"论文下载{reason}")
 
 
 def _check_http_host(host: str, port: int, *, resolve=socket.getaddrinfo) -> None:
@@ -70,17 +61,9 @@ def _check_http_host(host: str, port: int, *, resolve=socket.getaddrinfo) -> Non
 
     与非回环的内网地址仍然一律拒绝——SSRF 防线是"打不到内网"，与协议无关。
     """
-    try:
-        infos = resolve(host, port, type=socket.SOCK_STREAM)
-    except OSError as exc:
-        raise PaperError(f"论文下载目标无法解析（{host}）：{exc}") from exc
-    for info in infos:
-        sockaddr = info[4]
-        if not sockaddr:
-            continue
-        ip = ipaddress.ip_address(str(sockaddr[0]))
-        if not (ip.is_global or ip.is_loopback):
-            raise PaperError("论文下载目标解析到了内网地址，已拒绝（安全策略）")
+    reason = reject_reason(host, port, allow_loopback=True, resolve=resolve)
+    if reason is not None:
+        raise PaperError(f"论文下载{reason}")
 
 
 def _validate_url(url: str, *, resolve=socket.getaddrinfo) -> urllib.parse.SplitResult:

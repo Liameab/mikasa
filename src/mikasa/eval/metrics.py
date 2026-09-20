@@ -83,9 +83,15 @@ class _Mean:
 
 
 def summarize(values: list[float]) -> dict[str, float | int]:
-    """描述统计（报告用）：mean / p50 / p95 / min / max / n。"""
+    """描述统计（报告用）：mean / p50 / p95 / min / max / n。
+
+    空样本返回**同一组键**（值全为 nan）而不是只给 mean/n：报告渲染直接取
+    `stats["p50"]`，键缺失会 KeyError 崩在渲染期（2026-09-20 审查实测：
+    某档位无样本时整份报告渲染失败）。空样本的语义由调用方看 n=0 判断。
+    """
     if not values:
-        return {"mean": float("nan"), "n": 0}
+        nan = float("nan")
+        return {"mean": nan, "p50": nan, "p95": nan, "min": nan, "max": nan, "n": 0}
     ordered = sorted(values)
     n = len(ordered)
 

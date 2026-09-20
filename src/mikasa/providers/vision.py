@@ -154,6 +154,12 @@ class OpenAICompatVision:
                 f"图片识别失败（{self.model}，{self._config.base_url}）："
                 f"{type(exc).__name__}: {exc}"
             ) from exc
+        if not resp.choices:
+            # 同 llm.complete：空候选要明确报出来，别让 IndexError 变成 500
+            raise ProviderError(
+                f"图片识别未返回任何候选（{self.model}，{self._config.base_url}）——"
+                "可能是上游限流或响应被截断，稍后重试"
+            )
         text = (resp.choices[0].message.content or "").strip()
         usage = getattr(resp, "usage", None)
         return Completion(

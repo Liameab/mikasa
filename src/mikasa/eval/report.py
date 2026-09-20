@@ -66,7 +66,9 @@ def render_report(
     if diff_rows:
         add("**按难度分层（recall 均值）**")
         add("")
-        add(_table(["难度", "题数", "recall@5", "recall@8", "recall@10"], diff_rows))
+        # 列名跟着 ks 走：写死 recall@5/@8/@10 时，改 ks 会渲染出 KeyError
+        # 或"表头写 8、数据是 3"的错位（2026-09-20 审查实测）
+        add(_table(["难度", "题数", *[f"recall@{k}" for k in result.retrieval.ks]], diff_rows))
         add("")
 
     # ---------------- 阶段 B：生成层 ----------------
@@ -89,7 +91,14 @@ def render_report(
                 ["不可答题误答", str(gen.answered_unanswerable)],
                 ["误答且带引用", str(gen.answered_with_citation)],
                 ["拒答却带引用（L3 违规）", str(gen.refusal_dirty)],
-                ["生成链路失败", str(gen.failed)],
+                [
+                    "生成链路失败",
+                    # 不可答题的失败要单独写出来：它已经从拒答准确率的分子里减掉了，
+                    # 不说明的话"16 道不可答题却只报 11/16"看着像算错
+                    f"{gen.failed}（其中不可答题 {gen.failed_unanswerable}）"
+                    if gen.failed_unanswerable
+                    else str(gen.failed),
+                ],
             ],
         )
     )
@@ -113,6 +122,8 @@ def render_report(
                     ["裁判调用失败", str(judge.errors)],
                     ["正确性 1-5（一致样本均值）", _mean_text(judge.correctness)],
                     ["A/B 档占比（一致样本）", _mean_text(judge.top2_grade)],
+                    # 忠实性此前只解析、不进报告（文档列了、实现没有）——2026-09-20 补齐
+                    ["忠实性（一致且给出该行的样本）", _mean_text(judge.faithful)],
                 ],
             )
         )
@@ -170,11 +181,21 @@ def render_report(
 # ---------------------------------------------------------------------------
 
 
+def _cell(value: object) -> str:
+    """单元格文本：折成单行 + 转义管道符。
+
+    单元格的来源里有**模型原文**（异常明细表的"裁判原文摘录"就是裁判的多行输出）。
+    不处理的话换行会把整张表撑破、`|` 会把一行切成两列——而这张表正是给人复核用的
+    （2026-09-20 全量审查实测：裁判按协议输出三行 → 每条"裁判不一致"都破一表格）。
+    """
+    return " ".join(str(value).split()).replace("|", "\\|")
+
+
 def _table(header: list[str], rows: list[list[str]]) -> str:
-    """管道表格渲染：表头 + 分隔行 + 数据行。"""
-    head = "| " + " | ".join(header) + " |"
+    """管道表格渲染：表头 + 分隔行 + 数据行（单元格一律过 _cell）。"""
+    head = "| " + " | ".join(_cell(h) for h in header) + " |"
     sep = "| " + " | ".join(_HEADER_SEP for _ in header) + " |"
-    body = ["| " + " | ".join(row) + " |" for row in rows]
+    body = ["| " + " | ".join(_cell(c) for c in row) + " |" for row in rows]
     return "\n".join([head, sep, *body])
 
 
@@ -300,9 +321,8 @@ def _retrieval_difficulty_rows(result: EvalResult) -> list[list[str]]:
             [
                 difficulty,
                 str(len(next(iter(per_k.values()), []))),
-                _fmt(means[5]),
-                _fmt(means[8]),
-                _fmt(means[10]),
+                # 逐列跟着 ks 出：写死 means[5]/[8]/[10] 时，ks 一改就 KeyError
+                *[_fmt(means[k]) for k in result.retrieval.ks],
             ]
         )
     return rows

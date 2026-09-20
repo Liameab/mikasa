@@ -179,6 +179,13 @@ class OpenAICompatLLM:
             messages, temperature=temperature, max_tokens=max_tokens, stream=False
         )
         usage = getattr(response, "usage", None)
+        if not response.choices:
+            # 上游返回空候选（网关/兼容实现在限流或截断时会这样）：
+            # 明确报"没有候选"，而不是让 IndexError 冒到用户面前（2026-09-20 审查）
+            raise ProviderError(
+                f"LLM 未返回任何候选（{self.model}，{self._config.base_url}）——"
+                "可能是上游限流或响应被截断，稍后重试"
+            )
         return Completion(
             text=response.choices[0].message.content or "",
             prompt_tokens=getattr(usage, "prompt_tokens", None),
@@ -191,7 +198,28 @@ class OpenAICompatLLM:
         response = self._create(
             messages, temperature=temperature, max_tokens=max_tokens, stream=True
         )
-        return (chunk.choices[0].delta.content or "" for chunk in response)
+        return self._iter_stream(response)
+
+    def _iter_stream(self, response: Any) -> Iterator[str]:
+        """把流式迭代也纳入异常翻译。
+
+        `_create` 只罩得住"建流"那一次调用；**迭代期**的读超时/连接重置
+        （长回答很常见）原先原样抛出 → 上层判不出 ZhiwenError → 用户只看到
+        "服务器内部错误"，而非流式路径同样失败时却给得出"模型/地址/原因"
+        （2026-09-20 审查实测）。空候选帧同理（部分网关会在末尾补一帧空 choices）。
+        """
+        try:
+            for chunk in response:
+                if not chunk.choices:
+                    continue  # 心跳/收尾帧：没有候选就跳过，不算失败
+                yield chunk.choices[0].delta.content or ""
+        except ProviderError:
+            raise
+        except Exception as exc:  # openai SDK 的传输类异常
+            raise ProviderError(
+                f"LLM 流式生成中断（{self.model}，{self._config.base_url}）："
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
 
 
 # ---------------------------------------------------------------------------

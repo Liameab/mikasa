@@ -392,7 +392,7 @@ function render(w) {
   // 按钮：一套按钮，按状态决定"显示哪些、叫什么、能不能点"。
   // offer = "还没在下载"（done 也算：下完了照样可以「跳过此版本」/「以后再说」）
   const offer = !active && st.status !== "error";
-  const ready = st.status === "done" && Boolean(st.file_path);
+  const ready = st.status === "done" && Boolean(st.ready);
   // 自动安装只在"Windows + 这个版本确实带了安装包资产"时成立；任一不成立
   // 就诚实地摆出「打开发布页」，而不是给一个点了会失败的按钮
   const canInstall = Boolean(info && info.asset) && Boolean(info && info.install_supported);
@@ -462,7 +462,7 @@ function applyStatus(w, st) {
   w.st = st;
   render(w);
   const finished = st.status === "done" && (!before || before.status !== "done");
-  if (finished && w.dialog && w.st.file_path) void installNow(w);
+  if (finished && w.dialog && w.st.ready) void installNow(w);
 }
 
 /** 只跟随状态，不发 POST：任务已在跑（或已经下完）时这就是全部该做的事。 */

@@ -42,7 +42,9 @@ class JudgeVerdict:
 
     correctness: int  # 1-5
     grade: str  # A-D（第二量尺）
-    faithful: bool  # 回答论断是否都由资料支撑
+    # 回答论断是否都由资料支撑。**三态**：None = 裁判两轮里缺「忠实性」这一行
+    # （未解析到 ≠ 判为不忠实——真值化会把"没测到"写成"不忠实"，2026-09-20 审查实测）
+    faithful: bool | None = None
     consistent: bool = True
     raw: list[str] = field(default_factory=list)  # 裁判原始输出，人工复核留痕
 
@@ -175,11 +177,16 @@ class LLMJudge:
         c2, g2, f2, raw2 = self._round(question, notes, context, answer, answer_first=True)
         if c1 is None or c2 is None or g1 is None or g2 is None:
             # 任一轮解析失败 → 不可信，标记不一致并把原文留给人工
-            return JudgeVerdict(0, "?", False, consistent=False, raw=[raw1, raw2])
+            return JudgeVerdict(0, "?", None, consistent=False, raw=[raw1, raw2])
+        # 忠实性三态：两轮都读到才下结论；缺行保持 None（"没测到"≠"不忠实"）
+        faithful = None if f1 is None or f2 is None else bool(f1 and f2)
+        # 一致性判据：**只比能读到的量**。缺「忠实性」行不该把每一题都打成
+        # "不一致"（那会把复核清单灌满噪声），但读到了就必须两轮相同。
+        consistent = c1 == c2 and g1 == g2 and (f1 is None or f2 is None or f1 == f2)
         return JudgeVerdict(
             correctness=c1 if c1 == c2 else min(c1, c2),
             grade=g1 if g1 == g2 else "?",
-            faithful=bool(f1 and f2),
-            consistent=c1 == c2 and g1 == g2 and f1 == f2,
+            faithful=faithful,
+            consistent=consistent,
             raw=[raw1, raw2],
         )

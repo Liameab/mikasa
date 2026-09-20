@@ -308,7 +308,10 @@ def document_page_image(
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001 —— 渲染失败要给出可读原因，不裸抛 500
-        raise HTTPException(status_code=500, detail=f"页面渲染失败：{exc}") from exc
+        # 脱敏：HTTPException 的 detail 走 FastAPI 默认处理器，**不经过**
+        # app 层那条 strip_paths（异常文案里常带 uploads 的绝对路径）
+        detail = f"页面渲染失败：{strip_paths(str(exc))}"
+        raise HTTPException(status_code=500, detail=detail) from exc
 
     return Response(
         content=data,
@@ -373,7 +376,8 @@ def document_page_text(
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001 —— 提取失败要给可读原因，不裸抛 500
-        raise HTTPException(status_code=500, detail=f"文字层提取失败：{exc}") from exc
+        detail = f"文字层提取失败：{strip_paths(str(exc))}"
+        raise HTTPException(status_code=500, detail=detail) from exc
 
     return {"page": page_no, "spans": spans}
 
@@ -505,12 +509,20 @@ def upload_document(
     # 唯一性只能加在**目录**上——文件名必须保持 safe_name：ingest 以 basename
     # 决定 uploads 副本名与标题（改文件名会连带改掉文档名与同名替换语义）。
     tmp_path = tmp_dir / uuid4().hex / safe_name
-    tmp_path.parent.mkdir(parents=True, exist_ok=True)
-    digest = hashlib.sha256()
-    with tmp_path.open("wb") as out:
-        while block := raw_file.read(1024 * 1024):
-            digest.update(block)
-            out.write(block)
+    try:
+        tmp_path.parent.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256()
+        with tmp_path.open("wb") as out:
+            while block := raw_file.read(1024 * 1024):
+                digest.update(block)
+                out.write(block)
+    except OSError:
+        # 写入期失败（磁盘满 / 句柄异常）：把本次独占子目录收干净再上抛。
+        # ingest_web_file 的 finally 只管"已经走到尾链"的失败，写入这一步在它之前
+        # ——不收拾的话每次 ENOSPC 都在 web-tmp 里永久留一个半成品目录
+        # （2026-09-20 全量审查实测；文档却写着"失败不留半成品"）。
+        shutil.rmtree(tmp_path.parent, ignore_errors=True)
+        raise
     file_sha = digest.hexdigest()
     return ingest_web_file(tmp_path, safe_name, file_sha, services, settings)
 
@@ -569,6 +581,9 @@ def ingest_web_file(
             # web-tmp 不是权威数据，删不掉也只是留个临时文件，不升级为用户可见错误
             logger.warning("web-tmp 临时目录未能清理：%s", tmp_path.parent)
     services.ask.invalidate_index()  # 语料变了：下次提问自动重建快照
+    # meta.json 也要跟上：它原先只在 CLI 路径写，纯网页建的库因此没有它，
+    # doctor 的"三方一致性"检查第一行就静默跳过（2026-09-20 审查实测）
+    services.ingest.sync_meta()
 
     if status == "skipped":
         # 同内容文档已入库：幂等成功（HTTP 语义：资源已存在）。按内容
@@ -788,16 +803,23 @@ def delete_kb_folder(
 def patch_document(
     doc_id: int,
     body: DocumentPatchIn,
+    services: AppServices = Depends(get_services),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    """文档改名/移夹（可只带其一）。folder_id 显式 null = 移回根；
-    只改组织属性（documents 行），不碰 uploads 文件与索引快照。"""
+    """文档改名/移夹（可只带其一）。folder_id 显式 null = 移回根。
+
+    移夹只改组织属性（documents 行）；**改名还要刷新索引词空间**——tokens 里
+    嵌着《标题》前缀，只改显示名会让新名字搜不到、旧名字还搜得到（见
+    `IngestService.refresh_title_index`）。向量侧不重算（改名不该触发整篇重嵌）。
+    """
+    new_title: str | None = None
     with open_db(settings.db_path) as conn:
         doc = repo.get_document(conn, doc_id)
         if doc is None:
             raise HTTPException(status_code=404, detail="文档不存在")
         if "title" in body.model_fields_set:
-            repo.set_document_title(conn, doc_id, _clean_doc_title(body.title))
+            new_title = _clean_doc_title(body.title)
+            repo.set_document_title(conn, doc_id, new_title)
         if "folder_id" in body.model_fields_set:
             folder_id = body.folder_id
             if folder_id is not None and repo.get_kb_folder(conn, folder_id) is None:
@@ -805,6 +827,10 @@ def patch_document(
             repo.move_document(conn, doc_id, folder_id)
         updated = repo.get_document(conn, doc_id)
     assert updated is not None  # 上一步 404 已挡
+    if new_title is not None:
+        # 词空间变了 → 快照必须作废，否则提问仍命中旧名字（快照常驻内存）
+        services.ingest.refresh_title_index(doc_id, new_title=new_title)
+        services.ask.invalidate_index()
     return {"document": _public_document(updated)}
 
 
@@ -961,8 +987,13 @@ def _write_note_tmp(settings: Settings, safe_name: str, payload: bytes) -> Path:
     """
     tmp_dir = settings.data_dir / "web-tmp"
     tmp_path = tmp_dir / uuid4().hex / safe_name
-    tmp_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path.write_bytes(payload)  # 二进制写：不经过 Windows 的换行翻译
+    try:
+        tmp_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path.write_bytes(payload)  # 二进制写：不经过 Windows 的换行翻译
+    except OSError:
+        # 同上：写入期失败要把独占子目录收干净（调用方的 finally 只覆盖入库尾链）
+        shutil.rmtree(tmp_path.parent, ignore_errors=True)
+        raise
     return tmp_path
 
 

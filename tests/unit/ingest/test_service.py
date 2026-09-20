@@ -623,3 +623,78 @@ def test_embedding_uses_index_text_not_raw_content(offline_settings):
 
     assert seen and seen[0][0].startswith("《论文标题》｜1. 章")
     assert "正文内容" in seen[0][0]
+
+
+def test_retry_heals_a_pending_row_instead_of_being_deduped(tmp_path, offline_settings):
+    """上次入库没走完（进程被杀 → 行停在 pending）的文档，重传要能自愈。
+
+    旧行为按内容 sha 去重直接 skipped：用户"重传也没用"，而缺向量还会把全库
+    dense 路拖成只剩 BM25（2026-09-20 全量审查实测）。现在只跳 **done** 的行。
+    """
+    from mikasa.storage import repo as _repo
+    from mikasa.storage.db import open_db as _open_db
+
+    src = tmp_path / "notes"
+    src.mkdir(exist_ok=True)
+    (src / "a.md").write_text("# 甲\n\n内容一。\n", encoding="utf-8")
+    service = IngestService(offline_settings)
+    service.ingest_paths([src])
+
+    # 制造"上次没走完"：把行改成 pending（等价于进程在嵌入阶段被杀）
+    with _open_db(offline_settings.db_path) as conn:
+        doc = _repo.list_documents(conn)[0]
+        conn.execute("UPDATE documents SET ingest_status = 'pending' WHERE id = ?", (doc.id,))
+        conn.commit()
+
+    status, chunks, _chars = service.ingest_one(src / "a.md")
+    assert status == "ingested", "pending 行不该被内容去重挡下（要重做）"
+    assert chunks > 0
+    with _open_db(offline_settings.db_path) as conn:
+        again = _repo.get_document_by_sha(
+            conn, __import__("mikasa.utils.hashing", fromlist=["x"]).sha256_file(src / "a.md")
+        )
+    assert again is not None and again.ingest_status == "done"
+
+
+def test_reindex_recovers_props_after_interrupted_run(tmp_path, offline_settings, monkeypatch):
+    """上次 reindex 中途被杀 → 重跑要能把标题/文件夹/标记收回来。
+
+    reindex 是"清库 → 重导"两段：中间被杀时行已删、映射只在内存里。
+    没有落盘的话，重跑能把内容收回来、元数据却全部回落到默认
+    （标题=文件主名、根级、标记 NULL），而且没有任何提示
+    ——2026-09-20 全量审查实测。修复 = 清库前把映射写进
+    `index_dir/reindex-keep.json`，下次重建开头装上它，成功才删。
+    """
+    _write_note(tmp_path, "a.md", CONTENT_A)
+    svc = _svc(offline_settings)
+    svc.ingest_paths([tmp_path])
+    with open_db(offline_settings.db_path) as conn:
+        folder = repo.create_kb_folder(conn, "论文")
+        doc = repo.list_documents(conn)[0]
+        repo.set_document_title(conn, doc.id, "整理名")
+        repo.move_document(conn, doc.id, folder)
+        repo.set_document_source_ref(conn, doc.id, "note:abcdef123456")
+        conn.commit()
+
+    # 制造"清库之后、重导之前"被杀：映射已落盘，行已删，重导没跑
+    def _killed(*args, **kwargs):
+        raise KeyboardInterrupt("模拟关窗/断电")
+
+    monkeypatch.setattr(svc, "ingest_paths", _killed)
+    with pytest.raises(KeyboardInterrupt):
+        svc.reindex()
+    monkeypatch.undo()
+    assert (offline_settings.index_dir / "reindex-keep.json").is_file(), "清库前该留下映射"
+    with open_db(offline_settings.db_path) as conn:
+        assert repo.list_documents(conn) == []  # 现场：行确实没了
+
+    # 新进程重跑（新实例 → 只能靠盘上那份映射）
+    fresh = _svc(offline_settings)
+    rebuilt = fresh.reindex()
+    assert len(rebuilt.ingested) == 1
+    with open_db(offline_settings.db_path) as conn:
+        doc = repo.list_documents(conn)[0]
+        assert doc.title == "整理名"
+        assert doc.folder_id == folder
+        assert doc.source_ref == "note:abcdef123456"
+    assert not (offline_settings.index_dir / "reindex-keep.json").exists(), "成功收尾要清掉现场"

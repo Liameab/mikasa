@@ -56,12 +56,18 @@ class GoldenItem(BaseModel):
 
     @field_validator("question")
     @classmethod
-    def _question_nonempty(cls, value: str) -> str:
-        return value.strip() or "？"  # 空问题由 kind 语义校验兜底拦截
+    def _question_stripped(cls, value: str) -> str:
+        # 只做去空白归一。**空问题不在字段层替换成"？"**——那会把"YAML 里漏写
+        # question"变成一个看起来正常的题目：评测时阶段 A 必然零命中、阶段 B 记一次
+        # 可答误拒，全程无报错，只是分数悄悄变差（2026-09-20 审查实测）。
+        # 真正的拦截在 validate_kind（抛 EvalError、带题号）。
+        return value.strip()
 
     def validate_kind(self) -> None:
         from mikasa.errors import EvalError
 
+        if not self.question.strip():
+            raise EvalError(f"{self.id}: 题目不能为空（question 漏写或缩进错了吧？）")
         if self.kind == "answerable":
             if self.difficulty not in ("easy", "medium", "hard"):
                 raise EvalError(f"{self.id}: 可答题必须标注难度 easy/medium/hard")
@@ -210,12 +216,18 @@ class QuestionDraft(BaseModel):
 
     @field_validator("question")
     @classmethod
-    def _question_nonempty(cls, value: str) -> str:
-        return value.strip() or "？"  # 空问题由 kind 语义校验兜底拦截
+    def _question_stripped(cls, value: str) -> str:
+        # 只做去空白归一。**空问题不在字段层替换成"？"**——那会把"YAML 里漏写
+        # question"变成一个看起来正常的题目：评测时阶段 A 必然零命中、阶段 B 记一次
+        # 可答误拒，全程无报错，只是分数悄悄变差（2026-09-20 审查实测）。
+        # 真正的拦截在 validate_kind（抛 EvalError、带题号）。
+        return value.strip()
 
     def validate_kind(self) -> None:
         from mikasa.errors import EvalError
 
+        if not self.question.strip():
+            raise EvalError(f"{self.id}: 题目不能为空（question 漏写或缩进错了吧？）")
         if self.kind == "answerable":
             if self.difficulty not in ("easy", "medium", "hard"):
                 raise EvalError(f"{self.id}: 可答题必须标注难度 easy/medium/hard")

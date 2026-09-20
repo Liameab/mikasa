@@ -305,7 +305,14 @@ def save_embeddings(
     chunk_ids: list[int],
     matrix: np.ndarray,
 ) -> None:
-    """整库覆盖式保存（先清该模型旧向量再写入，事务外负责）。"""
+    """逐行 upsert（INSERT OR REPLACE），**不清理其它模型的残留**。
+
+    换 embedding 模型必须 `ingest --reindex`（ADR-0014 红线的落地动作）：
+    库里同时存在两个模型的向量时，`load_embedding_matrix(当前模型)` 的行与
+    chunk 对不上，IndexManager 会把整库 dense 路丢掉、只剩 BM25。
+    旧版 docstring 写着"先清该模型旧向量再写入"，与实现不符——2026-09-20
+    全量审查发现，照着它理解会以为保存自带清理、从而漏掉 reindex。
+    """
     conn.executemany(
         "INSERT OR REPLACE INTO embeddings (chunk_id, model, dim, vector) VALUES (?, ?, ?, ?)",
         [

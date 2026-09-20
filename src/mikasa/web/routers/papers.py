@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse
 
 import mikasa.papers.openalex as openalex
 from mikasa.config.settings import Settings, clear_api_key, write_api_key
+from mikasa.errors import strip_paths
 from mikasa.papers import PaperError, PaperFilters, fetch_paper, source_catalog
 from mikasa.papers import search as papers_search
 from mikasa.papers.arxiv import validate_id as validate_arxiv_id
@@ -280,9 +281,17 @@ def import_paper(
         )
 
     # 文件名：标题（先截断）+ 来源 id 后缀 → sanitize 净化（sanitize 保头截尾，
-    # 后缀必须放在截断**之后**追加，否则长标题会把去重后缀截掉）
+    # 后缀必须放在截断**之后**追加，否则长标题会把去重后缀截掉）。
+    # **id 也要净化，且斜杠要先换成 `-`**：老式 arXiv id 形如 `cs/0701001`
+    # （`_ARXIV_ID_RE` 明确放行 `/`），直接拼进去的话——斜杠会让文件写进
+    # web-tmp 的子目录、ingest 取 basename → 文档标题与 uploads 副本名退化成
+    # `0701001)`，尾链又按带斜杠的路径查行 → **明明入库成功却回 409「文档刚被删除」**
+    # （2026-09-20 审查实测）。先换斜杠再净化还有个副作用是堵住同一个点的路径
+    # 穿越：`..` 也在那个 id 正则的允许集里（`sanitize_filename` 只取 basename，
+    # 不先换斜杠的话 `cs/0701001` 会把 `arxiv ` 前缀整段丢掉）。
     safe_title = sanitize_filename(result.title[:_TITLE_CAP] or "(无标题)")
-    safe_name = f"{safe_title} ({result.source} {result.id}).pdf"
+    safe_id = sanitize_filename(f"{result.source} {result.id}".replace("/", "-").replace("\\", "-"))
+    safe_name = f"{safe_title} ({safe_id}).pdf"
 
     tmp_path = settings.data_dir / "web-tmp" / uuid.uuid4().hex / safe_name
     tmp_path.parent.mkdir(parents=True, exist_ok=True)
@@ -294,9 +303,14 @@ def import_paper(
     except Exception as exc:  # noqa: BLE001 - 下载器之外的环境性失败也归 502
         _discard_tmp(tmp_path)
         raise HTTPException(
-            status_code=502, detail=f"论文下载失败：{type(exc).__name__}: {exc}"
+            status_code=502, detail=f"论文下载失败：{strip_paths(f'{type(exc).__name__}: {exc}')}"
         ) from exc
-    file_sha = sha256_file(tmp_path)
+    try:
+        file_sha = sha256_file(tmp_path)
+    except OSError:
+        # 读取期失败（句柄被占等）：把半成品与本次独占子目录一起收干净再上抛
+        _discard_tmp(tmp_path)
+        raise
     # ingest_web_file 自带 ZhiwenError→400 翻译与 finally 清理，这里直接交棒。
     # source_ref 是**唯一**知道"这篇文档来自哪条在线记录"的地方：入库后它
     # 落进 documents.source_ref，「找论文」页据此标"已在库中"（ADR-0020）。

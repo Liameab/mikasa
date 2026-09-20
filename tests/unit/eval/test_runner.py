@@ -19,7 +19,7 @@ import pytest
 from mikasa.errors import EvalError, StorageError
 from mikasa.eval.golden import GoldenItem, GoldenSet
 from mikasa.eval.judge import JudgeVerdict
-from mikasa.eval.runner import EvalRunner
+from mikasa.eval.runner import EvalRunner, GenerationStats
 from mikasa.index.manager import IndexManager
 from mikasa.ingest.service import IngestService
 
@@ -359,3 +359,36 @@ def test_run_on_item_callback_fires_per_item_in_order(tmp_path, offline_settings
     result = _runner(offline_settings, golden).run(on_item=lambda rec: seen.append(rec.id))
     assert seen == [i.id for i in golden.items]  # 每题恰好一次、不重不漏
     assert len(result.items) == len(seen)
+
+
+# ---------------------------------------------------------------------------
+# 拒答准确率的两条口径（2026-09-20 全量审查发现并修复）
+# ---------------------------------------------------------------------------
+
+
+def test_failed_unanswerable_is_not_a_clean_refusal():
+    """链路失败的不可答题**不能**算成"干净拒答"。
+
+    失败的那几道什么也没测到：既没验出误答，也没验出正确拒答。旧口径下
+    "16 道里 5 道超时失败"会报 16/16 = 100% 拒答准确率，而分母里只有 11 道
+    真跑过——数字看着更好、其实什么也没测（审查实测）。
+    """
+    gen = GenerationStats(n_answerable=47, n_unanswerable=16, failed=5, failed_unanswerable=5)
+    assert gen.refusal_clean == 11
+    assert gen.refusal_accuracy() == 11 / 16
+
+
+def test_refusal_accuracy_uses_total_unanswerable_as_denominator():
+    """分母是**不可答题总数**——与报告/CLI 打出的分数同源。
+
+    旧口径 (clean + 误答) 把 L3 违规（拒答句却带引用）漏出分母：同一次 run
+    里 CLI 打 "12/16"、markdown 报告算 75%、百分数却算成 80%（审查实测）。
+    三个数字必须来自同一个比值。
+    """
+    gen = GenerationStats(n_unanswerable=16, answered_unanswerable=3, refusal_dirty=1)
+    assert gen.refusal_clean == 12
+    assert gen.refusal_accuracy() == 12 / 16  # 不是 12/15
+
+
+def test_refusal_accuracy_is_none_without_unanswerable():
+    assert GenerationStats(n_answerable=3).refusal_accuracy() is None

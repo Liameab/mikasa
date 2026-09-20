@@ -108,6 +108,7 @@ class GenerationStats:
     n_answerable: int = 0  # 可答题总数（分母）
     n_unanswerable: int = 0
     failed: int = 0  # 生成链路失败的题数（网络/鉴权等，逐条留痕）
+    failed_unanswerable: int = 0  # 其中属于不可答题的（不能算进"干净拒答"）
     refused_answerable: int = 0  # 可答题误拒：有据却拒答（召回/生成失败信号）
     no_citation: int = 0  # 未拒答却零引用（引用纪律问题）
     out_of_range_rate: _Mean = field(default_factory=_Mean)  # 越界/自造编号占比（逐条）
@@ -118,13 +119,28 @@ class GenerationStats:
 
     @property
     def refusal_clean(self) -> int:
-        """正确拒答数 = 不可答题总数 − 误答数 − 拒答却带引用的违规数。"""
-        return self.n_unanswerable - self.answered_unanswerable - self.refusal_dirty
+        """正确拒答数 = 不可答题总数 − 误答 − 拒答带引用违规 − **链路失败**。
+
+        **失败的那几道必须减掉**：它们没测到任何东西（既没验出误答，也没验出
+        正确拒答）。不减的话，"16 道不可答题里 5 道超时失败"会被算成
+        16/16 = 100% 的拒答准确率——分母里只有 11 道真跑过（2026-09-20 审查实测）。
+        这正是评测工具最怕的失效：数字看着更好，而它什么也没测。
+        """
+        return (
+            self.n_unanswerable
+            - self.answered_unanswerable
+            - self.refusal_dirty
+            - self.failed_unanswerable
+        )
 
     def refusal_accuracy(self) -> float | None:
-        """不可答题的拒答准确率；没有不可答题时返回 None（无定义）。"""
-        total = self.refusal_clean + self.answered_unanswerable
-        return None if total == 0 else self.refusal_clean / total
+        """拒答准确率 = 干净拒答 / **不可答题总数**（evaluation.md 的定义口径）。
+
+        分母刻意**不写成**"干净 + 误答"：那样会把 L3 违规（拒答句却带引用）
+        从分母里漏掉，于是同一次 run 里 CLI 打"12/16"、markdown 报告算 75%、
+        而百分数算成 80%（2026-09-20 审查实测）——三个数字必须同源。
+        """
+        return None if self.n_unanswerable == 0 else self.refusal_clean / self.n_unanswerable
 
 
 @dataclass
@@ -135,6 +151,10 @@ class JudgeStats:
     judged: int = 0  # 实际判题数（可答题且未拒答）
     correctness: _Mean = field(default_factory=_Mean)  # 双轮一致的 1-5 分
     top2_grade: _Mean = field(default_factory=_Mean)  # 双轮一致的 A/B 档（逐条 0/1）
+    # 忠实性（逐条 0/1）：只统计"双轮一致**且两轮都给出了该行**"的样本。
+    # 此前这项只有解析、没有消费者——文档把它列为阶段 C 指标，报告里却没有它
+    # （2026-09-20 审查发现的"幽灵指标"）。
+    faithful: _Mean = field(default_factory=_Mean)
     consistent: int = 0  # 双轮位置交换一致数
     inconsistent: int = 0  # 不一致数（含格式解析失败）——单独披露不抹平
     errors: int = 0  # 裁判调用失败数（网络/密钥等，逐题记 judge_note）
@@ -208,6 +228,7 @@ class EvalResult:
                 "n_answerable": gen.n_answerable,
                 "n_unanswerable": gen.n_unanswerable,
                 "failed": gen.failed,
+                "failed_unanswerable": gen.failed_unanswerable,
                 "refused_answerable": gen.refused_answerable,
                 "no_citation": gen.no_citation,
                 "out_of_range_rate": _summ_or_none(gen.out_of_range_rate),
@@ -223,6 +244,7 @@ class EvalResult:
                 "judged": judge.judged,
                 "correctness": _summ_or_none(judge.correctness),
                 "top2_grade_rate": _summ_or_none(judge.top2_grade),
+                "faithful_rate": _summ_or_none(judge.faithful),
                 "consistent": judge.consistent,
                 "inconsistent": judge.inconsistent,
                 "errors": judge.errors,
@@ -414,6 +436,8 @@ class EvalRunner:
             answer, _completion = generator.generate(item.question, hits, titles)
         except Exception as exc:  # noqa: BLE001 - 逐条容错：任何链路失败都要留痕
             gen.failed += 1
+            if item.kind == "unanswerable":
+                gen.failed_unanswerable += 1  # 拒答准确率的分母要减掉它（见 refusal_clean）
             record.error = f"{type(exc).__name__}: {exc}"
             record.latency_ms = (perf_counter() - t_item) * 1000.0
             return record
@@ -489,6 +513,11 @@ class EvalRunner:
             # 双轮一致才采信：单轮分数不可信，只披露不抹平（judge 模块设计）
             judge_stats.correctness.add(verdict.correctness)
             judge_stats.top2_grade.add(1.0 if verdict.grade in ("A", "B") else 0.0)
+            if verdict.faithful is None:
+                # 缺「忠实性」行：不猜、也不让它悄悄拖低均值——写明"这题没测到"
+                record.judge_note = "裁判两轮均未给出「忠实性」行——该题忠实性未计入统计"
+            else:
+                judge_stats.faithful.add(1.0 if verdict.faithful else 0.0)
         else:
             judge_stats.inconsistent += 1
             preview = verdict.raw[0][:100] if verdict.raw else ""

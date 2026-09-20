@@ -29,6 +29,7 @@ from mikasa.config.settings import Settings
 from mikasa.errors import ProviderError, ZhiwenError, strip_paths
 from mikasa.utils.logging import get_logger
 from mikasa.web.limits import BodySizeLimit, body_limit_bytes
+from mikasa.web.origin_guard import CrossSiteWriteGuard
 from mikasa.web.routers import documents, eval, health, qa, sessions
 from mikasa.web.routers.papers import router as papers_router
 from mikasa.web.routers.settings import router as settings_router
@@ -89,6 +90,8 @@ def create_app(settings: Settings) -> FastAPI:
 
     # ---- 请求体上限：必须在**读取之前**生效（见 limits 模块的说明） ----
     app.add_middleware(BodySizeLimit, max_bytes=body_limit_bytes(settings.web.upload_max_mb))
+    # ---- 跨站写请求闸门：任何网页都能对本机服务发简单请求（见 origin_guard 模块头） ----
+    app.add_middleware(CrossSiteWriteGuard)
 
     # ---- 页面与静态资源（演示时浏览器直开 / 即首页） ----
     # 字体类型要先注册：Windows 的注册表里查不到 .woff2/.woff/.ttf（实测

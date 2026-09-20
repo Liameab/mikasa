@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import threading
 from dataclasses import dataclass, field
@@ -172,11 +173,21 @@ class IngestService:
         sha = sha256_file(file)
         copy_path = self.settings.uploads_dir / file.name
 
-        # 同内容已在库：直接跳过（先查再解析——大 PDF 解析很贵，重复上传别白付）
+        # 同内容已在库：直接跳过（先查再解析——大 PDF 解析很贵，重复上传别白付）。
+        # **但只跳"已完成"的那一行**：进程被杀（关窗/Ctrl-C/断电）时行会停在
+        # pending，不跳的话重传/重存一律被去重挡下——用户看到的"重传也没用"
+        # 就是这么来的（2026-09-20 全量审查实测：这类行的自然修复动作全被堵死，
+        # 而缺向量还会把全库 dense 路拖成只剩 BM25）。非 done → 落到下面重建。
         with open_db(self.settings.db_path) as conn:
             duplicate = repo.get_document_by_sha(conn, sha)
         if duplicate is not None and not force:
-            return "skipped", 0, 0
+            if duplicate.ingest_status == "done":
+                return "skipped", 0, 0
+            logger.warning(
+                "同内容的文档 #%s 处于 %s 状态（上次入库没走完）——重做这一篇",
+                duplicate.id,
+                duplicate.ingest_status,
+            )
 
         # 解析新文件**必须在动库之前**（2026-09-11 修复）：解析失败（空文档 /
         # 损坏文件 / 无文本层的扫描件）时旧文档与其组织属性必须原样保留——
@@ -214,8 +225,17 @@ class IngestService:
                     repo.set_document_file_path(conn, existing.id, str(copy_path))
                     # 后面只用到标题/文件夹/来源/哈希，都不受这次路径修复影响
             if existing is not None:
+                # 内容未变 + 同名 → 跳过。**同样只跳 done**：这一道闸在 sha 那一道
+                # 之后（同名不同 sha 会走到这里），pending/failed 的行两处都要放行，
+                # 否则"重传自愈"只成功一半（2026-09-20 审查：第一道修完这条仍在挡）
                 if existing.file_sha256 == sha and not force:
-                    return "skipped", 0, 0
+                    if existing.ingest_status == "done":
+                        return "skipped", 0, 0
+                    logger.warning(
+                        "同名文档 #%s 处于 %s 状态（上次入库没走完）——重做这一篇",
+                        existing.id,
+                        existing.ingest_status,
+                    )
                 # 同名更新：先收走组织属性（文件夹 + 手动改过的标题），**旧行
                 # 此刻不动**——它要等新副本在盘上就位之后才删。让位 rename 是
                 # 整条链路唯一会撞文件锁的一步（Windows 上任何打开着旧副本的
@@ -352,7 +372,8 @@ class IngestService:
                 f"uploads 目录里没有可重建的文件，reindex 已中止（避免清空现有知识库）：{uploads}\n"
                 "如果确实要清空知识库，请逐篇删除文档；uploads 丢失时可从自己的原始资料重新上传。"
             )
-        self._reindex_keep = {}
+        # 上次中断留下的映射先装上：本次重建会沿用它把标题/文件夹/标记收回来
+        self._reindex_keep = self._load_stale_keep()
         with open_db(self.settings.db_path) as conn:
             docs = repo.list_documents(conn)
             lost = self._docs_without_copies(docs, uploads)
@@ -376,12 +397,64 @@ class IngestService:
                         folder_id=doc.folder_id,
                         source_ref=doc.source_ref,
                     )
+            # **落盘必须在删行之前**：清库与重导之间被杀（关窗/Ctrl-C/断电）时，
+            # 映射只存在于内存里会随进程消失——重跑 reindex 能把内容收回来，
+            # 标题/文件夹/note: 标记却全部回落到默认（2026-09-20 全量审查实测）。
+            self._save_keep()
+            for doc in docs:
                 if doc.id is not None:
                     repo.delete_document(conn, doc.id)
             conn.commit()
         summary = self.ingest_paths([uploads], force=True)
+        self._remove_keep()  # 重建成功才删：中途失败要留下现场给下一次收
         self._sync_meta()
         return summary
+
+    # ---- reindex 的组织属性映射：落盘 / 读回（见 _reindex 的说明） ----
+
+    def _keep_path(self) -> Path:
+        return self.settings.index_dir / "reindex-keep.json"
+
+    def _save_keep(self) -> None:
+        """清库前把组织属性映射写到盘上（tmp + 原子替换）。"""
+        path = self._keep_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            name: {"title": p.title, "folder_id": p.folder_id, "source_ref": p.source_ref}
+            for name, p in self._reindex_keep.items()
+        }
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
+
+    def _load_stale_keep(self) -> dict[str, _KeptProps]:
+        """读上次中断留下的映射（没有/读不出来都返回空，不打断本次重建）。"""
+        path = self._keep_path()
+        if not path.is_file():
+            return {}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8")) or {}
+        except (OSError, ValueError):
+            logger.warning("残留的 reindex 属性映射读不出来，忽略：%s", path)
+            return {}
+        out: dict[str, _KeptProps] = {}
+        for name, props in raw.items():
+            if isinstance(props, dict):
+                out[str(name)] = _KeptProps(
+                    title=str(props.get("title", "")),
+                    folder_id=props.get("folder_id"),
+                    source_ref=props.get("source_ref"),
+                )
+        if out:
+            logger.warning(
+                "发现上次未完成 reindex 留下的属性映射（%d 条）："
+                "本次重建会沿用它恢复标题/文件夹/标记",
+                len(out),
+            )
+        return out
+
+    def _remove_keep(self) -> None:
+        self._keep_path().unlink(missing_ok=True)
 
     def _docs_without_copies(self, docs: list[Document], uploads: Path) -> list[Document]:
         """哪些文档行在 uploads 里找不到对应副本（reindex 前的安全闸）。
@@ -509,6 +582,42 @@ class IngestService:
         # 各算各的迟早会漂移
         return doc_id, chunks, doc_title
 
+    def refresh_title_index(self, doc_id: int, *, new_title: str) -> int:
+        """改名后刷新该文档所有 chunk 的 tokens（BM25 词空间里的《标题》前缀）。
+
+        **为什么必须刷新**：tokens 是"入库那一刻"按标题算出来的；只改显示标题的话，
+        新名字在 BM25 里零命中、**旧名字仍然命中**（引用卡却显示新名字）。
+        同一个用户动作两条路径结果不同：笔记编辑器保存走 `ingest_one(title=...)`
+        （正确），树里的「重命名」走 PATCH（原先只改显示名）——2026-09-20 全量审查实测。
+
+        **向量不在此列**：重算向量要整篇重嵌，改名的代价不该那么大。向量侧仍是
+        旧标题的表示（这一条如实记在 limitations-and-failures.md）。
+        """
+        with self._lock, open_db(self.settings.db_path) as conn:
+            chunks = repo.chunks_by_document(conn, doc_id)
+            rows = [
+                (
+                    # tokens 在库里是 **JSON 文本**（与 repo.insert_chunks 同口径，
+                    # 直接绑 list 会被 sqlite3 拒掉：type 'list' is not supported）
+                    json.dumps(
+                        self._tokenizer(self._index_text(new_title, c.heading_path, c.content)),
+                        ensure_ascii=False,
+                    ),
+                    c.id,
+                )
+                for c in chunks
+                if c.id is not None
+            ]
+            if not rows:
+                return 0
+            conn.executemany("UPDATE chunks SET tokens = ? WHERE id = ?", rows)
+            conn.commit()
+        self._sync_meta()  # 词空间变了：快照里的指纹跟着变（评测/doctor 都看它）
+        logger.info(
+            "改名后已刷新索引词空间：doc #%s → 《%s》（%d 块）", doc_id, new_title, len(rows)
+        )
+        return len(rows)
+
     def _index_text(self, title: str, heading_path: str | None, content: str) -> str:
         """索引词空间：标题路径前置 + 正文——**BM25 与向量共用的检索表示**。
 
@@ -551,6 +660,16 @@ class IngestService:
                 conn, doc_id, ingest_status="done", chunk_count=chunk_count
             )
             conn.commit()
+
+    def sync_meta(self) -> None:
+        """公开的 meta.json 同步入口（Web 入库尾链用）。
+
+        为什么需要它：meta.json 原先只在 CLI 路径写（`ingest_paths` / `reindex`），
+        而 Web 的上传 / 论文导入 / 笔记保存三条链路直调 `ingest_one`，从不经过
+        那里——纯网页建的库没有 meta.json，`doctor` 的"三方一致性"检查第一行就
+        静默跳过（缺向量、混模型都发现不了；2026-09-20 全量审查实测）。
+        """
+        self._sync_meta()
 
     def _sync_meta(self) -> None:
         """跑批结束后把 DB 状态落成 meta.json（doctor/评测的指纹来源）。"""

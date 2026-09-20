@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from mikasa.config.settings import Settings
-from mikasa.errors import ConfigError, ProviderError, StorageError
+from mikasa.errors import ConfigError, StorageError
 from mikasa.index.manager import IndexManager
 from mikasa.models.answer import Answer
 from mikasa.models.retrieval import RetrievedChunk
@@ -100,8 +100,11 @@ def _translate_query(llm, question: str) -> str | None:
             temperature=0.1,
             max_tokens=TRANSLATE_MAX_TOKENS,
         )
-    except ProviderError:
-        logger.warning("查询翻译失败：%s（回退单路检索）", question[:20])
+    except Exception as exc:  # noqa: BLE001 - 翻译只是加速器：**任何**失败都回退单路
+        # 只捕 ProviderError 是不够的：provider 只把"建流/建请求"那一步包成了
+        # ProviderError，响应解析（choices[0]）在网关返回空候选时会抛 IndexError
+        # 穿透到这里——本该"回退单路"的小故障变成整轮问答失败（2026-09-20 审查实测）。
+        logger.warning("查询翻译失败：%s（%s，回退单路检索）", question[:20], type(exc).__name__)
         return None
     # 剥掉可能包裹译文的首尾引号（中文引号簇或英文双/单引号），再折叠空白
     text = " ".join(completion.text.strip().strip('"').strip("'").strip("“”‘’").split())
@@ -397,8 +400,11 @@ class AskService:
                 temperature=0.1,
                 max_tokens=TRANSLATE_TO_ZH_MAX_TOKENS,
             )
-        except ProviderError:
-            logger.warning("双语块翻译失败（跳过对照块）")
+        except Exception as exc:  # noqa: BLE001 - 对照块是呈现层增强：失败只跳过它
+            # 同 _translate_query：这一块跑在**回答已生成之后**，异常逃出去会让
+            # 整轮问答不落库、不进历史（前端只收到 error 帧）——代价远大于它
+            # 本身的价值。任何异常都只跳过对照块（2026-09-20 审查实测）。
+            logger.warning("双语块翻译失败（跳过对照块）：%s", type(exc).__name__)
             return None
 
         # 按【译文N】标记切片：每个标记到下一个标记之间的正文即该段译文

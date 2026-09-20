@@ -502,7 +502,11 @@ class UpdateJob:
             "downloaded": self.downloaded,
             "attempt": self.attempt,
             "error": self.error,
-            "file_path": self.file_path,
+            # **不回绝对路径**：那是 `C:\Users\<真名>\AppData\Local\Mikasa\updates\…`，
+            # 正是 strip_paths 一路在挡的东西，而前端只需要一个布尔（消费点两处都是
+            # `Boolean(st.file_path)`）。要装的时候由服务端自己解析路径
+            # （install_update 端点在服务端取 result_path），客户端全程拿不到路径。
+            "ready": bool(self.file_path),
             # 派生字段：alive=False 且过了宽限期 = 线程没了，新任务可以接管；
             # stalled 只是"看起来停了"（前端据此说一句实话），不等于可以接管
             "alive": self.worker,

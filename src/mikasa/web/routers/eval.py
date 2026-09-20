@@ -112,7 +112,7 @@ def _run_eval_job(settings: Settings, golden: GoldenSet, manager: EvalJobManager
         persisted = run_and_persist(settings, golden, on_item=manager.on_item)
     except Exception as exc:  # noqa: BLE001 - 任务失败也要状态可见
         logger.exception("后台评测任务失败")
-        manager.fail(str(exc))
+        manager.fail(strip_paths(str(exc)))
     else:
         manager.finish(persisted.run_id)
         logger.info(
