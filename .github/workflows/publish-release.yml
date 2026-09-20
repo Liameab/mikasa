@@ -47,6 +47,9 @@ jobs:
             gh release edit "$tag" --draft=false --latest
           fi
 
-          # 回读现场：发布后这三个数字就是"对外可用"的证据
-          gh release view "$tag" --json tagName,isDraft,isLatest,assets \
-            --jq '"tag=\(.tagName)  draft=\(.isDraft)  latest=\(.isLatest)  " + ([.assets[] | "\(.name)(\(.size))"] | join("  "))'
+          # 回读现场：发布后这几个数字就是"对外可用"的证据。
+          # **别请求 `isLatest`**——`gh release view --json` 没有这个字段，
+          # 请求它会以 "Unknown JSON field" 失败（2026-09-20 首跑踩到：
+          # 发布其实已经成功，是这行回读把整个作业判成了 failure）。
+          gh release view "$tag" --json tagName,isDraft,publishedAt,assets \
+            --jq '"tag=\(.tagName)  draft=\(.isDraft)  published=\(.publishedAt)  " + ([.assets[] | "\(.name)(\(.size))"] | join("  "))'
