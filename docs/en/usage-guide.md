@@ -196,8 +196,21 @@ directory), **Chat appearance** lives in the browser (localStorage, this browser
 - **Source presets**: Ollama (local, free, keyless), DeepSeek (official API),
   SiliconFlow (has free models — the cheapest way to try a cloud model), or Custom (any
   OpenAI-compatible endpoint: a `/v1` URL + model name + key).
+- **This-machine options** (shown only for the "Ollama (local)" source; both knobs affect
+  local models only):
+  - **Thinking mode**: models like qwen3 reason before answering by default. On the same
+    question we measured **on = 14.2 s with the reasoning eating the entire output budget and
+    zero characters of answer**, versus **off = 1.4 s straight to the answer**. Off by
+    default; turn it on for hard derivation-style questions if you want.
+  - **Context length**: how much the model can see at once. Measured: when it is not
+    specified the runtime processes only **2050 tokens**, while a single Mikasa prompt
+    (system prompt + retrieved chunks) is far longer — so most of your material was being
+    cut off. The default is 16384; larger fits more chunks but is slower and hungrier for
+    VRAM (on an 8 GB card, do not go beyond 16384).
 - **Connection test**: sends one tiny request and reports "connected · 123ms" or the real
-  error — it never changes your saved configuration.
+  error — it never changes your saved configuration (for the local profile the probe travels
+  the same channel as real questions and carries the two knobs above, so what it reports is
+  what you will actually get).
 - **Save and apply**: takes effect immediately, no restart (the answer pill in the top bar
   picks up the new model within ~20 s; open questions finish on the old model).
 - **Where it is stored**: `%LOCALAPPDATA%\Mikasa\config.yaml` (the model choice) and

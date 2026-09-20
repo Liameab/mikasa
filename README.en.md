@@ -13,7 +13,7 @@ are reproducible.
 modes → M4 local profile → M4.5 session management (including the first real schema migration v1→v2)
 → corpus folders v3 → table rendering → cross-lingual retrieval → original + translation for cited
 English passages → document reader with citation jump → pre-M5 audit (23 fixes, 4 of them
-data-safety) → packaged installer → model settings in the panel. Currently **918 tests passing**,
+data-safety) → packaged installer → model settings in the panel. Currently **943 tests passing**,
 ruff + mypy clean, ~93% coverage. Windows portable zip and installer builds are published
 (v0.1.0 → v0.1.6) with in-app update checking — downloads resume across dropped connections, and
 closing the dialog, switching pages or reloading no longer interrupts them (progress lives in a

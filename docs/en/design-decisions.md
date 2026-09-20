@@ -54,6 +54,7 @@
 | ADR-0026 | Synthesized question banks plus per-item verification: evaluate your own corpus, not just the sample one | Accepted |
 | ADR-0027 | Photos into notes: vision as its own config section, recognition as a draft, images anchored to the note key | Accepted |
 | ADR-0028 | Formulas are typeset locally: KaTeX is vendored into the build | Accepted |
+| ADR-0029 | The local profile uses Ollama's native API: think / num_ctx knobs plus an answer-shape contract | Accepted |
 
 ---
 
@@ -1688,3 +1689,94 @@ the four pages (`vendor` CSS **before** `style.css`, so the project's font-size 
 tests `tools/smoke_render.mjs` (fake KaTeX: wiring, code masking, currency rejection),
 `tools/smoke_math.mjs` (the real vendored KaTeX, 24 assertions), and
 `tests/unit/web/test_frontend_static.py` (files present + every page wired + CSS order).
+
+## ADR-0029 The local profile uses Ollama's native API: think / num_ctx knobs plus an answer-shape contract
+
+**Context**: on 2026-09-20 the user reported two things — "the local model answers far less
+than DeepSeek" and "the layout is not great". They are not the same problem, but both trace
+back to what the local channel could not do:
+
+1. **Thinking mode ate the entire output budget.** qwen3:8b thinks by default, and Ollama's
+   OpenAI-compatible surface (`/v1/chat/completions`) **ignores** the `think` parameter. So the
+   model reasoned first every time: on the same question, **14.2 s, 617 characters of reasoning,
+   0 characters of answer** (the 400-token output budget was consumed by thinking). With thinking
+   off, the same question answers in **1.4 s**. What the user saw was "it spins for a long time
+   and then there is nothing".
+2. **The context was silently cut in half, twice.** Ollama's runtime default context on this
+   machine is 4096, and a single request fits even less — **a prompt that should be parsed in
+   full was processed at only 2050 tokens** when `num_ctx` was omitted. This profile's prompt is
+   "system prompt + 14 retrieved chunks + history summary", easily above ten thousand tokens, so
+   every question was truncated by more than half (and typically from the front, meaning the
+   citation and refusal rules may never have reached the model). This is also most of the story
+   behind "it gives me too little material".
+3. **Answer shape was left entirely to the model's own judgement.** DeepSeek sections its
+   answers, uses lists and tables; an 8B model just writes flat prose. That is not a hard
+   capability gap — the large model *chose* those shapes, and a small one needs to be told.
+
+**Decision**:
+
+- The local profile's generation side **switches from the OpenAI-compatible surface to Ollama's
+  native `/api/chat`** (new class `OllamaNativeLLM` in `providers/ollama.py`). The api profile is
+  unaffected and still speaks OpenAI-compatible.
+- Two new **local-only** knobs (ignored by the api profile, and shown in the settings panel only
+  under the "this machine" source):
+  - `llm.think`: tri-state (`None` = omit the parameter, `true` / `false`), **`local.yaml`
+    defaults to `false`**;
+  - `llm.num_ctx`: `None` or a token count, **`local.yaml` defaults to `16384`**.
+  "Not configured" and "turned off" are different things: `None` omits the key from the request
+  body and follows Ollama's default.
+- Both system prompts (kb and free) gain the same **output-shape contract**
+  (`OUTPUT_FORMAT_CONTRACT`): lead with the conclusion, section with `## `, use a Markdown table
+  whenever data is being compared, typeset math in LaTeX, sketch structures with a fenced
+  text diagram, prefer completeness over brevity. It does not conflict with rule 6 — "if the
+  source is a table, present it as a table" remains a hard constraint; the contract only adds
+  "when a shape is called for, do not fall back to prose".
+
+**Why the channel has to change**: `think` and `options.num_ctx` are understood **only** by the
+native API; the compatible surface **silently ignores** them (no error, no effect). As long as
+requests went through `/v1/chat/completions`, both knobs were decorative and problems 1 and 2
+had no fix.
+
+**Why stdlib urllib instead of the openai SDK**: the native response shape is not something the
+SDK parses — streaming is **NDJSON**, one JSON object per line, and reasoning text arrives in
+`message.thinking` alongside `message.content`. A local server has no key and no proxy, so urllib
+is enough, and it sidesteps the httpx address-selection trap (`normalize_base_url`, see
+limitations §七).
+
+**Measurements** (2026-09-20, Ollama 0.34.2 + qwen3:8b, RTX 4060 8 GB):
+
+| Prompt | num_ctx | Tokens actually processed |
+| --- | --- | --- |
+| 5296 tokens | omitted (runtime default 4096) | **2050** |
+| 5296 tokens | 4096 | 2050 |
+| 5296 tokens | 8192 | 5296 (full) |
+| 5296 / 8992 tokens | **16384** | 5296 / **8992 (full)** |
+| 8992 tokens | 32768 | 8992 (full) |
+
+16384 is where effect and VRAM balance: qwen3:8b's KV cache at 16384 costs roughly 2.4 GB, and
+going further (32768 ≈ 4.7 GB) starts competing with the 5 GB of model weights. `Mikasa.bat`
+sets `OLLAMA_CONTEXT_LENGTH=16384` for the source checkout — the same value — but that only
+helps an Ollama started from that script; the packaged build (double-clicked exe, Ollama started
+by the tray app) never sees it, so **the setting has to live in the config file**.
+
+**Consequences and boundaries**:
+
+- **Only Ollama takes this path.** LM Studio / vLLM and friends should use the api profile with
+  a custom base URL (they have no concept of `think` or `num_ctx`).
+- **Thinking defaults to off** as a trade-off: on hard derivation-style questions thinking does
+  help, but it costs ~10x the time and can burn the whole budget. Off by default, one click away
+  in the settings panel.
+- **The panel refuses private-network addresses** (SSRF gate, see limitations §九): an Ollama on
+  your LAN has to be pointed at from the config file.
+- The shape contract is a prompt-level constraint and **does not guarantee obedience** from a
+  small model; it turns "hope the model picks a shape" into "ask for the shape". In practice the
+  8B model's use of tables and sections on the same question went up noticeably.
+
+**Code**: `providers/ollama.py` (`OllamaNativeLLM`), `providers/__init__.py` (factory split),
+`config/settings.py` (`LLMConfig.think` / `num_ctx`), `config/profiles/local.yaml` (defaults),
+`pipeline/prompts.py` (`OUTPUT_FORMAT_CONTRACT`), `web/routers/settings.py` + `web/schemas.py`
+(panel fields, and the probe travels the same channel as real questions),
+`web/static/{index.html,js/model-settings.js}` (the two "this machine" dropdowns); tests
+`tests/unit/providers/test_ollama_native.py`, `tests/unit/providers/test_factory.py`,
+`tests/unit/web/test_settings_api.py`. The E2E fake server learned both protocols
+(`tools/fake_llm.py`).

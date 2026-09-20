@@ -47,6 +47,7 @@
 | ADR-0026 | 自动题库 + 逐题校验：从你自己的语料出题，评测不再绑死一份语料 | Accepted |
 | ADR-0027 | 拍照转笔记：视觉模型独立成段、识别只是草稿、原图锚在笔记 key | Accepted |
 | ADR-0028 | 公式在本地排版：把 KaTeX 内置进发布物 | Accepted |
+| ADR-0029 | 本地档改走 Ollama 原生接口：think / num_ctx 两个旋钮 + 作答呈现规范 | Accepted |
 
 ---
 
@@ -1355,3 +1356,76 @@ KaTeX）。而且必须在 `esc()` **之前**抽：放到之后，交给 KaTeX �
 长公式横向滚动而不是撑破气泡）；测试 `tools/smoke_render.mjs`（假 KaTeX：接线、
 代码遮蔽、货币误判）、`tools/smoke_math.mjs`（真 KaTeX，24 条断言）、
 `tests/unit/web/test_frontend_static.py`（文件在 + 四页都引 + 样式顺序）。
+
+## ADR-0029 本地档改走 Ollama 原生接口：think / num_ctx 两个旋钮 + 作答呈现规范
+
+**背景**：2026-09-20 用户的两条反馈——"本机答得比 DeepSeek 少太多"与"排版不太行"。
+查下来不是同一个问题，但根子都在本地通道的能力上：
+
+1. **思考模式吃掉全部输出预算**。qwen3:8b 自带 thinking，而 Ollama 的 OpenAI 兼容面
+   （`/v1/chat/completions`）**不认** `think` 参数——于是模型每次都先想半天：实测同一个
+   问题，**14.2 秒、617 字推理、答案 0 字**（400 token 的输出预算被推理吃光）；把思考关掉
+   是 **1.4 秒直接给答案**。用户在界面上看到的就是"转很久，然后什么都没有"。
+2. **上下文被静默砍半再砍半**。Ollama 运行时的默认上下文对本机是 4096，而单次请求真正
+   能装下的提示词还要少——**实测同一段提示词，不传 `num_ctx` 只处理 2050 token**。
+   本档的提示词是"系统提示词 + 14 个检索块 + 历史摘要"，轻松上万 token，等于每次提问都被
+   砍掉大半（且通常从开头丢，引用与拒答规则可能从未进过模型）。这也是"给的内容太少"的
+   一大半根因。
+3. **作答形态全靠模型自觉**。DeepSeek 会自己分节、列表、上表格；8B 只会平铺直叙。这不是
+   能力差距的必然——大模型是自己"选了"这些形态，小模型需要把要求写明才会照做。
+
+**决定**：
+
+- local 档的生成端从 OpenAI 兼容面**切到 Ollama 原生 `/api/chat`**（新类
+  `OllamaNativeLLM`，`providers/ollama.py`）。api 档不受影响，仍走 OpenAI 兼容。
+- 新增两个 **local 专属**旋钮（api 档忽略、面板里只在"本机"来源下出现）：
+  - `llm.think`：三态（`None` 不传参、`true` / `false`），**local.yaml 默认 `false`**；
+  - `llm.num_ctx`：`None` 或 token 数，**local.yaml 默认 `16384`**。
+  "没配置"与"关掉"是两件事：`None` 时不写进请求体，跟随 Ollama 默认。
+- 两条系统提示词（kb 与 free）追加同一份**输出呈现规范**（`OUTPUT_FORMAT_CONTRACT`）：
+  结论先行、`## ` 分节、该用表格就用表格、公式走 LaTeX、结构用代码块画文本示意图、
+  求全不求短。与规则 6 不冲突——"资料原文是表格就原样呈现"仍是硬约束，规范只补
+  "该用形态时别写成排比句"。
+
+**为什么必须换通道**：`think` 与 `options.num_ctx` **只有原生接口认**，兼容面会**静默忽略**
+（不报错、不生效）。也就是说，只要还走 `/v1/chat/completions`，这两个旋钮就永远是摆设，
+第 1、2 条症状无解。
+
+**为什么用 stdlib urllib 而不是现成的 openai SDK**：原生接口的返回形状 SDK 不认——
+流式是 **NDJSON** 逐行、思考内容在 `message.thinking`（与 `message.content` 并列）。
+本地服务无密钥、无代理，urllib 足够，也顺带避开 httpx 那套地址选择的老坑
+（`normalize_base_url` 那条，见 limitations §七）。
+
+**实测数据**（2026-09-20，Ollama 0.34.2 + qwen3:8b，4060 8G）：
+
+| 提示词 | num_ctx | 实际处理的 token |
+| --- | --- | --- |
+| 5296 token | 不传（运行默认 4096） | **2050** |
+| 5296 token | 4096 | 2050 |
+| 5296 token | 8192 | 5296（完整） |
+| 5296 / 8992 token | **16384** | 5296 / **8992（完整）** |
+| 8992 token | 32768 | 8992（完整） |
+
+16384 这个值是显存与效果的分界：qwen3:8b 的 KV cache 在 16384 下约占 2.4GB，再往上
+（32768 约 4.7GB）就要和 5GB 的模型权重抢显存。`Mikasa.bat` 给源码版设的
+`OLLAMA_CONTEXT_LENGTH=16384` 是同一个值——但那只救得了从 bat 启动的 Ollama，
+打包版（双击 exe、Ollama 由托盘自启）拿不到，所以**这行必须写在配置里**。
+
+**代价与边界**：
+
+- **只有 Ollama 走这条路**。LM Studio / vLLM 等本机服务要用 api 档 + 自定义地址
+  （它们没有 `think` / `num_ctx` 这两个概念）。
+- **思考模式默认关**是取舍：难题、推导类问题上开思考确实更稳，但代价是 10 倍耗时且
+  可能把预算烧光。默认关、需要时去设置面板打开。
+- **面板不放行内网地址**（SSRF 闸门，见 limitations §九）：局域网里的 Ollama
+  要直接改配置文件。
+- 呈现规范是提示词层面的约束，**不保证小模型每次照做**；它是把"该有的形态"从
+  "模型自己想起来"变成"写在要求里"，实测同一问题 8B 的表格/分节使用率明显上升。
+
+**代码**：`providers/ollama.py`（`OllamaNativeLLM`）、`providers/__init__.py`（工厂分流）、
+`config/settings.py`（`LLMConfig.think` / `num_ctx`）、`config/profiles/local.yaml`（默认值）、
+`pipeline/prompts.py`（`OUTPUT_FORMAT_CONTRACT`）、`web/routers/settings.py` +
+`web/schemas.py`（面板字段与探测走同一条通道）、`web/static/{index.html,js/model-settings.js}`
+（「本机选项」两个下拉）；测试 `tests/unit/providers/test_ollama_native.py`、
+`tests/unit/providers/test_factory.py`、`tests/unit/web/test_settings_api.py`。
+E2E 的假服务同步学会两种协议（`tools/fake_llm.py`）。
