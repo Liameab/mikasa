@@ -3,6 +3,7 @@
 - AskService 常驻：IndexManager 缓存索引快照，跨请求复用（Web 问答页
   不必每次提问都重建 BM25/加载向量矩阵）；
 - IngestService 常驻：embedding provider 一次构造的生命周期内复用；
+- 视觉提供方常驻（M6 ②）：识图无状态，但 OpenAI 客户端是惰性建在实例里的；
 - EvalJobManager 常驻：单槽评测任务状态机（见类 docstring）；
 - 三者都是同步阻塞实现——FastAPI 同步 def 端点自动进线程池执行，
   互不阻塞（SQLite 走 WAL + 连接即开即关，线程安全）。
@@ -21,6 +22,7 @@ from typing import TYPE_CHECKING
 from mikasa.config.settings import Settings
 from mikasa.ingest.service import IngestService
 from mikasa.pipeline.ask import AskService
+from mikasa.providers import get_vision
 from mikasa.update import UpdateChecker, UpdateManager
 
 if TYPE_CHECKING:
@@ -196,6 +198,9 @@ class AppServices:
         self.settings = settings
         self.ask = AskService(settings)
         self.ingest = IngestService(settings)
+        # 视觉模型（M6 ②）：识图是无状态的，但实例要留着——OpenAI 客户端
+        # 是惰性建在实例里的，每次请求新建一个就等于每次丢连接池
+        self.vision = get_vision(settings.vision)
         self.eval_jobs = EvalJobManager()
         self.synth_jobs = SynthJobManager()
         # 更新链路：检查器带 TTL 缓存、下载是单槽后台任务（见 update 包）
@@ -205,3 +210,11 @@ class AppServices:
     def rebuild_ask(self) -> None:
         """测试替换 ask 服务用（保持 create_app 测试可注入性）。"""
         self.ask = AskService(self.settings)
+
+    def rebuild_vision(self) -> None:
+        """面板改了视觉段后热生效：用当前 settings 重建提供方。
+
+        与 rebuild_ask 同款前提——调用方必须**先**换 self.settings（见
+        routers/settings.py 里那段"顺序敏感"的注释）。
+        """
+        self.vision = get_vision(self.settings.vision)

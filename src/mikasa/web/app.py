@@ -12,6 +12,7 @@ serve_app_factory：uvicorn --reload 专用入口（reload 需要 import string�
 
 from __future__ import annotations
 
+import mimetypes
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -90,6 +91,11 @@ def create_app(settings: Settings) -> FastAPI:
     app.add_middleware(BodySizeLimit, max_bytes=body_limit_bytes(settings.web.upload_max_mb))
 
     # ---- 页面与静态资源（演示时浏览器直开 / 即首页） ----
+    # 字体类型要先注册：Windows 的注册表里查不到 .woff2/.woff/.ttf（实测
+    # mimetypes.guess_type 返回 None），StaticFiles 就会回 application/octet-stream。
+    # 内置的 KaTeX 公式全靠这几个字体，宁可显式声明，也不要赌浏览器认不认。
+    for _ext, _mime in ((".woff2", "font/woff2"), (".woff", "font/woff"), (".ttf", "font/ttf")):
+        mimetypes.add_type(_mime, _ext)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     for route, page in _PAGES.items():
         app.get(route, include_in_schema=False)(lambda page=page: FileResponse(STATIC_DIR / page))

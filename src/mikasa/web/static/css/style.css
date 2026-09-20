@@ -1562,6 +1562,67 @@ a.pd-title:hover { color: var(--accent); }
   max-width: 260px;
 }
 .note-hint { white-space: nowrap; }
+
+/* 阅读器里的原图条（M6 ②）：贴在正文顶部，点开看原图。 */
+.rd-media {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+.rd-media-item { display: block; }
+.rd-media-item img {
+  display: block;
+  height: 72px;
+  width: auto;
+  max-width: 180px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.rd-media-item:hover img { border-color: var(--accent); }
+
+/* 原图缩略图条（M6 ②）：待保存与已存的原图共用一条。高度固定一档，
+   横排滚动——多张照片不至于把编辑区挤没。 */
+.note-media {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  overflow-x: auto;
+  border-top: 1px solid var(--border);
+}
+.note-media-item { position: relative; flex: 0 0 auto; }
+.note-media-thumb {
+  display: block;
+  height: 64px;
+  width: auto;
+  max-width: 160px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: 8px; /* 行档（DESIGN.md 圆角五档） */
+  background: var(--bg);
+}
+.note-media-x {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  line-height: 1;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.note-media-x:hover { color: var(--danger, #c14a3a); border-color: currentColor; }
+/* 拖图片进来时给个落点提示（拖拽是三条入口之一，要有反馈） */
+.note-box.note-drop { outline: 2px dashed var(--accent); outline-offset: -4px; }
+
 @media (max-width: 900px) {
   .note-split { flex-direction: column; }
   .note-input { border-right: none; border-bottom: 1px solid var(--border); }
@@ -2037,3 +2098,20 @@ a.pd-title:hover { color: var(--accent); }
 .paper-item { padding: 8px; }
 .paper-meta { margin-top: 2px; }
 .paper-snippet { margin-top: 4px; line-height: 1.45; }
+
+/* ------------------------------------------------------------------ */
+/* 公式（KaTeX，随包内置；渲染入口见 js/common.js 的"公式渲染"段）      */
+/* ------------------------------------------------------------------ */
+
+/* 行内公式跟正文基线、略放大一档（KaTeX 自带字号偏小，中文正文里会显得扁） */
+.katex { font-size: 1.05em; }
+
+/* 块级公式独立成行；**长公式横向可滚**——窄栏里一条 8 项的展开式
+   （用户 2026-09-20 那份泰勒展开就是这样）撑破气泡是最常见的排版事故 */
+.katex-display {
+  margin: 0.6em 0;
+  padding: 2px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.katex-display > .katex { white-space: nowrap; }

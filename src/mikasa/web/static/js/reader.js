@@ -393,6 +393,7 @@ export async function openDocument(docId, { chunkId = null, mode = null, locatio
   }
 
   renderText(data);
+  void renderMediaStrip(id, seq); // 笔记原图（M6 ②）：有就贴在正文上方
   currentPage = 1;
   // PDF 默认开"页面"视图：那里是原样渲染 + 可高亮（用户要的"合并"）
   setMode(mode ?? (isPdf ? "page" : "text"));
@@ -404,6 +405,35 @@ export async function openDocument(docId, { chunkId = null, mode = null, locatio
 }
 
 /** 引用跳转入口：chunk_id → 所属文档 + 定位（Citation 不带 document_id）。 */
+/**
+ * 笔记原图（M6 ②，ADR-0027）：贴在正文顶部的缩略图条，点开看原图。
+ *
+ * 无条件问一次列表——普通文档返回空列表（"这篇没有原图"是事实，不是错误），
+ * 不值一条"先判断是不是笔记"的分支；请求失败静默（原图是附加物，不该挡正文）。
+ * 过期响应照 loadSeq 丢弃：连点两篇文档时别把上一篇的原图贴到这一篇上。
+ */
+async function renderMediaStrip(docId, seq) {
+  let items = [];
+  try {
+    items = (await apiFetch(`/api/notes/${docId}/media`)).items || [];
+  } catch {
+    return;
+  }
+  if (!items.length || seq !== loadSeq || !refs.text.isConnected) return;
+  const strip = el("div", { class: "rd-media" });
+  for (const item of items) {
+    const url = `/api/notes/${docId}/media/${item.name}`;
+    strip.append(
+      el(
+        "a",
+        { class: "rd-media-item", href: url, target: "_blank", rel: "noopener", title: "打开原图" },
+        el("img", { src: url, alt: "原图" })
+      )
+    );
+  }
+  refs.text.prepend(strip);
+}
+
 export async function openChunk(chunkId, { mode = "text" } = {}) {
   // **先占号**：本函数会去打开一篇文档，连点两个引用角标时必须是**后点的赢**。
   // 原来的写法是 `const seq = loadSeq`——取的是"进本函数之前"的号，而号是

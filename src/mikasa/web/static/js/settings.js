@@ -15,7 +15,9 @@
    ========================================================================= */
 
 import { $, el, toast } from "./common.js";
+import { imageToDataUrl } from "./image-util.js";
 import { initModelSettings, refreshModelSettings } from "./model-settings.js";
+import { initVisionSettings, refreshVisionSettings } from "./vision-settings.js";
 
 const KEY = {
   nick: "mikasa.ui.nick",
@@ -35,7 +37,6 @@ const SWATCHES = [
   { label: "雾灰", color: "#efeee9" },
 ];
 
-const MAX_IMG = 4 * 1024 * 1024; // 压缩后上限 4MB（localStorage 5MB 配额）
 const rootStyle = document.documentElement.style;
 
 /* ---------------- 读取口（qa.js 与将来账号功能共用） ---------------- */
@@ -91,37 +92,6 @@ function restore() {
   if (nick) $("#s-nick").value = nick;
 }
 
-/**
- * 图片 → 压缩 dataURL：读原图 → 等比缩到最长边 1600 → jpeg 0.85。
- * 透明区垫深色（聊天空背景上白色块会很刺眼）。
- */
-async function imageToDataUrl(file) {
-  const raw = await new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onload = () => resolve(fr.result);
-    fr.onerror = () => reject(new Error("读取图片失败"));
-    fr.readAsDataURL(file);
-  });
-  const img = await new Promise((resolve, reject) => {
-    const node = new Image();
-    node.onload = () => resolve(node);
-    node.onerror = () => reject(new Error("图片解码失败"));
-    node.src = raw;
-  });
-  const MAX_EDGE = 1600;
-  const scale = Math.min(1, MAX_EDGE / Math.max(img.width, img.height));
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(img.width * scale));
-  canvas.height = Math.max(1, Math.round(img.height * scale));
-  const ctx = canvas.getContext("2d");
-  ctx.fillStyle = "#faf9f5"; // 透明底先垫画布色（与 --bg 同值，换色板时要一起改）
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
-  if (dataUrl.length > MAX_IMG) throw new Error("图片太大，请换一张更小的（约 4MB 内）");
-  return dataUrl;
-}
-
 /* ---------------- 昵称改动即时生效 ---------------- */
 
 /** 把已有消息气泡上的"我"换成新昵称（改设置后历史消息不用重载）。 */
@@ -167,6 +137,7 @@ function openPanel(open) {
     $("#s-font").value = localStorage.getItem(KEY.font) || "14.5";
     $("#s-font-val").textContent = $("#s-font").value;
     void refreshModelSettings(); // 「模型」段：从服务端拉当前配置回填
+    void refreshVisionSettings(); // 「视觉模型」段：同上
   }
 }
 
@@ -177,6 +148,7 @@ function openPanel(open) {
 export function initSettings() {
   buildSwatches();
   initModelSettings(); // 「模型」段（服务端配置，见 js/model-settings.js）
+  initVisionSettings(); // 「视觉模型」段（识图来源，见 js/vision-settings.js）
   $("#s-font-val").textContent = $("#s-font").value = localStorage.getItem(KEY.font) || "14.5";
 
   $("#btn-settings").addEventListener("click", () => openPanel($("#settings-panel").classList.contains("hidden")));

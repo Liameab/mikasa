@@ -15,6 +15,18 @@ sha256 才允许启动安装器。挡的是"下载损坏 / 中途被替换"；�
 完整性类失败（校验和不符 / 体积超限）一律删掉，免得留下"毒前缀"让
 下一次续传一直撞同一堵墙。
 
+**慢/断网络的取舍**（2026-09-20，用户点名："没有代理就没法更新了吗，
+网络不好也可以缓慢更新"）：这台机器到 GitHub 的直连实测是"一半的连接
+连不上、连上的也随时会卡成涓流"（实测某条连接 2KB/s，按这速度 80MB 要
+十来个小时；同时刻另开一条连接就是 485–580KB/s）。所以这里的纪律是
+**慢是允许的，卡死才是失败**：
+  1. 重试预算按"有没有下动"算，不按次数——只要这一轮让 `.part` 变大了
+     就不算失败，一直下到完；只有连续若干次一点没下动才认输；
+  2. 单条连接持续够久还跑不到 `_SLOW_MIN_RATE` 就主动掐掉换一条——因为
+     `.part` 在，换连接是**接着下**，代价只是一次握手；
+  3. 取校验和那个几百字节的小文件也要重试：它在下载之前，一次握手失败
+     就会让整场更新胎死腹中。
+
 **启动 = 双击语义**（os.startfile）：安装向导自己会先 taskkill 掉正在
 运行的 Mikasa，所以调用方（Web 服务进程）随后会被结束——前端在这之后
 不该再期待任何响应。
@@ -44,7 +56,7 @@ from mikasa.utils.logging import get_logger
 
 logger = get_logger("update")
 
-_CHUNK = 256 * 1024
+_CHUNK = 64 * 1024  # 进度上报粒度：256KB 在慢链路上要等好几分钟，界面看着像卡死
 _TIMEOUT = 60.0  # 连接与单块读超时（大文件按块读，每块各自计时）
 _MAX_ASSET_BYTES = 600 * 1024 * 1024  # 安装包上限（实测 ~90MB，留足余量）
 _MAX_SUMS_BYTES = 1024 * 1024  # 校验和文件上限（实测几百字节）
@@ -52,8 +64,18 @@ _MAX_REDIRECTS = 3
 _USER_AGENT = "Mikasa/0.1 (update-download)"
 
 _PART_SUFFIX = ".part"  # 半成品后缀（**只能是后缀**，见 _part_path）
-_RETRY_ATTEMPTS = 3  # 一次下载最多尝试几次（含首次）
-_RETRY_BACKOFF = (2.0, 5.0)  # 每次失败后的退避秒数（长度 = 尝试次数 - 1）
+# 重试预算按"有没有下动"给（2026-09-20 改，见 download_asset 的说明）：
+#   _MAX_ATTEMPTS        —— 硬上限，真·死网络也不会无限重试
+#   _MAX_BARREN_ATTEMPTS —— 连续这么多次**一点没下动**才认输；下动了就不算
+#   _MAX_INVALID_ATTEMPTS—— 续传基准反复作废（服务端总回 200 完整响应）也认输
+_MAX_ATTEMPTS = 200
+_MAX_BARREN_ATTEMPTS = 5
+_MAX_INVALID_ATTEMPTS = 2
+_RETRY_BACKOFF = (2.0, 5.0, 10.0, 20.0)  # 退避秒数；用完之后一直停在这个值
+_SLOW_MIN_RATE = 16 * 1024  # 一条连接慢于此（字节/秒）→ 认为不值得等，换一条
+_SLOW_WINDOW = 45.0  # 判断"这条连接太慢"的观察窗口（秒）
+_SLOW_ABORT_LIMIT = 5  # 一次任务最多因"太慢"换几次连接（换完还是慢就认了，慢慢下）
+_TEXT_ATTEMPTS = 3  # 校验和这类小文件的重试次数
 _STALL_SECONDS = 90.0  # 状态冻结多久算"停滞"（单块读超时 60s，故 90s 是真停了）
 _WORKER_GRACE = 10.0  # 占槽后等工作线程登记存活的宽限期（见 UpdateManager.start）
 
@@ -143,6 +165,26 @@ class _PartInvalid(Exception):
     """磁盘上的半成品不是远端文件的有效前缀（远端换包 / 起点不符）→ 删了重下。"""
 
 
+@dataclass
+class _RateGuard:
+    """ "这条连接太慢，值不值得换一条"（跨尝试累计，一次下载一个）。
+
+    实测这条链路是**连接级**的运气：同一时刻有的连接 2KB/s，另开一条就是
+    485–580KB/s。所以慢到地板以下时换一条常常是赚的；但换的次数要封顶——
+    握手本身要 35–50 秒，如果每条都慢，来回换反倒比老实慢慢下更慢。换够
+    `_SLOW_ABORT_LIMIT` 次还是慢，就说明这就是这条链路今天的样子，认了。
+    """
+
+    aborts: int = 0
+
+    def too_slow(self, rate: float) -> bool:
+        """窗口速率（字节/秒）低于地板 → True = 掐掉这条，换一条接着下。"""
+        if rate >= _SLOW_MIN_RATE or self.aborts >= _SLOW_ABORT_LIMIT:
+            return False
+        self.aborts += 1
+        return True
+
+
 def _part_path(dest: Path) -> Path:
     """半成品路径 = `dest` 同名 + `.part` 后缀。
 
@@ -183,6 +225,7 @@ def _download_once(
     asset: Asset,
     part: Path,
     on_progress: Callable[[int, int], None],
+    guard: _RateGuard,
     *,
     timeout: float,
 ) -> int:
@@ -230,6 +273,13 @@ def _download_once(
 
         on_progress(base, total)
         written = 0
+        # 慢连接看门狗：慢但活着的最坏情况能拖几小时（实测 2KB/s ≈ 11 小时），
+        # 而重开一条连接常常就是几百 KB/s。所以"持续够久且明显太慢"就主动掐掉，
+        # 交给上层退避重试——`.part` 还在，换连接是**接着下**，不是从头来。
+        # 计时从**第一条正文字节**起算：握手慢（实测首字节要等 35–50 秒）不该
+        # 被算成"传输慢"，那是另一码事，由 socket 超时和重试去管。
+        window_at: float | None = None
+        window_bytes = 0
         try:
             with part.open("ab" if append else "wb") as out:
                 while True:
@@ -241,6 +291,18 @@ def _download_once(
                         raise UpdateError("安装包超过体积上限，已中止下载")
                     out.write(chunk)
                     on_progress(base + written, total)
+                    now = time.monotonic()
+                    if window_at is None:
+                        window_at = now
+                    window_bytes += len(chunk)
+                    elapsed = now - window_at
+                    if elapsed >= _SLOW_WINDOW:
+                        rate = window_bytes / elapsed
+                        if guard.too_slow(rate):
+                            shown = f"{rate / 1024:.0f} KB/s" if rate >= 1024 else f"{rate:.0f} B/s"
+                            raise _Transient(f"这条连接太慢（{shown}），换一条接着下")
+                        window_at = now
+                        window_bytes = 0
         except (TimeoutError, OSError, http.client.IncompleteRead) as exc:
             # 半成品留在磁盘上：下一次尝试（或用户下次点重试）从它接着下
             raise _Transient(f"下载中断：{exc}") from exc
@@ -268,42 +330,86 @@ def download_asset(
     半成品在 `dest + ".part"`；传输类失败退避重试，**重试与跨会话都从它接着
     下**。调用方仍必须核对 sha256：`.part` 可能是上一轮的半截，也可能远端
     已经换过包——本函数无从判断。
+
+    **重试预算按"有没有进展"给，不按次数**（2026-09-20 改）：这条链路实测
+    "一半的连接连不上、连上的也随时会 reset"，固定 3 次尝试把成功概率压得太低
+    ——用户看到的就是"点了重试还是失败"。现在的规则是：只要这一轮让 `.part`
+    变大了就不算失败，一直下到完为止；只有**连续若干次一点都没下动**（或撞上
+    硬上限）才认输。慢是允许的，卡死才是失败。
     """
     _validate_asset_url(asset.url)
     part = _part_path(dest)
-    for attempt in range(1, _RETRY_ATTEMPTS + 1):
+    attempt = 0
+    barren = 0  # 连续"一点没下动"的次数（有进展就清零）
+    invalid = 0  # 续传基准作废的次数（服务端总回 200 完整响应）
+    guard = _RateGuard()  # 跨尝试累计"换过几条连接"，别在慢链路里来回握手
+    while attempt < _MAX_ATTEMPTS:
+        attempt += 1
+        before = part.stat().st_size if part.exists() else 0
         try:
-            return _download_once(asset, part, on_progress, timeout=timeout)
+            return _download_once(asset, part, on_progress, guard, timeout=timeout)
         except _PartInvalid as exc:
             logger.warning("更新续传基准作废（%s），从头重下", exc)
             part.unlink(missing_ok=True)
-            if attempt >= _RETRY_ATTEMPTS:
-                raise ProviderError(f"更新下载失败（{exc}），已重试 {attempt} 次") from exc
+            invalid += 1
+            if invalid > _MAX_INVALID_ATTEMPTS:
+                raise ProviderError(f"更新下载失败（{exc}），已重试 {attempt - 1} 次") from exc
+            why = str(exc)
         except _Transient as exc:
-            if attempt >= _RETRY_ATTEMPTS:
-                raise ProviderError(f"更新下载中断（{exc}），已重试 {attempt - 1} 次") from exc
-            backoff = _RETRY_BACKOFF[min(attempt - 1, len(_RETRY_BACKOFF) - 1)]
-            logger.warning("更新下载中断（%s），%.0f 秒后接着下", exc, backoff)
-            if on_retry is not None:
-                on_retry(attempt + 1, str(exc))
-            time.sleep(backoff)
+            after = part.stat().st_size if part.exists() else 0
+            if after > before:
+                # 下动了才断的：换一条连接接着下，不算"失败"（这是慢网络的常态）
+                barren = 0
+                logger.warning("更新下载中断（%s），从 %d 字节接着下", exc, after)
+            else:
+                barren += 1
+                logger.warning("更新下载没下动（%s），连续第 %d 次", exc, barren)
+                if barren >= _MAX_BARREN_ATTEMPTS:
+                    raise ProviderError(f"更新下载中断（{exc}），连续 {barren} 次没能下动") from exc
+            why = str(exc)
         except UpdateError:
             part.unlink(missing_ok=True)  # 策略类失败（超限/被压缩）不留半成品
             raise
-    raise AssertionError("重试循环不可能走到这里")  # pragma: no cover - 兜底防御
+        # 退避到上限后就一直用最后一个值（重试次数不再有限，别让等待时间无限涨）
+        step = min(attempt - 1, len(_RETRY_BACKOFF) - 1) if _RETRY_BACKOFF else 0
+        backoff = _RETRY_BACKOFF[step] if _RETRY_BACKOFF else 0.0
+        if on_retry is not None:
+            # 先告诉界面"正在重试第 N 次"，再去睡觉：弹窗不该在这一刻僵着
+            on_retry(attempt + 1, why)
+        if backoff:
+            logger.warning("%.0f 秒后接着下（第 %d 次尝试）", backoff, attempt + 1)
+            time.sleep(backoff)
+    raise ProviderError(f"更新下载失败：试了 {attempt} 次仍未完成（半成品留着，下次接着下）")
 
 
 def fetch_text(url: str, *, max_bytes: int, timeout: float = _TIMEOUT) -> str:
-    """下载一个小文本文件（SHA256SUMS.txt 用）；超限即中止。"""
+    """下载一个小文本文件（SHA256SUMS.txt 用）；超限即中止。
+
+    网络类失败要重试（2026-09-20 加）：这一步在整场下载**之前**，而这条链路
+    实测"一半的连接连不上"——原来一次握手失败就让整个更新胎死腹中，用户看到
+    的是一句"校验和文件下载失败（网络不可达或超时）"，而其实再试一次就好。
+    HTTP 状态类错误不重试（4xx/5xx 再试也是同样的结果）。
+    """
     _validate_asset_url(url)
-    try:
-        resp = _open(url, timeout)
-    except urllib.error.HTTPError as exc:
-        raise ProviderError(f"校验和文件下载失败（HTTP {exc.code}）") from exc
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise ProviderError("校验和文件下载失败（网络不可达或超时）") from exc
-    with resp:
-        raw = resp.read(max_bytes + 1)
+    raw: bytes | None = None
+    for attempt in range(1, _TEXT_ATTEMPTS + 1):
+        try:
+            resp = _open(url, timeout)
+        except urllib.error.HTTPError as exc:
+            raise ProviderError(f"校验和文件下载失败（HTTP {exc.code}）") from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            if attempt >= _TEXT_ATTEMPTS:
+                raise ProviderError("校验和文件下载失败（网络不可达或超时）") from exc
+            step = min(attempt - 1, len(_RETRY_BACKOFF) - 1) if _RETRY_BACKOFF else 0
+            backoff = _RETRY_BACKOFF[step] if _RETRY_BACKOFF else 0.0
+            logger.warning("校验和文件下载中断（%s），%.0f 秒后重试", exc, backoff)
+            time.sleep(backoff)
+            continue
+        with resp:
+            raw = resp.read(max_bytes + 1)
+        break
+    if raw is None:  # pragma: no cover - 循环要么 return/raise，要么赋值后 break
+        raise ProviderError("校验和文件下载失败（网络不可达或超时）")
     if len(raw) > max_bytes:
         raise UpdateError("校验和文件超出预期大小，已中止（安全策略）")
     return raw.decode("utf-8", errors="replace")

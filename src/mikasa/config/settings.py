@@ -182,6 +182,35 @@ class LLMConfig(BaseModel):
         return _secret_from_env(self.api_key_env)
 
 
+class VisionConfig(BaseModel):
+    """视觉模型配置（图片 → 文本，M6 ② 拍照转笔记）。
+
+    backend: api / local（OpenAI 兼容多模态端点）/ none（未接入，默认）。
+    **默认 none 是刻意的**：老的 --config 文件没有这一段时行为不漂移，offline
+    档也天然守住"零外部调用"承诺（见 ADR-0027）。api 档默认接 SiliconFlow 的
+    Qwen2.5-VL（与检索侧共用 SILICONFLOW_API_KEY）。
+
+    与 LLMConfig 分开而不是复用：两者的"模型"不是一回事（一个收文本、一个
+    收图片），混在一个段里会让"生成用 DeepSeek + 识图用 SiliconFlow"这种
+    真实组合无处落脚（用户日常 local 档 + 云端识图，也是这个形状）。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    backend: Literal["api", "local", "none"] = "none"
+    base_url: str | None = None
+    api_key_env: str | None = None
+    model: str = ""
+    max_tokens: int = 2048
+    # 识图比文本生成慢（大图编码 + 视觉 token），单独给一个超时；
+    # 借 ask 的默认会在手机拍的大图上一片超时
+    timeout_seconds: float = 60.0
+
+    @property
+    def api_key(self) -> str | None:
+        return _secret_from_env(self.api_key_env)
+
+
 class EmbeddingConfig(BaseModel):
     """词向量配置：api（SiliconFlow bge-m3 免费）/ local（fastembed bge-small-zh）/ none。"""
 
@@ -247,6 +276,7 @@ class Settings(BaseModel):
     retrieval: RetrievalConfig = RetrievalConfig()
     reranker: RerankerConfig = RerankerConfig()
     llm: LLMConfig = LLMConfig()
+    vision: VisionConfig = VisionConfig()
     embedding: EmbeddingConfig = EmbeddingConfig()
     judge: JudgeConfig = JudgeConfig()
     web: WebConfig = WebConfig()
@@ -266,12 +296,27 @@ class Settings(BaseModel):
         return self.data_dir / "uploads"
 
     @property
+    def note_media_dir(self) -> Path:
+        """笔记原图目录（M6 ② 拍照转笔记）：下面按**笔记 key** 分子目录。
+
+        放在 uploads 之外是刻意的：uploads 是 ingest 的输入（reindex 会扫它
+        重建文档），图片不是可解析文档，混进去会被当成待入库文件。
+        """
+        return self.data_dir / "note-media"
+
+    @property
     def log_dir(self) -> Path:
         return self.data_dir / "logs"
 
     def ensure_dirs(self) -> None:
         """创建运行所需目录（幂等）。"""
-        for path in (self.data_dir, self.index_dir, self.uploads_dir, self.log_dir):
+        for path in (
+            self.data_dir,
+            self.index_dir,
+            self.uploads_dir,
+            self.note_media_dir,
+            self.log_dir,
+        ):
             path.mkdir(parents=True, exist_ok=True)
 
 
@@ -329,20 +374,39 @@ def user_env_path() -> Path:
     return user_data_root() / ".env"
 
 
-def write_llm_overlay(fields: dict[str, Any]) -> Path:
-    """把 llm 段写进用户配置覆盖层（tmp + 原子替换，杜绝写一半的坏文件）。
+def write_section_overlay(section: str, fields: dict[str, Any]) -> Path:
+    """把某个配置段写进用户配置覆盖层（tmp + 原子替换，杜绝写一半的坏文件）。
 
     只写传入的字段：覆盖层是 _deep_merge 叠加在 profile 之上的，没写的键
-    继续取 profile 的值。面板 v1 只开放 llm 段——embedding/reranker/judge
-    仍随档位（换 embedding 模型会因向量维度不同要求全量重索引，ADR-0014）。
+    继续取 profile 的值。面板只开放 llm 与 vision 两段——embedding/reranker/
+    judge 仍随档位（换 embedding 模型会因向量维度不同要求全量重索引，ADR-0014）。
+
+    **必须是"读-改-写"**：覆盖层是**一份** YAML，早先的 llm 专用实现直接覆写
+    整份文件。泛化时若照抄这个写法，"保存视觉段"就会把已经配好的 llm 段静默
+    抹掉——用户看到的是"刚配好的生成模型自己变回去了"，而没有任何报错。
+    所以先读现有内容、只替换目标段，头注释随写保留。
     """
     path = user_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    body = yaml.safe_dump({"llm": fields}, allow_unicode=True, sort_keys=False)
+    existing: dict[str, Any] = {}
+    if path.is_file():
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            raise ConfigError(f"用户配置读取失败（{path}）：{exc}") from exc
+        if isinstance(loaded, dict):
+            existing = loaded
+    existing[section] = fields
+    body = yaml.safe_dump(existing, allow_unicode=True, sort_keys=False)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(_OVERLAY_HEADER + body, encoding="utf-8")
     os.replace(tmp, path)  # 同目录原子替换：读到的永远是完整 YAML
     return path
+
+
+def write_llm_overlay(fields: dict[str, Any]) -> Path:
+    """把 llm 段写进用户配置覆盖层（write_section_overlay 的薄包装）。"""
+    return write_section_overlay("llm", fields)
 
 
 def write_api_key(env_name: str, value: str) -> Path:
@@ -507,6 +571,7 @@ def _default_section_dict() -> dict[str, Any]:
         "retrieval": RetrievalConfig().model_dump(),
         "reranker": RerankerConfig().model_dump(),
         "llm": LLMConfig().model_dump(),
+        "vision": VisionConfig().model_dump(),
         "embedding": EmbeddingConfig().model_dump(),
         "judge": JudgeConfig().model_dump(),
         "web": WebConfig().model_dump(),

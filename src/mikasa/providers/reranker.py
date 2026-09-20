@@ -18,6 +18,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from mikasa.config.settings import RerankerConfig
 from mikasa.errors import ConfigError, ProviderError
+from mikasa.providers.llm import normalize_base_url
 from mikasa.utils.logging import get_logger
 
 logger = get_logger("providers.reranker")
@@ -54,7 +55,9 @@ class ApiReranker:
         self.model = config.model
 
     def _endpoint(self) -> str:
-        base = (self._config.base_url or "").rstrip("/")
+        # 与 LLM / 嵌入同一条纪律：base_url 先规范化（localhost → 127.0.0.1），
+        # 否则把重排指向本机服务时会在 ::1 上白等到超时（见 normalize_base_url）
+        base = normalize_base_url(self._config.base_url or "").rstrip("/")
         if not base:
             raise ConfigError("Reranker base_url 未配置。")
         # base 可能是 …/v1，端点固定为 …/v1/rerank

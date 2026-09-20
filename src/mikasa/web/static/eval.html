@@ -10,6 +10,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>评测 · Mikasa</title>
+  <!-- 公式渲染：KaTeX 随包内置（离线，见 js/common.js 的公式渲染段）；
+       排在 style.css 之前，好让后者的字号覆盖生效 -->
+  <link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
   <link rel="stylesheet" href="/static/css/style.css">
   <link rel="icon" href="data:,">
 </head>
@@ -81,6 +84,7 @@
   </main>
 
   <div id="toast"></div>
+  <script src="/static/vendor/katex/katex.min.js"></script>
   <script type="module" src="/static/js/eval.js"></script>
 </body>
 </html>

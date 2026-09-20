@@ -111,6 +111,43 @@ class ModelTestIn(BaseModel):
     api_key: str | None = Field(default=None, max_length=500, description="缺省=用已存密钥")
 
 
+class VisionSettingsIn(BaseModel):
+    """视觉模型配置保存请求体（PUT /api/settings/vision，见 ADR-0027）。
+
+    backend 允许 none（= **停止使用**视觉能力，不是删密钥）：这是"我不接
+    识图了"的正常表达，与"清空密钥"是两件事。
+
+    与模型段最关键的区别：**密钥只写不删**。SILICONFLOW_API_KEY 被
+    embedding/reranker/judge 共用，在这里清空会连带打挂整条检索链，而且
+    表现为"搜索结果变差"——最难联想到密钥的那种静默降级。空串直接 422
+    并指路模型段（服务端拦，不只靠前端不显示那个按钮）。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    backend: Literal["none", "api", "local"] = Field(
+        description="none=未接入；api=云端；local=本机"
+    )
+    base_url: str = Field(default="", max_length=500, description="OpenAI 兼容端点（含 /v1）")
+    model: str = Field(default="", max_length=200, description="视觉模型名")
+    api_key_env: str = Field(default="", max_length=100, description="密钥所在环境变量名")
+    api_key: str | None = Field(
+        default=None, max_length=500, description="None=不改；非空=写入；空串=拒绝（见类说明）"
+    )
+
+
+class VisionTestIn(BaseModel):
+    """测试视觉连接请求体（POST /api/settings/vision/test）。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    backend: Literal["api", "local"] = "api"
+    base_url: str = Field(default="", max_length=500)
+    model: str = Field(default="", max_length=200)
+    api_key_env: str = Field(default="", max_length=100)
+    api_key: str | None = Field(default=None, max_length=500, description="缺省=用已存密钥")
+
+
 class PaperFiltersIn(BaseModel):
     """在线论文检索的筛选条件（能力对齐见 papers/sources.py 的 SourceCaps）。
 

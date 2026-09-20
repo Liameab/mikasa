@@ -135,6 +135,27 @@ their ⋯ menu gains **编辑笔记**.
   a note exists only inside the library (`data/uploads/`). Back up `data/` before switching embedding
   models or moving machines.
 
+### Photos into notes (M6 ②)
+
+**识别图片** at the bottom of the editor turns a photo into note text — whiteboards, textbook pages and
+handwritten outlines become searchable notes. You can also **drag an image** onto the editor or
+**paste** a screenshot (`Ctrl+V`).
+
+- **Recognition is a draft**: the text lands at the cursor and you **correct it before saving** (OCR
+  always has errors, handwriting especially — characters the model cannot read come back as 「□」
+  rather than a guess). Saving without touching it is allowed; just know it is the raw recognition.
+- **The original image is kept with the note**: a thumbnail strip sits at the bottom of the editor
+  (✕ removes one), and the reader shows the images at the top of a note (click to open). What is
+  stored is a compressed copy (1600 px long edge) — enough to check against, not a scan.
+- **You need a vision model first**: **Settings (⚙) → 视觉模型** — pick SiliconFlow (cloud, strong on
+  Chinese handwriting) or a local Ollama model (free, offline, requires
+  `ollama pull qwen2.5vl:7b`). With nothing connected, "识别图片" says exactly what to do instead of
+  failing silently. The default is **not connected**: recognition sends your photo to whichever model
+  you pick, so that switch is yours to flip.
+- **Generation and recognition are separate**: run your everyday chat on local Ollama and send only
+  recognition to SiliconFlow — the two sections do not interfere. The vision section shares its key
+  slot with the retrieval side; to clear the key, do it in the model section.
+
 ## 6b. Find-Papers Page · Searching the literature and importing what you find
 
 The **找论文** page is its own tab (ADR-0020). Four free sources are queried at once — arXiv (preprints, all open access), OpenAlex (journal metadata including Chinese journals), CORE (an open-access aggregator with full-text links) and **DOAJ** (the open-access journal directory, **no key required**, which is where Chinese open-access journals such as 工业水处理 live) — and a result can be imported straight into your corpus, where it becomes askable like any other document. **Three of the four need no registration at all** (only OpenAlex prefers a free key, see below).

@@ -2,7 +2,7 @@
 
 Mikasa 的发布包内含下列第三方组件。本文件由 `tools/make_third_party_notices.py` 从**实际打进包的模块**反查生成，不是照 pyproject 抄的（pyproject 只列直接依赖，会漏掉全部传递依赖）。
 
-组件总数：**21**
+组件总数：**21**（另有 1 个随包前端资源）
 
 ## ⚠ 带 copyleft 条款的组件（分发前请确认义务）
 
@@ -4015,4 +4015,38 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
+
+## 随包内置的前端资源
+
+这些不是 Python 包（扫描反查看不到），因此**手工维护**：新增 vendor 资源必须在此补一行，否则清单会漏报。
+
+| 组件 | 版本 | 许可证 | 位置 | 用途 |
+| --- | --- | --- | --- | --- |
+| KaTeX | 0.18.7 | MIT | `src/mikasa/web/static/vendor/katex/` | 数学公式渲染（renderToString 纯字符串渲染，离线，无运行时依赖） |
+
+### 前端资源许可证正文
+
+#### KaTeX 0.18.7 — MIT
+
+The MIT License (MIT)
+
+Copyright (c) 2013-2020 Khan Academy and other contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 

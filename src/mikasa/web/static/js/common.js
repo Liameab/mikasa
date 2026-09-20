@@ -230,6 +230,115 @@ export async function ssePost(path, body, onFrame) {
 /* 渲染：答案正文 + 引用                                               */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* 公式渲染（KaTeX，离线内置，2026-09-20）                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 把 LLM 输出里的 LaTeX 交给本地 KaTeX 渲染（`/static/vendor/katex/`）。
+ *
+ * **为什么需要**：用户问数学题时模型按惯例给 `$$e^x = 1 + \frac{x^2}{2!} + \cdots$$`，
+ * 而 renderAnswer 这套轻渲染只认代码/粗体/标题/列表/表格——`$...$`、`\frac{}`
+ * 全被当普通文字原样输出，整页看着像源码（用户 2026-09-20 报障"排版特别的乱"）。
+ *
+ * 三条纪律：
+ * 1. **离线**：KaTeX 随包内置（无 CDN、无构建链），与"本地优先"的产品形态一致；
+ * 2. **不改代码语义**：围栏代码块与行内代码里的 `$` 一律不碰（`echo $HOME` 不是公式）；
+ * 3. **失败不吞内容**：KaTeX 没加载（脚本缺失 / Node 冒烟）或渲染抛错时，
+ *    原样保留 LaTeX 文本，绝不静默丢字。
+ */
+
+/** 公式占位符（renderAnswer 内部另用 `\ue000`，两者分属不同字符、互不干扰）。 */
+const PH_MATH = "\ue001";
+/** 抽公式前先把行内代码藏起来的占位符。 */
+const PH_CODE = "\ue002";
+
+/**
+ * `$...$` 里这一段"看起来像公式"吗——只用来挡货币写法。
+ *
+ * 成对的 `$` 不等于公式：`价格$5到$10之间`、`$1,000` 这类写法也成对。
+ * 两道闸（第一版判据太严，实测把 `(-1, 1]`、`n!`、`2n+1`、`o(x)` 这些**真公式**
+ * 全挡在门外——用户那条泰勒展开的回答里一次漏了 8 处，故改成"先排除、后放行"）：
+ *   1. 内容里有中文且没有任何 LaTeX 命令 → 不是公式（`5到`、`A股`）；
+ *      `$\text{对 } \frac{1}{1+x}$` 这种带命令的照常放行；
+ *   2. 内容是纯数字/千分位/小数点 → 金额或编号（`5`、`1,000.50`），不是公式。
+ * 其余一律放行——区间 `(-1, 1]`、阶乘 `n!`、`2n+1` 都必须算公式。
+ */
+function looksLikeMath(tex) {
+  const t = tex.trim();
+  if (!t) return false;
+  if (/[\u4e00-\u9fff]/.test(t) && !t.includes("\\")) return false; // 中文夹着的钱数/编号
+  if (/^[\d.,\s]+$/.test(t)) return false; // 纯数字：金额或编号
+  return true;
+}
+
+/** LaTeX → KaTeX HTML；不可用或抛错时返回 null（调用方原样保留文本）。 */
+function katexHtml(tex, display) {
+  const katex = globalThis.katex;
+  if (!katex || typeof katex.renderToString !== "function") return null;
+  try {
+    return katex.renderToString(tex, {
+      displayMode: display,
+      throwOnError: false, // 渲染不了就显示红色原文，不抛异常打断整条消息
+      strict: "ignore", // 公式里出现中文/Unicode 时不刷控制台警告
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** 块级公式：`$$...$$` 与 `\[...\]`。 */
+const MATH_BLOCK = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]/g;
+/** 行内公式：`$...$` 与 `\(...\)`；`\$` 是转义美元符，不算分隔符。 */
+const MATH_INLINE = /(?<!\\)\$(?!\s)((?:\\\$|[^$\n])+?)(?<!\s)(?<!\\)\$|\\\(([\s\S]+?)\\\)/g;
+
+/** 一行正文里的公式 → 占位符；HTML 存进 tokens，由调用方在最后统一还原。 */
+function stashMathLine(line, tokens) {
+  const stash = (html) => {
+    tokens.push(html);
+    return `${PH_MATH}${tokens.length - 1}${PH_MATH}`;
+  };
+  // 行内代码先藏起来：里面的 $ 不是公式
+  const codes = [];
+  let out = line.replace(/`[^`]+`/g, (m) => {
+    codes.push(m);
+    return `${PH_CODE}${codes.length - 1}${PH_CODE}`;
+  });
+  const swap = (raw, tex, display) => {
+    const html = katexHtml(tex, display);
+    return html === null ? raw : stash(html);
+  };
+  out = out.replace(MATH_BLOCK, (raw, dollars, brackets) =>
+    swap(raw, dollars ?? brackets, true)
+  );
+  out = out.replace(MATH_INLINE, (raw, dollars, parens) => {
+    if (dollars !== undefined && !looksLikeMath(dollars)) return raw; // 货币写法不渲染
+    return swap(raw, dollars ?? parens, false);
+  });
+  // 还原行内代码（公式此刻已是占位符，不会再被匹配）
+  return out.replace(new RegExp(PH_CODE + "(\\d+)" + PH_CODE, "g"), (_m, idx) => codes[Number(idx)]);
+}
+
+/**
+ * 整篇正文预处理：逐行抽公式。
+ *
+ * 围栏代码块**整段跳过**（``` 之间是代码不是公式）；`stashMathLine` 内部再
+ * 把行内代码摘出去。返回的文本里公式已变成占位符，可安全走后续 markdown 管线。
+ */
+function stashMath(text, tokens) {
+  let inFence = false;
+  return text
+    .split(/\r?\n/)
+    .map((line) => {
+      if (/^\s*```/.test(line)) {
+        inFence = !inFence;
+        return line;
+      }
+      return inFence ? line : stashMathLine(line, tokens);
+    })
+    .join("\n");
+}
+
 /**
  * 答案正文渲染（LLM 输出 → HTML 片段）。
  *
@@ -239,6 +348,9 @@ export async function ssePost(path, body, onFrame) {
  *
  * 安全次序与以前一致：每个块取原始文本 → esc → 受控替换；围栏代码
  * 内容只 esc 不替换——代码里的 ** 与 [n] 保持字面，不误渲染。
+ * 公式是这套管线**前面**的一道预处理：先按 LaTeX 抽出（`$...$` / `$$...$$`
+ * 由本地 KaTeX 渲染），换成占位符再进管线，最后把 HTML 还原回去——这样
+ * 转义次序不变，公式内容也不会被 esc 破坏（见上面的公式渲染段）。
  *
  * showCites 第三参门控 chip 链：kb 模式（缺省 true）输出 byte-identical；
  * free 模式（false）正文里的 [n] 原样显示——free 无注入编号协议，
@@ -259,6 +371,7 @@ const BILINGUAL_TITLE = "<strong>原文与译文对照</strong>";
 
 export function renderAnswer(text, citations, showCites = true) {
   const byMarker = showCites ? new Map(citations.map((c) => [c.marker, c])) : null;
+  const mathTokens = []; // 公式的 KaTeX HTML（末段统一还原）
   // 占位符用私用区字符（正常文本与 esc 输出都不会含 ）
   const PH = "";
   const inline = (escaped) => {
@@ -348,7 +461,7 @@ export function renderAnswer(text, citations, showCites = true) {
   };
 
   const out = [];
-  const lines = String(text).split(/\r?\n/);
+  const lines = stashMath(String(text), mathTokens).split(/\r?\n/);
   let para = []; // 段落行缓冲（非空时 list 必为 null，二者互斥）
   let list = null; // { tag: "ul"|"ol", items: [原始行文本...] }
   const flushPara = () => {
@@ -475,7 +588,12 @@ export function renderAnswer(text, citations, showCites = true) {
     i += 1;
   }
   flush(); // 文末收口残段
-  return out.join("");
+  const html = out.join("");
+  if (!mathTokens.length) return html;
+  return html.replace(
+    new RegExp(PH_MATH + "(\\d+)" + PH_MATH, "g"),
+    (_m, idx) => mathTokens[Number(idx)]
+  );
 }
 
 /** 引用明细卡（回答下方的"参考资料"栏）。marker 数字作为卡 id。

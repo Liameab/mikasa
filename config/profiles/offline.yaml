@@ -35,6 +35,12 @@ llm:
 embedding:
   backend: none
 
+vision:
+  # 图片 → 文本：离线档**永远不接入**（本档承诺零密钥、零外部调用）。
+  # 需要识图请切 api / local 档，或在设置面板里单独接入（面板只对
+  # 非离线档开放）。
+  backend: none
+
 judge:
   enabled: false
 

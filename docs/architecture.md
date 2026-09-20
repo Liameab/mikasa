@@ -39,7 +39,7 @@ than three scripts bolted together.
 | Entry | `cli/` `web/` `__main__.py` | typer + rich commands; FastAPI + vanilla frontend |
 | Application | `pipeline/` | ask orchestration: retrieve → inject → generate → validate |
 | Domain services | `ingest/` `index/` `eval/` `papers/` | ingest, index, evaluation, online paper search (the pluggable algorithm zone) |
-| Providers | `providers/` | LLM / embedding / reranker: Protocol + implementations (ADR-0003) |
+| Providers | `providers/` | LLM / embedding / reranker / **vision** (M6 ②, ADR-0027): Protocol + implementations (ADR-0003) |
 | Storage | `storage/` | SQLite connection/repositories + meta.json snapshot |
 | Foundation | `config/` `models/` `utils/` `errors.py` | configuration, pydantic models, text/logging |
 

@@ -257,6 +257,38 @@ async def run(args):
             # 失败路径不落盘：服务端仍是保存时的配置
             health_after_error = api_get(port, "/api/health")["llm_model"]
 
+            # ---- 6.「视觉模型」段（M6 ②）：初始未接入 → 切 SiliconFlow → 保存 ----
+            vision_initial = await cdp.evaluate("""(() => ({
+              chips: [...document.querySelectorAll('#v-provider .s-chip')]
+                .map(c => c.dataset.preset),
+              chipOn: document.querySelector('#v-provider .s-chip.on')?.dataset.preset || '',
+              baseUrlRowHidden: document.querySelector('#v-base-url').closest('.s-row')
+                .classList.contains('hidden'),
+            }))()""")
+            await cdp.evaluate(
+                "document.querySelector('#v-provider .s-chip[data-preset=\"siliconflow\"]')"
+                ".click(); true"
+            )
+            await asyncio.sleep(0.2)
+            vision_preset = await cdp.evaluate("""(() => ({
+              model: document.querySelector('#v-model').value,
+              baseUrl: document.querySelector('#v-base-url').value,
+              keyRowHidden: document.querySelector('#v-api-key').closest('.s-row')
+                .classList.contains('hidden'),
+            }))()""")
+            await cdp.evaluate("document.querySelector('#v-save-btn').click(); true")
+            await wait_until(
+                cdp,
+                "fetch('/api/settings/vision').then(r => r.json()).then(d => d.backend === 'api')",
+                "视觉段保存后服务端已切换（热生效）",
+            )
+            vision_saved = await cdp.evaluate(
+                "document.querySelector('#v-provider .s-chip.on')?.dataset.preset || ''"
+            )
+            # ★ 红线（端到端版）：写视觉段**不能把模型段抹掉**（覆盖层是同一份 YAML）
+            overlay_after_vision = (userdata / "config.yaml").read_text(encoding="utf-8")
+            model_after_vision = api_get(port, "/api/settings/model")
+
             shot = None
             if args.out_shot:
                 res = await cdp.call("Page.captureScreenshot", {"format": "png"})
@@ -285,6 +317,8 @@ async def run(args):
               baseUrl: document.querySelector('#s-base-url').value,
               hasKey: document.querySelector('#s-api-key').placeholder.includes('已保存'),
               chipOn: document.querySelector('#s-provider .s-chip.on')?.dataset.preset || '',
+              vChipOn: document.querySelector('#v-provider .s-chip.on')?.dataset.preset || '',
+              vModel: document.querySelector('#v-model').value,
             }))()""")
             await asyncio.sleep(0.8)
 
@@ -302,6 +336,10 @@ async def run(args):
                 "overlayHasModel": "deepseek-chat" in overlay,
                 "envFileHasKey": "DEEPSEEK_API_KEY" in env_file,
                 "testError": test_error[:80],
+                "visionInitial": vision_initial,
+                "visionPreset": vision_preset,
+                "visionSaved": vision_saved,
+                "modelAfterVision": model_after_vision["model"],
                 "afterReload": after_reload,
                 "consoleErrors": cdp.errors,
             }
@@ -346,6 +384,32 @@ async def run(args):
                 bad.append(f"刷新后回填地址不对: {after_reload['baseUrl']}")
             if not after_reload["hasKey"]:
                 bad.append("刷新后密钥状态提示不对")
+            # ---- 视觉段（M6 ②）----
+            if vision_initial["chips"] != ["none", "siliconflow", "ollama", "custom"]:
+                bad.append(f"视觉段芯片不对: {vision_initial['chips']}")
+            if vision_initial["chipOn"] != "none":
+                bad.append(f"offline 档视觉段应默认「未接入」，实际 {vision_initial['chipOn']}")
+            if not vision_initial["baseUrlRowHidden"]:
+                bad.append("「未接入」时地址行应隐藏（没什么可填）")
+            if vision_preset["model"] != "Qwen/Qwen2.5-VL-32B-Instruct":
+                bad.append(f"视觉预设没填模型名: {vision_preset['model']}")
+            if vision_preset["baseUrl"] != "https://api.siliconflow.cn/v1":
+                bad.append(f"视觉预设没填地址: {vision_preset['baseUrl']}")
+            if vision_preset["keyRowHidden"]:
+                bad.append("SiliconFlow 预设下密钥行被误隐藏")
+            if vision_saved != "siliconflow":
+                bad.append(f"视觉段保存后选中芯片不对: {vision_saved}")
+            if "vision:" not in overlay_after_vision:
+                bad.append("覆盖层没有写入视觉段")
+            # ★ 红线：写视觉段不能抹掉模型段（整个 E2E 里最值钱的一条）
+            if "deepseek-chat" not in overlay_after_vision:
+                bad.append("保存视觉段把模型段从覆盖层里抹掉了")
+            if model_after_vision["model"] != "deepseek-chat":
+                bad.append(f"视觉段保存后模型段被改动: {model_after_vision['model']}")
+            if after_reload["vChipOn"] != "siliconflow":
+                bad.append(f"重启+刷新后视觉段没回填: {after_reload['vChipOn']}")
+            if after_reload["vModel"] != "Qwen/Qwen2.5-VL-32B-Instruct":
+                bad.append(f"重启+刷新后视觉模型名没回填: {after_reload['vModel']}")
             if cdp.errors:
                 bad.append("console 有错误")
             if bad:

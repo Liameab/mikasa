@@ -52,6 +52,8 @@
 | ADR-0024 | Resumable downloads, adoptable jobs: the "observation window" and slot self-healing (amends ADR-0022 points 3 and 7) | Accepted |
 | ADR-0025 | Relicensed to AGPL-3.0: the distributed build bundles AGPL PyMuPDF (change the license, not the dependency) | Accepted |
 | ADR-0026 | Synthesized question banks plus per-item verification: evaluate your own corpus, not just the sample one | Accepted |
+| ADR-0027 | Photos into notes: vision as its own config section, recognition as a draft, images anchored to the note key | Accepted |
+| ADR-0028 | Formulas are typeset locally: KaTeX is vendored into the build | Accepted |
 
 ---
 
@@ -1549,3 +1551,138 @@ ids still exist.
 synthesis panel, progress polling, a full bar on completion); tests `tests/unit/eval/test_synth.py`,
 `test_golden.py`, `test_runner.py`, `tests/unit/web/test_eval_api.py`; E2E `tools/chrome_eval.py`
 (a local fake OpenAI-compatible endpoint: synthesis → a full evaluation run → the report).
+
+---
+
+## ADR-0027 Photos into notes: vision as its own config section, recognition as a draft, images anchored to the note key
+
+- Status: Accepted | 2026-09-20 (M6 ②, the user asked for "photos into note text")
+- Related: ADR-0021 (notes are ordinary documents with a marker), ADR-0018 (model setup in the
+  settings panel), ADR-0026 (the same honesty rule: generated content must say so)
+
+**Problem**: whiteboard photos, textbook pages and handwritten outlines taken while revising just
+sit there as images — they cannot be searched or asked about, and retyping them defeats the point of
+a quick note. Four questions have to be answered before this joins the note pipeline:
+
+1. **Where does vision live?** The local profile (Ollama qwen3) has no vision model and the offline
+   profile is a mock — and local is the profile the user actually runs day to day.
+2. **Can recognition go straight into the library?** No: OCR always has errors (handwriting
+   especially), and storing them would freeze those errors into the knowledge base.
+3. **Do we keep the image?** The user decided **yes** (to check against later), but an image is not
+   a document and must not drift into the corpus.
+4. **Where does it live?** Notes are "same-name replacement" (every save changes `documents.id`), so
+   anything keyed on the id is orphaned by the first edit.
+
+**Decision**:
+
+1. **Vision gets its own config section** (`VisionConfig`: `backend: none | api | local`),
+   **defaulting to none**. Not merged into `llm`: one takes text, the other takes images, and merging
+   them leaves no place for the real combination "DeepSeek for generation + SiliconFlow for
+   recognition" — which is exactly what a local-profile user with a cloud key wants. `api.yaml`
+   defaults to SiliconFlow `Qwen2.5-VL-32B-Instruct` (sharing `SILICONFLOW_API_KEY` with the
+   retrieval side); `local.yaml` / `offline.yaml` say none explicitly (offline keeps its zero-call
+   promise).
+2. **Vision is its own provider layer** (`providers/vision.py`), and **the LLM Protocol is left
+   alone**: multimodal content arrays cannot pass `list[dict[str, str]]` typing, and widening it
+   would drag in the ask pipeline and MockLLM's crash point on non-string content. Only
+   `build_openai_client` is extracted for shared key handling (a second copy would drift into
+   "recognition works, chat does not").
+3. **Recognition is a draft, not an ingest**: "识别图片" in the editor inserts the text at the
+   cursor, the user corrects it, and saving ingests it. Images **never enter the body text**: the
+   body feeds the index, so an image marker is retrieval noise and would force a re-embed on every
+   save.
+4. **Images are anchored to the note key** (`data_dir/note-media/<key>/<nnn>-<sha8>.<ext>`):
+   the key inside `source_ref = "note:<key>"` is fixed at creation and survives renames and edits
+   (ADR-0021 already established that the copy's filename is never regenerated). Content-addressed
+   for dedup, several per note, and deleting the document removes the directory (**failures are
+   logged, never blocking** — the same policy as the uploads copy, and lower risk since note-media
+   is not scanned by reindex).
+5. **The panel gains a vision group, but its key is write-only**: `SILICONFLOW_API_KEY` is shared
+   with embedding/reranker/judge, so clearing it here would break the whole retrieval chain while
+   presenting as "search results got worse" — the hardest failure to trace back to a key. An empty
+   string is rejected with 422 pointing at the model section, and the frontend never sends an empty
+   key in the first place. The panel is **purely additive** (`vision-settings.js` + `#v-*` DOM); the
+   existing model section's regression surface is untouched.
+6. **The OCR endpoint** (`POST /api/notes/ocr`): magic-byte validation (never the extension or
+   Content-Type), a 12 MB cap (**independent of BodySizeLimit**, which is baked at `create_app` and
+   does not follow hot reloads), images **never written to disk** (memory → base64 data URL),
+   400 with an actionable message when vision is not connected (pointing at the panel or
+   `ollama pull qwen2.5vl:7b`), and 502 on upstream failure (the app-level handler).
+7. **Three frontend entry points, one function** (button / drag-and-drop / pasted screenshot →
+   `addImage()`); compression reuses `image-util.js`, extracted from settings.js (two copies would
+   eventually drift into "one compresses to 1600 px, the other ships the full phone photo"). A failed
+   recognition **keeps the image** (the user may have wanted it stored anyway).
+
+**Explicitly not doing**:
+
+- **Archival image quality**: what is stored is a compressed JPEG (1600 px long edge ≈ 150 dpi),
+  enough to check against later, not a scan.
+- **Orphan-directory sweeping**: `ingest --reindex` empties the rows and leaves note-media
+  directories unclaimed (recorded in limitations for a later round).
+- **Batch recognition**: the frontend runs one image at a time (each takes seconds; concurrency
+  would only queue).
+- **Real Ollama VLM testing**: this round only documents the `ollama pull qwen2.5vl:7b` path.
+
+**Consequences**: any profile can set up recognition — api works out of the box, local can point at
+the cloud with one click or pull a local VLM; images stay decoupled from the body, so retrieval
+quality is unaffected. The price: the settings panel lives on the QA page only (a cross-page
+reality, handled with a pointer in the copy), and apart from deleting a note there is no automatic
+cleanup path for images (the editor can remove them one by one).
+
+**Code**: `config/settings.py` (`VisionConfig`, `note_media_dir`, the read-modify-write
+`write_section_overlay`), `providers/vision.py` (new: magic-byte sniffing and `NoVision`'s
+actionable error), `providers/llm.py` (extracted `build_openai_client`),
+`web/routers/documents.py` (`/api/notes/ocr` + the four media endpoints + delete cleanup),
+`web/routers/settings.py` (three `/api/settings/vision` endpoints), `web/schemas.py`,
+`web/services.py` (`services.vision` + `rebuild_vision`); frontend
+`static/js/{image-util,vision-settings,note-editor,reader,settings}.js` + `index.html` +
+`style.css`; tests `tests/unit/providers/test_vision.py`, `tests/unit/web/test_note_ocr_api.py`,
+`test_note_media_api.py`, `test_vision_settings_api.py`, `tests/unit/config/test_user_config.py`;
+E2E `tools/chrome_note_ocr.py` (a fake multimodal endpoint driving the real browser through the
+whole flow) and `tools/chrome_model_settings.py` (extended to the vision section, including the
+end-to-end red line "configuring vision must not wipe the model section").
+
+## ADR-0028 Formulas are typeset locally: KaTeX is vendored into the build
+
+**Context**: the user asked a calculus question in free mode and got a correct, well-structured
+answer whose `$$…$$` block formulas were displayed as raw LaTeX source — "why is the layout such a
+mess". The cause was not a regression: the project had never rendered math at all. `renderAnswer`
+is a small hand-written Markdown-ish renderer (fenced code, inline code, bold, headings, lists,
+tables, `---`, citation chips), and it passed `$…$` / `\frac{}` through as plain text. A grep for
+`KaTeX|MathJax|LaTeX` across the repo returned zero hits.
+
+**Decision**: vendor KaTeX 0.18.7 (`katex.min.js`, `katex.min.css`, 20 `.woff2` fonts, `LICENSE`)
+into `web/static/vendor/katex/` and typeset math inside `renderAnswer` as a **pre-pass**:
+extract LaTeX from the raw text, replace it with placeholders, run the existing pipeline
+(escape → controlled replacement), then swap the KaTeX HTML back in.
+
+**Why a pre-pass instead of a DOM post-pass**: KaTeX's own `renderToString` is a pure string
+function, which keeps the "no build chain, no DOM dependency" property of this renderer (and its
+smoke test can run it under plain Node). Extracting *before* `esc()` matters: a post-pass would
+hand KaTeX `x &lt; y` and render nonsense.
+
+**Guardrails**: code fences and inline code are masked first (`echo $HOME` is not a formula), and
+paired `$` alone is not enough — a Chinese-character run without any LaTeX command, or a purely
+numeric payload, is treated as prose/currency (`价格$5到$10之间`, `$1000$`). The first version of
+that rule was too strict and silently skipped 8 real formulas in the user's own answer
+(`(-1, 1]`, `n!`, `2n+1`, `o(x)`) — the rule is now "exclude, then accept by default", with the
+miss locked by smoke assertions.
+
+**Alternatives considered and rejected**: telling the model to avoid LaTeX (math becomes unreadable
+in exactly the subject where it matters); MathJax (heavier, and its DOM-walking design does not fit
+a string-returning renderer); a CDN loader (this app must work offline, and the desktop window has
+no guaranteed internet path — the project already burned a day on GitHub connectivity).
+
+**Consequences**: answers carry ~150 KB of KaTeX HTML for a formula-dense reply (the user's Taylor
+expansions: 15 display + 42 inline formulas → 148 KB rendered, up from 6 KB of Markdown), and the
+package grows by 545 KB. In exchange, math is readable, selectable and copyable, and it works with
+the network unplugged. If KaTeX is missing (script absent, Node smoke), the raw LaTeX is shown
+verbatim — never swallowed.
+
+**Code**: `web/static/vendor/katex/**` (vendored, MIT, listed in `THIRD_PARTY_NOTICES.md` via
+`tools/make_third_party_notices.py`), `web/static/js/common.js` (the "公式渲染" section),
+the four pages (`vendor` CSS **before** `style.css`, so the project's font-size override wins),
+`css/style.css` (`.katex` / `.katex-display`, long formulas scroll instead of bursting the bubble);
+tests `tools/smoke_render.mjs` (fake KaTeX: wiring, code masking, currency rejection),
+`tools/smoke_math.mjs` (the real vendored KaTeX, 24 assertions), and
+`tests/unit/web/test_frontend_static.py` (files present + every page wired + CSS order).

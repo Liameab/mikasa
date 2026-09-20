@@ -34,6 +34,18 @@ DEFAULT_OUT = REPO_ROOT / "THIRD_PARTY_NOTICES.md"
 # 带 copyleft 条款的许可证：分发它们不是"附个声明"就能了事，要单独点名
 COPYLEFT_HINTS = ("AGPL", "GPL", "LGPL", "MPL", "EUPL", "SSPL")
 
+# 随包内置的**前端**资源（扫描 Python 包看不到，故在此手工维护）。
+# 新增 vendor 资源必须补一行——清单漏报第三方许可，是分发层面的合规问题。
+FRONTEND_ASSETS = [
+    {
+        "name": "KaTeX",
+        "version": "0.18.7",
+        "license": "MIT",
+        "dir": REPO_ROOT / "src" / "mikasa" / "web" / "static" / "vendor" / "katex",
+        "purpose": "数学公式渲染（renderToString 纯字符串渲染，离线，无运行时依赖）",
+    },
+]
+
 
 def is_copyleft(package: dict) -> bool:
     haystack = package["license"] + " " + " ".join(package["classifiers"])
@@ -147,7 +159,8 @@ def render(packages: list[dict]) -> str:
         "`tools/make_third_party_notices.py` 从**实际打进包的模块**反查生成，"
         "不是照 pyproject 抄的（pyproject 只列直接依赖，会漏掉全部传递依赖）。",
         "",
-        f"组件总数：**{len(packages)}**",
+        f"组件总数：**{len(packages)}**"
+        + (f"（另有 {len(FRONTEND_ASSETS)} 个随包前端资源）" if FRONTEND_ASSETS else ""),
         "",
     ]
     if copyleft:
@@ -177,6 +190,37 @@ def render(packages: list[dict]) -> str:
         lines.append("")
         lines += package["texts"]
         lines.append("")
+
+    if FRONTEND_ASSETS:
+        lines += [
+            "## 随包内置的前端资源",
+            "",
+            "这些不是 Python 包（扫描反查看不到），因此**手工维护**：新增 vendor 资源"
+            "必须在此补一行，否则清单会漏报。",
+            "",
+            "| 组件 | 版本 | 许可证 | 位置 | 用途 |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+        for asset in FRONTEND_ASSETS:
+            rel = asset["dir"].relative_to(REPO_ROOT).as_posix()
+            lines.append(
+                f"| {asset['name']} | {asset['version']} | {asset['license']} "
+                f"| `{rel}/` | {asset['purpose']} |"
+            )
+        lines += ["", "### 前端资源许可证正文", ""]
+        for asset in FRONTEND_ASSETS:
+            license_file = asset["dir"] / "LICENSE"
+            body = (
+                license_file.read_text(encoding="utf-8").strip()
+                if license_file.is_file()
+                else "(见该目录下的 LICENSE 文件)"
+            )
+            lines += [
+                f"#### {asset['name']} {asset['version']} — {asset['license']}",
+                "",
+                body,
+                "",
+            ]
     return "\n".join(lines) + "\n"
 
 

@@ -22,10 +22,17 @@
        "删旧行插新行"），所以保存后必须用响应里的新 id 重新选中；
      - 回填走 GET /api/notes/{id} 读 uploads 原文（不是 /content——那里是拼
        chunk 的阅读正文，会丢 `#` 标题行与代码围栏，拿它回填等于静默重写笔记）。
+
+   图片（M6 ②，ADR-0027）：按钮 / 拖拽 / 粘贴三条入口都汇到 addImage()——
+   压缩 → 立即进缩略图条 → 调 /api/notes/ocr 识别 → 文本插到光标处。
+   **识别结果只是草稿**：OCR 一定有错字（手写尤其），保存与否由用户改完再定。
+   原图在保存成功后逐张 POST 到 /api/notes/{新 id}/media：正文已经落库，
+   图片失败只在提示里如实说不回滚——绝不让"图片没存上"变成"笔记也没了"。
    ========================================================================= */
 
 import { el, errorMessage, renderAnswer, toast } from "./common.js";
 import { confirmDialog } from "./confirm.js";
+import { compressImage } from "./image-util.js";
 import { folderOptions } from "./tree.js";
 
 const TITLE_MAX = 120; // 与后端 NoteIn.title 的 max_length 对齐
@@ -46,6 +53,11 @@ async function callApi(method, path, payload) {
     headers: payload ? { "Content-Type": "application/json" } : undefined,
     body: payload ? JSON.stringify(payload) : undefined,
   });
+  return await readResponse(resp);
+}
+
+/** resp → {status, ok, body, text}（FormData / 图片上传那条路直接用）。 */
+async function readResponse(resp) {
   const text = await resp.text();
   let body = null;
   try {
@@ -123,16 +135,27 @@ export async function openNoteEditor({ docId = null, onSaved = null } = {}) {
   const folderWrap = el("label", { class: "note-folder-wrap" }, "保存到 ", folderSelect);
   const cancelBtn = el("button", { class: "btn ghost", type: "button" }, "取消");
   const saveBtn = el("button", { class: "btn primary", type: "button" }, "保存");
+  const ocrBtn = el("button", { class: "btn ghost", type: "button" }, "识别图片");
+  // class 里的 note-image-input 是 E2E 的稳定抓手（CDP 喂文件按选择器找）
+  const fileInput = el("input", {
+    type: "file",
+    accept: "image/*",
+    class: "hidden note-image-input",
+  });
+  const mediaBar = el("div", { class: "note-media hidden" }); // 原图缩略图条
 
   const box = el(
     "div",
     { class: "note-box", role: "dialog", "aria-modal": "true", "aria-label": "笔记编辑器" },
     el("div", { class: "note-head" }, titleInput),
     el("div", { class: "note-split" }, editor, preview),
+    mediaBar,
     el(
       "div",
       { class: "note-foot" },
       editing ? el("span", { class: "note-folder-hint muted small" }, "归属在树里拖动调整") : folderWrap,
+      ocrBtn,
+      fileInput,
       hint,
       el("span", { class: "grow" }),
       cancelBtn,
@@ -173,11 +196,154 @@ export async function openNoteEditor({ docId = null, onSaved = null } = {}) {
     hint.textContent = `${editor.value.length} 字符`;
   };
 
+  /* ---- 图片（M6 ② 拍照转笔记，ADR-0027）---- */
+
+  // 缩略图条一条渲染路径管两种条目：
+  //   待保存（本机 blob 预览，× = 这次不存它）
+  //   已存（服务端图，× = 立即 DELETE；服务端删不掉就别从界面上拿掉——那会
+  //        让用户以为删了，下次打开又冒出来）
+  let mediaItems = []; // {url, blob?, name?}
+  let ocrBusy = false; // 一次只识别一张（串行：识别十几秒，并发只会互相排队）
+
+  const renderMediaBar = () => {
+    mediaBar.replaceChildren(
+      ...mediaItems.map((item) => {
+        const thumb = el("img", { class: "note-media-thumb", src: item.url, alt: "原图" });
+        const drop = el("button", { class: "note-media-x", type: "button" }, "✕");
+        drop.title = item.name ? "删除这张原图" : "这次不保存这张原图";
+        drop.addEventListener("click", () => void removeMedia(item));
+        return el("span", { class: "note-media-item" }, thumb, drop);
+      })
+    );
+    mediaBar.classList.toggle("hidden", mediaItems.length === 0);
+  };
+
+  async function removeMedia(item) {
+    if (item.name && targetId !== null) {
+      try {
+        const res = await readResponse(
+          await fetch(`/api/notes/${targetId}/media/${item.name}`, { method: "DELETE" })
+        );
+        if (!res.ok) {
+          toast(`原图删不掉：${apiMessage(res)}`, "error");
+          return;
+        }
+      } catch (err) {
+        toast(`原图删不掉：${err.message || err}`, "error");
+        return;
+      }
+    } else if (item.url.startsWith("blob:")) {
+      URL.revokeObjectURL(item.url);
+    }
+    mediaItems = mediaItems.filter((x) => x !== item);
+    renderMediaBar();
+  }
+
+  /** 识别文本插到光标处（没光标就追加到末尾）；input 事件让预览与字数跟上。 */
+  function insertAtCursor(text) {
+    const start = editor.selectionStart ?? editor.value.length;
+    const end = editor.selectionEnd ?? start;
+    const before = editor.value.slice(0, start);
+    const after = editor.value.slice(end);
+    const sep = before && !before.endsWith("\n") ? "\n\n" : "";
+    editor.value = `${before}${sep}${text}\n${after}`;
+    const caret = (before + sep + text + "\n").length;
+    editor.setSelectionRange?.(caret, caret);
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+    editor.focus();
+  }
+
+  /** 图片入口（按钮 / 拖拽 / 粘贴共用）：压缩 → 进缩略图条 → 识别 → 插文本。 */
+  async function addImage(file) {
+    if (ocrBusy) {
+      toast("上一张还在识别中，请稍等", "warn");
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      toast("只认图片文件（jpg / png / webp）", "warn");
+      return;
+    }
+    ocrBusy = true;
+    ocrBtn.disabled = true;
+    ocrBtn.textContent = "识别中…";
+    try {
+      const blob = await compressImage(file);
+      mediaItems.push({ url: URL.createObjectURL(blob), blob });
+      renderMediaBar();
+      const fd = new FormData();
+      fd.append("file", blob, "note-image.jpg");
+      const res = await readResponse(await fetch("/api/notes/ocr", { method: "POST", body: fd }));
+      if (!backdrop.isConnected) return; // 等待期间编辑器被关掉了
+      if (!res.ok) {
+        // 识别失败**保留原图**：用户可能本来就想把这张照片存进来，而且还要能重试
+        toast(`识别失败：${apiMessage(res)}（原图会随笔记一起保存）`, "error");
+        return;
+      }
+      const text = (res.body?.text || "").trim();
+      if (!text) {
+        toast("识别结果是空的（原图会随笔记一起保存）", "warn");
+        return;
+      }
+      insertAtCursor(text);
+    } catch (err) {
+      toast(`识别失败：${err.message || err}`, "error");
+    } finally {
+      ocrBusy = false;
+      ocrBtn.disabled = false;
+      ocrBtn.textContent = "识别图片";
+    }
+  }
+
+  /** 保存成功后把待存原图逐张传给服务端；失败如实说，**不回滚正文**。 */
+  async function uploadPendingImages(docId) {
+    const pending = mediaItems.filter((item) => item.blob);
+    if (!pending.length) return;
+    let failed = 0;
+    let reason = "";
+    for (const item of pending) {
+      try {
+        const fd = new FormData();
+        fd.append("file", item.blob, "note-image.jpg");
+        const res = await readResponse(
+          await fetch(`/api/notes/${docId}/media`, { method: "POST", body: fd })
+        );
+        if (!res.ok) {
+          failed += 1;
+          reason ||= apiMessage(res);
+        }
+      } catch (err) {
+        failed += 1;
+        reason ||= err.message || String(err);
+      }
+    }
+    if (failed) {
+      toast(`笔记已保存，但有 ${failed} 张原图没存上：${reason}（可重开这篇再传一次）`, "warn");
+    }
+  }
+
+  /** 打开已有笔记时把已存原图拉进缩略图条（拉不到就静默：不挡编辑）。 */
+  async function loadExistingMedia(id) {
+    try {
+      const res = await readResponse(await fetch(`/api/notes/${id}/media`));
+      if (!backdrop.isConnected || !res.ok || !Array.isArray(res.body?.items)) return;
+      for (const entry of res.body.items) {
+        mediaItems.push({ url: `/api/notes/${id}/media/${entry.name}`, name: entry.name });
+      }
+      renderMediaBar();
+    } catch {
+      /* 原图列表拉不到不影响写笔记 */
+    }
+  }
+
   /* ---- 开合 ---- */
 
   function close() {
     clearTimeout(previewTimer);
     document.removeEventListener("keydown", onKey, true);
+    // 本机预览的 object URL 要回收：不回收就一直占着那份 blob 的内存
+    for (const item of mediaItems) {
+      if (item.url.startsWith("blob:")) URL.revokeObjectURL(item.url);
+    }
     backdrop.remove();
     // 只清"自己这一份"的单例：保存续作可能在编辑器已被关掉、且用户又开了
     // 新的一个之后才返回，无条件 current = null 会把**新的那个**的状态抹掉
@@ -293,6 +459,15 @@ export async function openNoteEditor({ docId = null, onSaved = null } = {}) {
     if (!backdrop.isConnected) return; // 等待期间编辑器已被关掉：不再动界面
     toast(message, noop ? "warn" : "ok");
     close();
+    // 原图随笔记保存（M6 ②）：正文已经落库，图片这一步失败只如实提示。
+    // 顺序刻意放在 close() 之后：上传可能十几秒，不该把窗口卡在那儿。
+    if (doc && doc.id) {
+      try {
+        await uploadPendingImages(doc.id);
+      } catch {
+        toast("笔记已保存，但原图上传出错了（可重开这篇再传一次）", "warn");
+      }
+    }
     if (doc && onSaved) {
       // 续作放在 try 之外：入库已经成功，后续刷新/选中失败不该被报成"保存失败"
       try {
@@ -320,6 +495,34 @@ export async function openNoteEditor({ docId = null, onSaved = null } = {}) {
   saveBtn.addEventListener("click", () => void save());
   backdrop.addEventListener("click", (ev) => {
     if (ev.target === backdrop) void askClose(); // 点卡片内部不关
+  });
+
+  // 图片三条入口（按钮 / 粘贴 / 拖拽）——都汇到 addImage
+  ocrBtn.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = ""; // 同一张图能再选一次
+    if (file) void addImage(file);
+  });
+  editor.addEventListener("paste", (ev) => {
+    const item = [...(ev.clipboardData?.items || [])].find((it) => it.type.startsWith("image/"));
+    if (!item) return; // 纯文本粘贴照旧走浏览器默认
+    ev.preventDefault(); // 别让图片被当成文本塞进 textarea
+    const file = item.getAsFile();
+    if (file) void addImage(file);
+  });
+  box.addEventListener("dragover", (ev) => {
+    ev.preventDefault(); // 不 preventDefault 的话浏览器会直接打开这张图
+    box.classList.add("note-drop");
+  });
+  box.addEventListener("dragleave", (ev) => {
+    if (ev.target === box) box.classList.remove("note-drop");
+  });
+  box.addEventListener("drop", (ev) => {
+    ev.preventDefault();
+    box.classList.remove("note-drop");
+    const file = [...(ev.dataTransfer?.files || [])].find((f) => f.type.startsWith("image/"));
+    if (file) void addImage(file);
   });
   document.addEventListener("keydown", onKey, true);
 
@@ -350,6 +553,7 @@ export async function openNoteEditor({ docId = null, onSaved = null } = {}) {
     editor.value = loaded.body.body;
     loadedRev = loaded.body.rev || null;
     snapshot = { title: titleInput.value.trim(), body: editor.value };
+    await loadExistingMedia(docId); // 已存原图进缩略图条（拉不到不挡编辑）
   } else {
     try {
       const folders = await callApi("GET", "/api/kb-folders");

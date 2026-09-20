@@ -32,6 +32,16 @@ retrieval:
 reranker:
   backend: none                 # 本地重排：改 local 并安装 fastembed 后可用
 
+vision:
+  # 图片 → 文本（拍照转笔记）：默认**未接入**——本机没装视觉模型，而识图走
+  # 云端意味着把照片发出去，接不接受由你定。三种开法：
+  #   ① 设置面板「视觉模型」一键切（推荐，不用改这个文件）；
+  #   ② 本机识图：`ollama pull qwen2.5vl:7b`（约 6GB），再把这里改成
+  #      backend: local + model: qwen2.5vl:7b（base_url 同上方的 LLM 段）；
+  #   ③ 云端识图：backend: api + SiliconFlow（需要 SILICONFLOW_API_KEY，
+  #      照片会发到云端）——生成仍走本地，只有识图这一件事出网。
+  backend: none
+
 llm:
   backend: local
   base_url: ${OLLAMA_BASE_URL:-http://localhost:11434/v1}

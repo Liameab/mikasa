@@ -20,6 +20,7 @@ from mikasa.config.settings import (
     user_env_path,
     write_api_key,
     write_llm_overlay,
+    write_section_overlay,
 )
 from mikasa.errors import ConfigError
 
@@ -46,6 +47,36 @@ def test_overlay_merges_into_profile(offline_settings):
     assert s.embedding.backend == "none"  # 未被波及（改 embedding 要重索引）
     assert s.retrieval.fusion_top_k == 10  # offline 档的检索参数原样
     assert s.llm.max_tokens == 1024  # 没写的字段继续取 profile 值
+
+
+def test_overlay_sections_do_not_clobber_each_other(offline_settings):
+    """视觉段与 llm 段各写各的：后写的不能把先写的抹掉（读-改-写守卫）。
+
+    覆盖层是**一份** YAML。早先 llm 专用实现整份覆写，泛化成
+    write_section_overlay 时若照抄这个写法，"保存视觉段"会让已配好的 llm 段
+    静默消失——用户看到的是"刚配好的生成模型自己变回去了"，没有任何报错。
+    """
+    write_llm_overlay({"backend": "api", "model": "overlay-model"})
+    write_section_overlay(
+        "vision",
+        {"backend": "api", "base_url": "https://example.com/v1", "model": "vl-model"},
+    )
+    s = load_settings("offline", data_dir=offline_settings.data_dir)
+    assert s.llm.model == "overlay-model"  # 先写的 llm 段还在
+    assert s.vision.backend == "api"
+    assert s.vision.model == "vl-model"
+
+    # 反向再来一次：改 llm，视觉段不能被抹掉
+    write_llm_overlay({"backend": "api", "model": "second-model"})
+    s2 = load_settings("offline", data_dir=offline_settings.data_dir)
+    assert s2.vision.model == "vl-model"
+    assert s2.llm.model == "second-model"
+
+
+def test_vision_defaults_to_not_connected(offline_settings):
+    """没有 vision 段时默认 none（未接入）——老 --config 文件行为不漂移。"""
+    s = load_settings("offline", data_dir=offline_settings.data_dir)
+    assert s.vision.backend == "none"
 
 
 def test_overlay_missing_is_noop(offline_settings):

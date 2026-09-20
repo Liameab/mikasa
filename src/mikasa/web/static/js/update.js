@@ -120,6 +120,17 @@ function fmtDuration(seconds) {
   return rest ? `${whole} 分 ${rest} 秒` : `${whole} 分钟`;
 }
 
+/**
+ * 百分比：**小值必须给一位小数**。
+ *
+ * 80MB 的包取整，意味着"下到 838KB 之前一直显示 0%"——而国内直连 GitHub 实测
+ * 一条连接可能只有几 KB/s，那 0% 要挂十几分钟，用户看到的就是"卡死了"
+ * （2026-09-20 用户原话）。所以 10% 以下给一位小数，让它诚实地慢慢动。
+ */
+function fmtPercent(pct) {
+  return pct >= 10 ? `${Math.floor(pct)}%` : `${pct.toFixed(1)}%`;
+}
+
 /** 版本号：优先用 check 的结果，只有快照时用快照里的。 */
 function versionOf(w) {
   return (w.info && w.info.latest) || (w.st && w.st.version) || "";
@@ -158,7 +169,7 @@ function pillText(st) {
   if (st.status === "verifying") return "正在校验更新包…";
   const label =
     st.total > 0
-      ? `${Math.min(100, Math.floor((st.downloaded / st.total) * 100))}%`
+      ? fmtPercent(Math.min(100, (st.downloaded / st.total) * 100))
       : fmtBytes(st.downloaded);
   return st.stalled ? `更新下载中 ${label}（可能停住了）` : `更新下载中 ${label}`;
 }
@@ -315,18 +326,18 @@ function ensureInfo(w) {
 /* ---------------- 渲染 ---------------- */
 
 function progressLine(w, st) {
-  const pct = st.total > 0 ? Math.min(100, Math.floor((st.downloaded / st.total) * 100)) : null;
+  const pct = st.total > 0 ? Math.min(100, (st.downloaded / st.total) * 100) : null;
   let text =
     pct === null
       ? `正在下载 ${fmtBytes(st.downloaded)}…`
-      : `正在下载 ${pct}% · ${fmtBytes(st.downloaded)} / ${fmtBytes(st.total)}`;
+      : `正在下载 ${fmtPercent(pct)} · ${fmtBytes(st.downloaded)} / ${fmtBytes(st.total)}`;
   if (w.speed > 0) text += ` · ${fmtBytes(w.speed)}/s`;
   if (pct !== null && w.speed > 0 && st.total > st.downloaded) {
     const eta = fmtDuration((st.total - st.downloaded) / w.speed);
     if (eta) text += ` · 剩余约 ${eta}`;
   }
   if (st.attempt > 1) text = `连接中断，正在重试（第 ${st.attempt} 次）… ${text}`;
-  if (st.stalled) text += "（网络似乎断了，服务端会自动重试）";
+  if (st.stalled) text += "（这条连接好像卡住了，服务端会换一条接着下）";
   return text;
 }
 
@@ -365,7 +376,8 @@ function render(w) {
   }
   if (active || st.status === "done") {
     const done = st.status === "done";
-    const pct = done ? 100 : st.total > 0 ? Math.min(100, Math.floor((st.downloaded / st.total) * 100)) : 0;
+    // 不取整：慢链路上哪怕 0.3% 也要让进度条真的往前挪一点点（同 fmtPercent 的理由）
+    const pct = done ? 100 : st.total > 0 ? Math.min(100, (st.downloaded / st.total) * 100) : 0;
     ui.bar.style.width = `${pct}%`;
     if (w.installing) {
       ui.progressText.textContent =

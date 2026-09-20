@@ -9,7 +9,7 @@
 ;     dist\Mikasa 载荷、同样的快捷方式与卸载入口）。
 ;
 ; 编译（版本号从命令行传入，保持单一来源，见 tools/build_installer.py）：
-;   ISCC.exe packaging\Mikasa.iss /DAppVersion=0.1.5
+;   ISCC.exe packaging\Mikasa.iss /DAppVersion=0.1.6
 ;
 ; 设计取舍：
 ;   - PrivilegesRequired=lowest → 装进 %LOCALAPPDATA%\Programs\Mikasa，

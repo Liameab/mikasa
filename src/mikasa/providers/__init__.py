@@ -6,11 +6,12 @@ get_llm / get_embedding / get_reranker 依配置分发到各实现；
 
 from __future__ import annotations
 
-from mikasa.config.settings import EmbeddingConfig, LLMConfig, RerankerConfig
+from mikasa.config.settings import EmbeddingConfig, LLMConfig, RerankerConfig, VisionConfig
 from mikasa.errors import ConfigError
 from mikasa.providers.embedding import ApiEmbedding, EmbeddingProvider, LocalFastEmbed, NoEmbedding
 from mikasa.providers.llm import Completion, LLMProvider, MockLLM, OpenAICompatLLM
 from mikasa.providers.reranker import ApiReranker, LocalReranker, NoReranker, RerankerProvider
+from mikasa.providers.vision import NoVision, OpenAICompatVision, VisionProvider
 
 __all__ = [
     "ApiEmbedding",
@@ -23,11 +24,15 @@ __all__ = [
     "MockLLM",
     "NoEmbedding",
     "NoReranker",
+    "NoVision",
     "OpenAICompatLLM",
+    "OpenAICompatVision",
     "RerankerProvider",
+    "VisionProvider",
     "get_embedding",
     "get_llm",
     "get_reranker",
+    "get_vision",
 ]
 
 
@@ -49,6 +54,15 @@ def get_embedding(config: EmbeddingConfig) -> EmbeddingProvider:
     if config.backend == "local":
         return LocalFastEmbed(config)
     raise ConfigError(f"未知 Embedding backend：{config.backend}")
+
+
+def get_vision(config: VisionConfig) -> VisionProvider:
+    """依据配置构造视觉提供方实例（none / api / local）。"""
+    if config.backend == "none":
+        return NoVision()
+    if config.backend in ("api", "local"):
+        return OpenAICompatVision(config)
+    raise ConfigError(f"未知 Vision backend：{config.backend}")
 
 
 def get_reranker(config: RerankerConfig) -> RerankerProvider:

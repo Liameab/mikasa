@@ -36,6 +36,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shutil
 from pathlib import Path, PureWindowsPath
 from uuid import uuid4
 
@@ -47,6 +48,7 @@ from mikasa.errors import ProviderError, ZhiwenError, strip_paths
 from mikasa.ingest.pagelocate import locate_in_page
 from mikasa.ingest.stitch import stitch_chunks
 from mikasa.models.document import Document
+from mikasa.providers.vision import ext_for_mime, mime_for_suffix, sniff_image_mime
 from mikasa.storage import repo
 from mikasa.storage.db import open_db
 from mikasa.utils.hashing import sha256_file
@@ -659,6 +661,18 @@ def delete_document(
                         "下次全量重建会把它当新文档扫回来，请手工删除：%s",
                         copy,
                     )
+        # 笔记原图目录（M6 ②）：行进库时已删，目录一并收掉。失败只记日志不阻断
+        # ——与副本同款政策，且风险更低：note-media 不在 uploads 里，reindex
+        # 不会把图片"复活"成文档。
+        media_dir = _note_media_dir(settings, doc)
+        if media_dir is not None and media_dir.is_dir():
+            try:
+                shutil.rmtree(media_dir)
+            except OSError:
+                logger.warning(
+                    "文档已从库中删除，但笔记原图目录删不掉（可能被占用或只读），请手工清理：%s",
+                    media_dir,
+                )
     services.ask.invalidate_index()
     return {"deleted": doc_id, "title": doc.title}
 
@@ -1157,3 +1171,220 @@ def get_note(
         ) from exc
     # rev：编辑器保存时回传，用于"别处改过没有"的判定（见 _note_rev）
     return {"document": _public_document(doc), "body": decode_text(raw), "rev": _note_rev(doc)}
+
+
+# ---------------------------------------------------------------------------
+# 笔记图片（M6 ② 拍照/图片转笔记，ADR-0027）
+# ---------------------------------------------------------------------------
+#
+# 两件事分开：
+#   POST /api/notes/ocr            图片 → 文本，**不留存**（识图是一次性的，
+#                                  数据目录不该留下用户没要求保存的照片）
+#   POST/GET/DELETE .../media      原图随笔记保存（用户拍板的"留原图"）
+#
+# 原图目录锚在**笔记 key**（`source_ref = "note:<key>"`，创建时定下、改名与
+# 编辑都不变），而不是 doc_id——笔记"同名替换"每次保存 id 都会变，挂在 id 上
+# 的目录在第一次编辑后就成了孤儿。目录名 = key，文件名 =
+# `<序号>-<内容 sha 前 8 位>.<ext>`：按内容去重，顺序即用户添加顺序。
+#
+# 原图**不进正文**：正文是索引的输入，图片标记进去就是检索噪声，还会让每次
+# 保存都重嵌一遍。前端按 doc_id 拉列表自行渲染（note-editor.js / reader.js）。
+
+# 识图与原图的大小上限（MB）：前端送的已是压缩图（长边 1600 的 JPEG，
+# 通常 <1MB），12MB 是留给"用 API 直传原图"的余量。**这层上限是必要的**：
+# BodySizeLimit（upload_max_mb，默认 500MB）只看整体请求体，不认"这是一张图"。
+_MAX_IMAGE_MB = 12
+_ALLOWED_IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp"})
+# 笔记 key 会被当作**目录名**用，按最严形状校验（12 位十六进制）
+_NOTE_KEY_RE = re.compile(r"^[0-9a-f]{12}$")
+# 原图文件名（服务端自己生成，读/删端点只认这个形状 = 天然的防穿越）。
+# 序号必须是**捕获组**：上稿用 (?:...) 把序号也写成了非捕获，`m.group(1)`
+# 直接 IndexError——三条测试当场抓到（2026-09-20）。
+_MEDIA_NAME_RE = re.compile(r"^([0-9]{3})-([0-9a-f]{8})\.(?:jpg|jpeg|png|webp)$")
+# 一张笔记的原图张数上限（文件名是三位序号；实际上限远低于此）
+_MAX_MEDIA_PER_NOTE = 999
+
+
+def _note_key_of(doc: Document | None) -> str | None:
+    """文档行 → 笔记 key；不是笔记（或 key 形状不对）返回 None。"""
+    ref = (getattr(doc, "source_ref", "") or "") if doc is not None else ""
+    if not ref.startswith(NOTE_REF_PREFIX):
+        return None
+    key = ref[len(NOTE_REF_PREFIX) :]
+    return key if _NOTE_KEY_RE.fullmatch(key) else None
+
+
+def _note_media_dir(settings: Settings, doc: Document | None) -> Path | None:
+    """这条笔记的原图目录（非笔记返回 None）。"""
+    key = _note_key_of(doc)
+    return settings.note_media_dir / key if key else None
+
+
+def _read_image(file: UploadFile, *, what: str) -> tuple[bytes, str]:
+    """读图片并验明正身：(字节, mime)；不合规直接抛 4xx。
+
+    后缀白名单在前（快速否定、文案具体），魔数嗅探在后（真正的判据）——
+    两者都要：后缀挡住"把 .exe 改名成 .jpg"的误操作，魔数挡住
+    "内容根本不是图片却挂着 .jpg"的情况。
+    """
+    try:
+        safe_name = sanitize_filename(file.filename or "")
+    except ValueError:
+        raise HTTPException(status_code=415, detail=f"{what}的文件名不合法") from None
+    suffix = Path(safe_name).suffix.lower()
+    if suffix not in _ALLOWED_IMAGE_SUFFIXES:
+        shown = suffix if suffix else "（无扩展名）"
+        raise HTTPException(
+            status_code=415, detail=f"不支持的图片类型 {shown}（支持：jpg / jpeg / png / webp）"
+        )
+    raw_file = file.file
+    raw_file.seek(0, os.SEEK_END)
+    size = raw_file.tell()
+    raw_file.seek(0)
+    max_bytes = _MAX_IMAGE_MB * 1024 * 1024
+    if size > max_bytes:
+        raise HTTPException(status_code=413, detail=f"图片超过大小上限（{_MAX_IMAGE_MB} MB）")
+    if size == 0:
+        raise HTTPException(status_code=400, detail=f"{what}是空的")
+    raw = raw_file.read(max_bytes + 1)
+    mime = sniff_image_mime(raw)
+    if mime is None:
+        raise HTTPException(
+            status_code=415, detail="这不是一张能识别的图片（支持 JPEG / PNG / WebP）"
+        )
+    return raw, mime
+
+
+@router.post("/api/notes/ocr")
+def recognize_note_image(
+    file: UploadFile,
+    services: AppServices = Depends(get_services),
+) -> dict:
+    """把一张图片识别成文本（M6 ②）——**不留存**，要存是保存笔记时的事。
+
+    未接入视觉模型 → 400（ConfigError 走 app 层处理器，文案可直接照做）；
+    上游失败 → 502（ProviderError 同一条路）。识别结果是**给用户改的草稿**，
+    不直接入库（OCR 一定有错字，尤其手写）。
+    """
+    raw, mime = _read_image(file, what="图片")
+    vision = services.vision
+    result = vision.describe(raw, mime=mime)
+    text = result.text.strip()
+    if not text:
+        raise HTTPException(
+            status_code=502,
+            detail="视觉模型没有返回内容——可能图片太模糊或太小，"
+            "也可能这个模型不支持识图（可在设置面板「视觉模型」里换一个）",
+        )
+    return {
+        "text": text,
+        "model": vision.model,
+        "prompt_tokens": result.prompt_tokens,
+        "completion_tokens": result.completion_tokens,
+    }
+
+
+@router.post("/api/notes/{doc_id}/media", status_code=201)
+def upload_note_media(
+    doc_id: int,
+    file: UploadFile,
+    settings: Settings = Depends(get_settings),
+) -> JSONResponse:
+    """把一张原图存进这条笔记的媒体目录（前端在**保存笔记之后**调用）。
+
+    为什么是保存之后：新笔记的 doc_id 要等创建完成才有，而目录锚在 key 上
+    ——服务端由 doc_id 反查 key 定位目录，前端只管传"当前这条笔记的 id"。
+    同一张图重复上传直接返回既有的那件（幂等），不产生第二份。
+    """
+    raw, mime = _read_image(file, what="原图")
+    with open_db(settings.db_path) as conn:
+        doc = repo.get_document(conn, doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    media_dir = _note_media_dir(settings, doc)
+    if media_dir is None:
+        raise HTTPException(status_code=404, detail="这不是一篇笔记（原图只能随笔记保存）")
+    media_dir.mkdir(parents=True, exist_ok=True)
+
+    # 幂等：同内容（sha 前 8 位）已在 → 返回既有那件
+    digest = hashlib.sha256(raw).hexdigest()[:8]
+    for existing in sorted(media_dir.iterdir()):
+        if existing.name.endswith(f"-{digest}{ext_for_mime(mime)}"):
+            return JSONResponse(status_code=200, content={"name": existing.name, "already": True})
+
+    # 序号取"现有最大 +1"而不是"文件个数 +1"：删过图之后个数会与名字撞车
+    # （001 删掉、剩 002 时个数=1 → 新名字又是 002）
+    used = [
+        int(m.group(1))
+        for f in media_dir.iterdir()
+        if (m := _MEDIA_NAME_RE.fullmatch(f.name)) is not None
+    ]
+    index = max(used, default=0) + 1
+    if index > _MAX_MEDIA_PER_NOTE:
+        raise HTTPException(status_code=400, detail=f"一张笔记最多存 {_MAX_MEDIA_PER_NOTE} 张原图")
+    name = f"{index:03d}-{digest}{ext_for_mime(mime)}"
+    (media_dir / name).write_bytes(raw)  # 本端点不写库，无"文件与库"顺序问题
+    return JSONResponse(status_code=201, content={"name": name, "already": False})
+
+
+@router.get("/api/notes/{doc_id}/media")
+def list_note_media(doc_id: int, settings: Settings = Depends(get_settings)) -> dict:
+    """列出这条笔记的原图（按名字排序 = 添加顺序）。
+
+    列表里**不含 URL**：笔记每次保存都换 doc_id，服务端拼好的链接下一次
+    编辑就失效——前端拿它当前持有的 id 自己拼。
+    非笔记返回空列表（"这篇没有原图"是事实，不是错误）。
+    """
+    with open_db(settings.db_path) as conn:
+        doc = repo.get_document(conn, doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    media_dir = _note_media_dir(settings, doc)
+    if media_dir is None or not media_dir.is_dir():
+        return {"items": []}
+    names = sorted(f.name for f in media_dir.iterdir() if _MEDIA_NAME_RE.fullmatch(f.name))
+    return {"items": [{"name": n} for n in names]}
+
+
+@router.get("/api/notes/{doc_id}/media/{name}")
+def get_note_media(
+    doc_id: int, name: str, settings: Settings = Depends(get_settings)
+) -> FileResponse:
+    """读一张原图（inline + nosniff；媒体类型只认图片白名单）。"""
+    if not _MEDIA_NAME_RE.fullmatch(name):
+        raise HTTPException(status_code=404, detail="原图不存在")
+    with open_db(settings.db_path) as conn:
+        doc = repo.get_document(conn, doc_id)
+    media_dir = _note_media_dir(settings, doc)
+    path = (media_dir / name) if media_dir is not None else None
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="原图不存在")
+    return FileResponse(
+        path,
+        media_type=mime_for_suffix(Path(name).suffix) or "application/octet-stream",
+        content_disposition_type="inline",
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, max-age=3600",
+        },
+    )
+
+
+@router.delete("/api/notes/{doc_id}/media/{name}")
+def delete_note_media(doc_id: int, name: str, settings: Settings = Depends(get_settings)) -> dict:
+    """删掉一张原图（编辑器里的 ×）。"""
+    if not _MEDIA_NAME_RE.fullmatch(name):
+        raise HTTPException(status_code=404, detail="原图不存在")
+    with open_db(settings.db_path) as conn:
+        doc = repo.get_document(conn, doc_id)
+    media_dir = _note_media_dir(settings, doc)
+    path = (media_dir / name) if media_dir is not None else None
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="原图不存在")
+    try:
+        path.unlink()
+    except OSError as exc:  # 被别的程序占着（Windows 文件锁）——如实说，别报成功
+        raise HTTPException(
+            status_code=409, detail="原图删不掉（可能被其他程序占用），请稍后重试"
+        ) from exc
+    return {"deleted": name}

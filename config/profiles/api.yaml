@@ -52,6 +52,17 @@ embedding:
   model: BAAI/bge-m3
   query_prefix: ""
 
+vision:
+  # 图片 → 文本（M6 ② 拍照转笔记）：SiliconFlow 的 Qwen2.5-VL，与检索侧
+  # 共用同一把密钥（SILICONFLOW_API_KEY）。32B 是质量/价格的中档；手写潦草
+  # 或表格密集可换 72B，求快换 7B——设置面板「视觉模型」里可改。
+  backend: api
+  base_url: https://api.siliconflow.cn/v1
+  api_key_env: SILICONFLOW_API_KEY
+  model: Qwen/Qwen2.5-VL-32B-Instruct
+  max_tokens: 2048
+  timeout_seconds: 60.0
+
 judge:
   enabled: true
   backend: api

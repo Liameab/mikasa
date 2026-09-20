@@ -105,3 +105,49 @@ def test_html_static_assets_exist() -> None:
         for m in re.finditer(r"""(?:src|href)=["'](/static/[^"'?#]+)["']""", src):
             rel = m.group(1).removeprefix("/static/")
             assert (STATIC_DIR / rel).exists(), f"{html.name} 引用了不存在的资源：{m.group(1)}"
+
+
+def test_katex_is_bundled_and_wired_into_every_page() -> None:
+    """公式渲染靠随包内置的 KaTeX（离线）。文件缺一个 / 有页面漏引，都是静默退化。
+
+    KaTeX 缺席时 common.js 会**原样显示 LaTeX**（不吞内容），所以这种坏法在
+    后端测试里完全看不见——只能在这里钉住"文件在 + 四页都引了 + 样式顺序对"。
+    """
+    vendor = STATIC_DIR / "vendor" / "katex"
+    for rel in (
+        "katex.min.js",
+        "katex.min.css",
+        "LICENSE",
+        "fonts/KaTeX_Main-Regular.woff2",  # 主字体（中文正文里的字母/数字全靠它）
+        "fonts/KaTeX_Math-Italic.woff2",  # 变量斜体
+    ):
+        assert (vendor / rel).is_file(), f"KaTeX 内置文件缺失：vendor/katex/{rel}"
+
+    for html in sorted(STATIC_DIR.glob("*.html")):
+        src = html.read_text(encoding="utf-8")
+        assert "/static/vendor/katex/katex.min.js" in src, (
+            f"{html.name} 没引 KaTeX 脚本：公式会裸奔"
+        )
+        # 样式必须排在 style.css **之前**：KaTeX 自带 `font:` 简写，同优先级下
+        # 只有后加载的项目样式才能覆盖它的字号
+        katex_css = src.find("/static/vendor/katex/katex.min.css")
+        own_css = src.find("/static/css/style.css")
+        assert katex_css != -1, f"{html.name} 没引 KaTeX 样式表"
+        assert 0 <= katex_css < own_css, f"{html.name} 的 KaTeX 样式应排在 style.css 之前"
+
+
+def test_font_mime_types_are_registered(offline_settings) -> None:
+    """静态服务必须认字体类型：Windows 注册表查不到 .woff2 → 会回 octet-stream。
+
+    公式的字体全在 vendor/katex/fonts/ 下，靠 `@font-face` 加载。MIME 不对未必
+    立刻炸（浏览器对字体不强制校验 MIME），但一旦退化成兜底字形，表现是"公式
+    看着怪"这种最难归因的问题——所以在建 app 时就显式注册。
+    """
+    import mimetypes
+
+    from mikasa.web.app import create_app
+
+    create_app(offline_settings)
+    assert mimetypes.guess_type("katex.min.woff2")[0] == "font/woff2"
+    assert mimetypes.guess_type("x.woff")[0] == "font/woff"
+    assert mimetypes.guess_type("x.ttf")[0] == "font/ttf"

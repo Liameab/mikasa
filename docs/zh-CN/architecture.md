@@ -38,7 +38,7 @@
 | 入口 | `cli/` `web/` `__main__.py` | typer+rich 命令；FastAPI + 原生前端 |
 | 应用 | `pipeline/` | ask 编排：检索 → 注入 → 生成 → 校验 |
 | 领域服务 | `ingest/` `index/` `eval/` `papers/` | 入库、索引、评测、在线论文检索（可插拔的算法区） |
-| 提供方 | `providers/` | LLM / 嵌入 / 重排：Protocol + 实现（ADR-0003） |
+| 提供方 | `providers/` | LLM / 嵌入 / 重排 / **视觉**（M6 ②，ADR-0027）：Protocol + 实现（ADR-0003） |
 | 存储 | `storage/` | SQLite 连接/仓库 + meta.json 快照 |
 | 基础 | `config/` `models/` `utils/` `errors.py` | 配置、pydantic 模型、文本/日志 |
 

@@ -245,4 +245,80 @@ const free = (text, citations = []) => renderAnswer(text, citations, false); // 
   );
 }
 
+/* ---- 公式渲染接线（KaTeX，2026-09-20）----
+   node 里没有 KaTeX（那是浏览器脚本），所以这里塞一个假 KaTeX 只验**接线**：
+   分隔符认不认、块级/行内分得清不清、代码里的 $ 会不会被误当公式、KaTeX
+   缺席时会不会吞内容。真渲染由 KaTeX 自己负责（vendor 目录里的原版文件）。 */
+{
+  const fake = {
+    calls: [],
+    renderToString(tex, opts) {
+      fake.calls.push({ tex, display: opts.displayMode });
+      return `<katex-fake data-display="${opts.displayMode}">${tex}</katex-fake>`;
+    },
+  };
+  globalThis.katex = fake;
+
+  const block = free("$$e^x = 1 + \\frac{x^2}{2!} + o(x^n)$$");
+  assert(
+    block.includes('<katex-fake data-display="true">e^x = 1 + \\frac{x^2}{2!} + o(x^n)</katex-fake>'),
+    "块级 $$…$$ 交给 KaTeX（displayMode=true）"
+  );
+  assert(fake.calls[0].tex === "e^x = 1 + \\frac{x^2}{2!} + o(x^n)", "块级公式内容原样传入（未转义）");
+
+  const inline = free("收敛域是 $x=0$ 处展开。");
+  assert(
+    inline.includes('<katex-fake data-display="false">x=0</katex-fake>'),
+    "行内 $…$ 交给 KaTeX（displayMode=false）"
+  );
+  assert(inline.startsWith("<p>收敛域是 ") && inline.endsWith("处展开。</p>"), "公式之外的文字保持段落");
+
+  const brackets = free("\\[\\int_0^1 f(x)\\,dx\\] 与 \\(\\alpha\\) 两种写法");
+  assert(brackets.includes("\\int_0^1 f(x)\\,dx"), "\\[…\\] 认作块级公式");
+  assert(brackets.includes('<katex-fake data-display="false">\\alpha</katex-fake>'), "\\(…\\) 认作行内公式");
+
+  // 正文里的 "<" 必须在抽公式**之前**（否则会以 &lt; 进 KaTeX，渲染出乱码）
+  const lt = free("$$x < y$$");
+  assert(fake.calls.at(-1).tex === "x < y", "公式里的 < 不被转义后再交给 KaTeX");
+
+  const code = free("```sh\necho $HOME $1 + $2\n```");
+  assert(!code.includes("katex-fake"), "围栏代码块里的 $ 不当公式");
+  assert(code.includes("$HOME"), "代码内容原样保留");
+  const incode = free("行内 `a $x$ b` 不是公式");
+  assert(!incode.includes("katex-fake") && incode.includes("<code>a $x$ b</code>"), "行内代码里的 $ 不当公式");
+
+  const money = free("价格 $5 到 $10 之间");
+  assert(!money.includes("katex-fake"), "货币写法（$5 到 $10）不误渲染成公式");
+
+  // 判据不能太严：第一版把区间/阶乘/小 o 全挡在门外，用户那条泰勒展开一次漏 8 处
+  const intervals = free("收敛域 $(-1, 1]$、$[-1, 1]$、$(-\\infty, +\\infty)$");
+  assert((intervals.match(/<katex-fake /g) || []).length === 3, "区间写法（含右闭端点）全部渲染");
+  const factorials = free("分母是 $n!$ 或 $(2n+1)!$，不是 $2n+1$");
+  assert((factorials.match(/<katex-fake /g) || []).length === 3, "阶乘与 2n+1 这类简单式也渲染");
+  const smallO = free("余项写成 $o(x)$ 或 $o(x^n)$");
+  assert((smallO.match(/<katex-fake /g) || []).length === 2, "小 o 余项渲染");
+  // 中文夹钱数（**没有空格**，最像公式的那种写法）必须挡住
+  const tightMoney = free("价格$5到$10之间");
+  assert(!tightMoney.includes("katex-fake"), "无空格的中文钱数（$5到$10）不误渲染");
+  const plainNumber = free("单价 $1000$ 元");
+  assert(!plainNumber.includes("katex-fake"), "孤立金额（纯数字）不误渲染");
+
+  const inList = free("- 指数函数 $$e^x$$ 收敛域 $(-\\infty, +\\infty)$");
+  assert(inList.includes("<li>指数函数 ") && inList.includes('<katex-fake data-display="true">e^x</katex-fake>'), "列表项里的块级公式");
+  assert(inList.includes("(-\\infty, +\\infty)"), "列表项里的行内公式");
+
+  const inTable = free("| 式 | 收敛域 |\n| --- | --- |\n| $\\ln(1+x)$ | $(-1, 1]$ |");
+  assert(inTable.includes('<katex-fake data-display="false">\\ln(1+x)</katex-fake>'), "表格单元格里的公式");
+  assert(inTable.includes("<th>式</th>"), "含公式的表格结构不受影响");
+
+  // kb 模式下公式与引用角标共存：公式先抽走，[n] 才不会被公式内容干扰
+  const withCite = kb("由 $e^x$ 得 [1]。", [{ marker: 1, chunk_id: 9, document_title: "笔记", section: "" }]);
+  assert(withCite.includes('<katex-fake data-display="false">e^x</katex-fake>'), "kb 模式公式渲染");
+  assert(withCite.includes('data-marker="1"'), "公式与引用 chip 共存");
+
+  delete globalThis.katex; // 模拟脚本缺失
+  const noKatex = free("公式 $\\frac{a}{b}$ 原样");
+  assert(!noKatex.includes("katex-fake") && noKatex.includes("\\frac{a}{b}"), "KaTeX 缺席时不吞内容（原样显示 LaTeX）");
+}
+
 console.log(`✓ smoke_render：${passed} 条断言全部通过`);

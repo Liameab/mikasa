@@ -332,6 +332,27 @@ else → 400 — the same rule the app-level handler uses. Regression tests lock
   ask any upstream for more. That is deliberate: 2026-09-16 taught us what happens when a client
   hammers itself into a 429.
 
+### Photos into notes: recognition quality is the model's, the product only promises "you can fix it" (M6 ②, 2026-09-20)
+
+- **OCR always has errors, handwriting and formulas especially**: printed textbook pages usually come
+  out well; messy handwriting, cursive, formula symbols and multi-column layouts clearly worse. The
+  product semantics are therefore **"the recognition result is a draft for you to correct"**, not
+  "recognise and ingest". The prompt asks the model to mark unreadable characters as 「□」 instead of
+  guessing — but that is a prompt, not a guarantee.
+- **The stored image is a compressed copy**: a JPEG at 1600 px on the long edge (≈150 dpi), meant for
+  checking against later. It is not a scan-grade archive, and there is no "download the original
+  photo" path (the original is still on your phone).
+- **Orphaned directories are not swept**: image directories are named after the **note key**, and
+  `ingest --reindex` empties the document rows — after a reindex, any `note-media/<key>/` on disk is
+  unclaimed (reindex does not scan it and does not rebuild notes). Deleting a note and pressing ✕ in
+  the editor clean up immediately; reindex leftovers are manual for now (sweeping is a later round).
+- **The settings panel lives on the QA page only** (⚙ in the top right): to switch vision models while
+  writing a note on the library page you have to go back there — the error copy points the way, but it
+  is a cross-page step.
+- **The key slot is shared with the retrieval side**: on the api profile `SILICONFLOW_API_KEY` also
+  feeds embedding / reranker / judge, so the vision section **cannot** clear it (the frontend never
+  sends an empty key and the server answers 422). Clear it in the model section instead.
+
 ## 4. Real Bug Cases from Development (Fixed, Archived)
 
 > Each entry is a retrospective on why testing missed it at the time, not a trophy case. Archival
@@ -514,3 +535,44 @@ subsequent drag lands on the panel — the measurement in fact selected the pane
   update by hand (`git pull` / `pip install -e .`). Those environments still see the dialog, but the
   primary button becomes "Open release page": the automatic-install button is **absent** — not
   failing-on-click — when `install_supported` is false or the release carries no installer asset.
+
+## 7. Real Bug Cases from Development (Continued, 2026-09-20)
+
+### "The model switch never says it worked": `localhost` hangs inside the packaged build
+
+**What the user saw**: after configuring the DeepSeek key and asking a question in free mode (that
+call worked — see below), the settings panel's connection test and every local call failed with
+`LLM 调用失败（qwen3:8b，http://localhost:11434/v1）：APITimeoutError: Request timed out.` The user
+read this as "the model switch is broken".
+
+**Root cause**: the address in the profile (and in the saved overlay) is `http://localhost:11434/v1`.
+On this machine `localhost` resolves to IPv6 `::1` first, and Ollama listens on `127.0.0.1` only.
+In the packaged build, httpx sits on the `::1` attempt until the whole request times out and
+**never falls back to IPv4**. Same configuration, measured twice from the app's own test endpoint:
+
+| Address | Result |
+| --- | --- |
+| `http://localhost:11434/v1` | **20.1 s → APITimeoutError** (reproduced every time) |
+| `http://127.0.0.1:11434/v1` | **0.5 s → ok:true** |
+
+**Why it looked like anything but a network issue**: the very same app reaches Ollama fine over
+`urllib` — `GET /api/settings/ollama/models?base_url=http://localhost:11434/v1` returns the model
+list in 2.2 s, because urllib walks the resolved addresses itself. And from a plain Python process,
+the same OpenAI SDK call to `localhost` succeeds (3.4 s). So it is not "Ollama is down", not a proxy
+(no proxy env vars, system proxy off), and not the key.
+
+**Fix**: `providers/llm.py::normalize_base_url` rewrites a hostname of exactly `localhost` to
+`127.0.0.1` before the client is built (shared by the LLM **and** vision clients); the profile
+defaults keep the conventional `localhost` spelling, since normalization now makes them safe.
+Remote addresses are untouched — an `api` backend pointing at a real host is passed through
+verbatim, and a user who genuinely wants IPv6 can write `[::1]`.
+
+**What this incident adds to the honesty list**: a machine-local hostname is not automatically the
+same endpoint for every HTTP stack in the process. When "the model is unreachable" appears in a
+packaged build only, compare the *same* address across stacks (httpx vs urllib) and across address
+families before blaming the model. The evidence above cost four curl/python probes and one endpoint
+pair — far less than a "reinstall Ollama" detour would have.
+
+**Side note from the same report (not a bug)**: token counts for that successful DeepSeek call are
+`NULL` in `qa_messages` because free mode streams and streaming responses carry no `usage` — a
+documented limitation, not data loss. Use the provider's own usage page for exact numbers.

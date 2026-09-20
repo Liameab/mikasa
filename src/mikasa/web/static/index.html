@@ -9,6 +9,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>问答 · Mikasa</title>
+  <!-- 公式渲染：KaTeX 随包内置（离线，见 js/common.js 的公式渲染段）。
+       **必须排在 style.css 之前**：KaTeX 自带 `font:` 简写，同优先级下
+       后加载的 style.css 才能覆盖它的字号（.katex/.katex-display）。 -->
+  <link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
   <link rel="stylesheet" href="/static/css/style.css">
   <link rel="icon" href="data:,">
 </head>
@@ -64,6 +68,37 @@
         <button id="s-test-btn" class="btn ghost" type="button">测试连接</button>
         <button id="s-save-btn" class="btn primary" type="button">保存并生效</button>
         <span id="s-test-result" class="s-test-result"></span>
+      </div>
+
+      <div class="s-group">视觉模型（图片识别）</div>
+      <div class="s-row">
+        <span class="s-name">来源</span>
+        <span id="v-provider" class="s-chips">
+          <button class="s-chip" type="button" data-preset="none">未接入</button>
+          <button class="s-chip" type="button" data-preset="siliconflow">SiliconFlow</button>
+          <button class="s-chip" type="button" data-preset="ollama">本机 Ollama</button>
+          <button class="s-chip" type="button" data-preset="custom">自定义</button>
+        </span>
+      </div>
+      <label class="s-row">
+        <span class="s-name">API 地址</span>
+        <input id="v-base-url" type="text" placeholder="https://api.siliconflow.cn/v1" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="s-row">
+        <span class="s-name">模型名</span>
+        <input id="v-model" type="text" list="v-model-options" placeholder="Qwen/Qwen2.5-VL-32B-Instruct" autocomplete="off" spellcheck="false">
+        <button id="v-models-refresh" class="icon-btn" type="button" title="读取本机 Ollama 模型列表">↻</button>
+        <datalist id="v-model-options"></datalist>
+      </label>
+      <label class="s-row">
+        <span class="s-name">API 密钥</span>
+        <input id="v-api-key" type="password" placeholder="粘贴密钥" autocomplete="off">
+      </label>
+      <span id="v-model-hint" class="s-hint">图片 → 文本（拍照转笔记）。未接入时，笔记里的「识别图片」会提示怎么开。</span>
+      <div class="s-row">
+        <button id="v-test-btn" class="btn ghost" type="button">测试连接</button>
+        <button id="v-save-btn" class="btn primary" type="button">保存并生效</button>
+        <span id="v-test-result" class="s-test-result"></span>
       </div>
 
       <div class="s-group">聊天外观</div>
@@ -149,6 +184,7 @@
   </main>
 
   <div id="toast"></div>
+  <script src="/static/vendor/katex/katex.min.js"></script>
   <script type="module" src="/static/js/qa.js"></script>
 </body>
 </html>

@@ -15,8 +15,9 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
+from urllib.parse import urlsplit, urlunsplit
 
-from mikasa.config.settings import LLMConfig
+from mikasa.config.settings import LLMConfig, VisionConfig
 from mikasa.errors import ConfigError, ProviderError
 from mikasa.pipeline.prompts import REFUSAL_TEXT, SECTION_QUESTION
 from mikasa.utils.logging import get_logger
@@ -64,6 +65,70 @@ class LLMProvider(Protocol):
 _LOCAL_API_KEY = "ollama"
 
 
+def normalize_base_url(url: str) -> str:
+    """把 loopback 主机名 `localhost` 规范成 `127.0.0.1`（其余原样返回）。
+
+    **为什么必须做**（2026-09-20 用户实测报障，根因在打包版里才犯）：
+    Windows 上 `localhost` 先解析到 IPv6 的 `::1`，而 Ollama 默认只监听
+    `127.0.0.1`；httpx 卡在 `::1` 上直到整个请求超时才报错，**不回退到 IPv4**
+    ——表现是"测试连接永远 20 秒超时 / 本地模型一问就 APITimeoutError"，而
+    同一个进程里 urllib 走同一个 `localhost` 只需 2.2 秒（地址选择是 httpx 这
+    一层的事）。实测同一份配置：
+
+      http://localhost:11434/v1   → 20.1s，APITimeoutError（每次复现）
+      http://127.0.0.1:11434/v1   →  0.5s，ok
+
+    只改主机名恰为 `localhost` 的地址：远程地址（api 后端）一个字都不碰。
+    用户若真把服务只绑在 IPv6 上，写 `[::1]` 即可绕过这条规范化。
+    """
+    try:
+        parts = urlsplit(url)
+        if (parts.hostname or "").lower() != "localhost":
+            return url
+        port = parts.port  # 端口非法会抛 ValueError → 交给下面兜底
+    except ValueError:
+        return url
+    netloc = "127.0.0.1" if port is None else f"127.0.0.1:{port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
+def build_openai_client(config: LLMConfig | VisionConfig, *, max_retries: int) -> Any:
+    """按配置构造 OpenAI 兼容客户端（llm 与 vision 共用这段构造逻辑）。
+
+    密钥语义随后端分化：api 无密钥是配置错误（早失败）；local（Ollama）
+    免密钥是产品形态，放行并注入占位 key——放行点必须在 provider 层
+    （配置层放行会让 api 忘填密钥也被静默放行，见 ADR-0014）。
+
+    抽成独立函数是 M6 ② 的产物：视觉 Provider 需要同样的客户端，而复制一份
+    密钥解析必然在某次改动后与这里漂移（一处改了、另一处没改，表现为
+    "识图能用、问答不能用"这种最难查的分裂）。
+
+    base_url 先过 `normalize_base_url`：这是 local 档（Ollama）与一切"本机
+    服务"的必经之路，`localhost` 会在这条链路上稳定超时（见该函数说明）。
+    """
+    from openai import OpenAI  # 延迟导入：保持 import mikasa 轻量
+
+    api_key = config.api_key
+    if api_key is None:
+        if config.backend == "local":
+            api_key = _LOCAL_API_KEY  # local：免密钥放行（Ollama 不校验）
+        else:
+            raise ConfigError(
+                "未配置 API 密钥。请在项目根目录创建 .env 文件并填入密钥"
+                "（参考 .env.example），或改用 --profile offline 体验零密钥。"
+                f"（期望环境变量：{config.api_key_env}）"
+            )
+    if not config.base_url:
+        raise ConfigError("base_url 未配置：无法确定 API 端点。")
+
+    return OpenAI(
+        base_url=normalize_base_url(config.base_url),
+        api_key=api_key,
+        timeout=config.timeout_seconds,
+        max_retries=max_retries,
+    )
+
+
 class OpenAICompatLLM:
     """OpenAI Chat Completions 兼容客户端（DeepSeek / SiliconFlow / Ollama 等）。
 
@@ -84,30 +149,8 @@ class OpenAICompatLLM:
         self._client: Any = None  # openai.OpenAI，惰性构造
 
     def _get_client(self) -> Any:
-        from openai import OpenAI  # 延迟导入：保持 import mikasa 轻量
-
-        if self._client is not None:
-            return self._client
-
-        api_key = self._config.api_key
-        if api_key is None:
-            if self._config.backend == "local":
-                api_key = _LOCAL_API_KEY  # local：免密钥放行（Ollama 不校验）
-            else:
-                raise ConfigError(
-                    "未配置 API 密钥。请在项目根目录创建 .env 文件并填入密钥"
-                    "（参考 .env.example），或改用 --profile offline 体验零密钥。"
-                    f"（期望环境变量：{self._config.api_key_env}）"
-                )
-        if not self._config.base_url:
-            raise ConfigError("base_url 未配置：无法确定 API 端点。")
-
-        self._client = OpenAI(
-            base_url=self._config.base_url,
-            api_key=api_key,
-            timeout=self._config.timeout_seconds,
-            max_retries=self._max_retries,
-        )
+        if self._client is None:
+            self._client = build_openai_client(self._config, max_retries=self._max_retries)
         return self._client
 
     def _create(

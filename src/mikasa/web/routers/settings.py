@@ -28,17 +28,20 @@ from pydantic import ValidationError
 from mikasa.config.settings import (
     LLMConfig,
     Settings,
+    VisionConfig,
     clear_api_key,
     format_validation_error,
     load_settings,
     write_api_key,
     write_llm_overlay,
+    write_section_overlay,
 )
 from mikasa.errors import ProviderError, ZhiwenError, strip_paths
 from mikasa.providers.llm import OpenAICompatLLM
 from mikasa.providers.ollama import fetch_ollama_tags
+from mikasa.providers.vision import OpenAICompatVision
 from mikasa.web.deps import get_services, get_settings
-from mikasa.web.schemas import ModelSettingsIn, ModelTestIn
+from mikasa.web.schemas import ModelSettingsIn, ModelTestIn, VisionSettingsIn, VisionTestIn
 
 router = APIRouter(tags=["settings"])
 
@@ -235,3 +238,190 @@ def ollama_models(base_url: str = "") -> dict[str, Any]:
     except RuntimeError as exc:
         raise ProviderError(str(exc)) from exc
     return {"models": models}
+
+
+# ---------------------------------------------------------------------------
+# 视觉模型段（M6 ② 拍照/图片转笔记，ADR-0027）
+# ---------------------------------------------------------------------------
+
+# 视觉段没给 api_key_env 时的兜底槽位（前端预设自带变量名）
+_DEFAULT_VISION_KEY_ENV = "MIKASA_VISION_API_KEY"
+
+
+def _vision_payload(settings: Settings) -> dict[str, Any]:
+    """当前视觉配置的展示体（密钥同样只回有无）。"""
+    env = settings.vision.api_key_env or ""
+    retrieval_envs = {
+        settings.embedding.api_key_env,
+        settings.reranker.api_key_env,
+        settings.judge.api_key_env,
+    }
+    return {
+        "backend": settings.vision.backend,
+        "base_url": settings.vision.base_url or "",
+        "model": settings.vision.model,
+        "api_key_env": env,
+        "has_api_key": settings.vision.api_key is not None,
+        # 与检索侧共用密钥槽位时为真：前端据此常显提示（在那个槽位上清空
+        # 密钥会连带打挂 embedding/reranker/judge，且故障表现为"检索变差"）
+        "key_shared_with_retrieval": bool(env) and env in retrieval_envs,
+        "profile": settings.profile,
+        "locked": settings.config_path is not None,
+    }
+
+
+def _validated_vision_fields(body: VisionSettingsIn) -> dict[str, Any]:
+    """校验并组装要写进覆盖层的 vision 字段（校验先于任何写入）。"""
+    if body.backend == "none":
+        # 停止使用：这一整段被替换成只有 backend（之前填的地址/模型不保留——
+        # 留着一串用不上的字段，下次打开面板会看到"我都关了怎么还有地址"。
+        # 以后要接回来，在面板里重新选个预设即可）。
+        return {"backend": "none"}
+    model = body.model.strip()
+    base_url = body.base_url.strip()
+    if not model:
+        raise HTTPException(status_code=422, detail="视觉模型名不能为空")
+    if not base_url:
+        raise HTTPException(status_code=422, detail="API 地址（base_url）不能为空")
+    env_name = body.api_key_env.strip() or (
+        _DEFAULT_VISION_KEY_ENV if body.backend == "api" else ""
+    )
+    if body.backend == "api" and body.api_key == "":
+        # 空串在模型段是"清除"，在这里必须拒绝：桶位可能是检索侧共用的
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"视觉模型与检索侧共用同一个密钥槽位（{env_name}），"
+                "这里不能清空——要清除请到「模型」段操作。"
+            ),
+        )
+    fields: dict[str, Any] = {
+        "backend": body.backend,
+        "base_url": base_url,
+        "api_key_env": env_name,
+        "model": model,
+    }
+    try:
+        VisionConfig(**fields)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=format_validation_error(exc)) from exc
+    return fields
+
+
+def _apply_vision_key(env_name: str, body: VisionSettingsIn) -> None:
+    """视觉段的密钥**只写不删**（清除是模型段的职责，见 VisionSettingsIn）。"""
+    if body.api_key is None or not env_name:
+        return
+    write_api_key(env_name, body.api_key)
+    os.environ[env_name] = body.api_key  # 立即可用（load_dotenv 不覆盖已存在变量）
+
+
+@router.get("/api/settings/vision")
+def get_vision_settings(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
+    """当前视觉模型配置（密钥永不下发，只回 has_api_key）。"""
+    return _vision_payload(settings)
+
+
+@router.put("/api/settings/vision")
+def save_vision_settings(
+    body: VisionSettingsIn,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """保存视觉配置并热生效（免重启；顺序与模型段同款）。"""
+    if settings.config_path is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"当前配置来自显式配置文件（{settings.config_path}）："
+                "设置面板的改动会被它覆盖。请直接编辑该文件，或改用默认 profile 启动。"
+            ),
+        )
+    fields = _validated_vision_fields(body)
+    with _APPLY_LOCK:
+        write_section_overlay("vision", fields)
+        _apply_vision_key(fields.get("api_key_env", ""), body)
+        new_settings = load_settings(settings.profile, data_dir=settings.data_dir)
+        services = get_services(request)
+        # 顺序敏感（同模型段）：rebuild_vision 读 self.settings，必须先换它
+        services.settings = new_settings
+        services.rebuild_vision()
+        request.app.state.settings = new_settings
+    return _vision_payload(new_settings)
+
+
+def _probe_png(size: int = 64) -> bytes:
+    """现造一张纯白 PNG（stdlib 的 zlib 足够，不为探针引 Pillow）。
+
+    探针必须发**真图片**：纯文本 ping 在纯文本模型上也会成功，那测的是
+    "端点通不通"，测不出"这组参数能不能识图"——而用户点"测试连接"想知道
+    的正是后者。
+    """
+    import struct
+    import zlib
+
+    raw = b"".join(b"\x00" + b"\xff\xff\xff" * size for _ in range(size))
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    ihdr = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)  # 8bit RGB
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
+
+
+@router.post("/api/settings/vision/test")
+def test_vision_settings(body: VisionTestIn) -> dict[str, Any]:
+    """发一张真图片验证"这组参数能不能识图"。响应恒 200（ok 在体内）。"""
+    model = body.model.strip()
+    base_url = body.base_url.strip()
+    if not model:
+        raise HTTPException(status_code=422, detail="视觉模型名不能为空")
+    if not base_url:
+        raise HTTPException(status_code=422, detail="API 地址（base_url）不能为空")
+    env_name = body.api_key_env.strip()
+    if body.api_key:
+        key: str | None = body.api_key
+    elif env_name:
+        key = os.environ.get(env_name) or None
+    else:
+        key = None
+    if body.backend == "api" and not key:
+        return {"ok": False, "model": model, "error": "未填写 API 密钥（本机 Ollama 不需要密钥）"}
+
+    with _PROBE_LOCK:
+        os.environ[_TEST_KEY_ENV] = key or ""
+        try:
+            cfg = VisionConfig(
+                backend=body.backend,
+                base_url=base_url,
+                api_key_env=_TEST_KEY_ENV,
+                model=model,
+                max_tokens=32,  # 探测只要"有回应"，不求内容
+                timeout_seconds=30.0,
+            )
+            vision = OpenAICompatVision(cfg, max_retries=0)  # 硬上限：一次 30s，不排队重试
+            started = time.monotonic()
+            result = vision.describe(_probe_png(), mime="image/png")
+            latency_ms = int((time.monotonic() - started) * 1000)
+            return {
+                "ok": True,
+                "model": model,
+                "latency_ms": latency_ms,
+                "reply": result.text.strip()[:60],
+            }
+        except ZhiwenError as exc:
+            return {"ok": False, "model": model, "error": strip_paths(str(exc))}
+        except Exception as exc:  # noqa: BLE001 - 探测端点：任何异常都是"连不通"的一种
+            return {"ok": False, "model": model, "error": f"{type(exc).__name__}: {exc}"}
+        finally:
+            os.environ.pop(_TEST_KEY_ENV, None)

@@ -45,6 +45,8 @@
 | ADR-0024 | 更新下载可续传、任务可接续：「观察窗」+ 槽位自愈（修订 ADR-0022 第 3、7 点） | Accepted |
 | ADR-0025 | 许可证改为 AGPL-3.0：发布物捆了 AGPL 的 PyMuPDF（不换依赖，换许可证） | Accepted |
 | ADR-0026 | 自动题库 + 逐题校验：从你自己的语料出题，评测不再绑死一份语料 | Accepted |
+| ADR-0027 | 拍照转笔记：视觉模型独立成段、识别只是草稿、原图锚在笔记 key | Accepted |
+| ADR-0028 | 公式在本地排版：把 KaTeX 内置进发布物 | Accepted |
 
 ---
 
@@ -1233,3 +1235,122 @@ exe/zip**，那一刻 AGPL 第 5/6 条的义务就生效：分发含 AGPL 组件
 测试 `tests/unit/eval/test_synth.py`、`test_golden.py`、`test_runner.py`、
 `tests/unit/web/test_eval_api.py`；E2E `tools/chrome_eval.py`（本机假 OpenAI 兼容
 服务：自动出题 → 整场评测 → 报告，全流程）。
+
+---
+
+## ADR-0027 拍照转笔记：视觉模型独立成段、识别只是草稿、原图锚在笔记 key
+
+- 状态：Accepted ｜ 2026-09-20（M6 ②，用户点名"拍照/图片转笔记文本"）
+- 关联：ADR-0021（笔记 = 带标记的普通文档）、ADR-0018（设置面板模型接入）、
+  ADR-0026（同一套"自动生成的内容必须自报家门"的诚实纪律）
+
+**问题**：复习时拍下的板书、书页、手写提纲，现在只能当图片躺着——既不能提问
+也不能检索，手打一遍又违背"随手记"的初衷。要把它接进笔记链路，四个问题得先答：
+
+1. **视觉能力接在哪**：local 档（Ollama qwen3）没有视觉能力、offline 档是 Mock，
+   而用户日常跑的正是 local 档；
+2. **识别结果能不能直接入库**：不能——OCR 一定有错字（手写尤甚），直接落库
+   等于把错误固化进知识库；
+3. **原图留不留**：用户拍板**留**（要能事后对照），但图片不是文档，不能混进语料；
+4. **存哪儿**：笔记是"同名替换"（每次保存换 `documents.id`），挂在 id 上的东西
+   第一次编辑就成了孤儿。
+
+**决策**：
+
+1. **视觉独立成一段配置**（`VisionConfig`：`backend: none | api | local`），
+   **默认 none**。不与 llm 合并：一个收文本、一个收图，混在一起"生成用 DeepSeek
+   ＋识图用 SiliconFlow"这种真实组合无处落脚——而用户日常正是 local 生成 + 云端
+   识图。`api.yaml` 默认接 SiliconFlow `Qwen2.5-VL-32B-Instruct`（与检索侧共用
+   `SILICONFLOW_API_KEY`）；`local.yaml` / `offline.yaml` 明确 none（守住离线零调用）。
+2. **Provider 独立成层**（`providers/vision.py`），**不动 llm 的 Protocol**：多模态
+   content 数组过不了 `list[dict[str, str]]` 的静态标注，而放宽它会牵动 ask 链路与
+   MockLLM 对数组内容崩溃的那处守卫。只从中抽出 `build_openai_client` 共用密钥解析
+   （复制一份必然漂移成"识图能用、问答不能用"）。
+3. **识别只是草稿，不是入库**：编辑器里「识别图片」→ 文本插到光标处 → 用户改 →
+   保存才入库。图片**不进正文**：正文是索引的输入，图片标记进去就是检索噪声，
+   还会让每次保存都重嵌一遍。
+4. **原图锚在笔记 key**（`data_dir/note-media/<key>/<序号>-<sha8>.<ext>`）：
+   `source_ref = "note:<key>"` 的 key 创建时定下、改名与编辑都不变（ADR-0021 已确认
+   "副本文件名永不重生成"）。按内容去重；一篇可存多张；删文档连带清目录
+   （**失败只记日志不阻断**——与 uploads 副本同款政策，且风险更低：note-media 不在
+   uploads 里，reindex 不会把图片"复活"成文档）。
+5. **面板新增「视觉模型」一组，但密钥只写不删**：`SILICONFLOW_API_KEY` 被
+   embedding/reranker/judge 共用，在这里清空会打挂整条检索链，故障表现却是
+   "搜索结果变差"——最难联想到密钥的那种静默降级。所以空串直接 422 并指路
+   「模型」段。前端也在发送前就不带空密钥。面板是**纯新增**
+   （`vision-settings.js` + `#v-*` DOM），不动既有模型段的回归面。
+6. **识图端点**（`POST /api/notes/ocr`）：**魔数**验真（不看扩展名/Content-Type）、
+   12MB 上限（**独立于 BodySizeLimit**——后者是 `create_app` 时烘焙的、不随热更新
+   重算）、图片**不落盘**（内存 → base64 data URL）、未接入 → 400 可操作文案
+   （指路面板或 `ollama pull qwen2.5vl:7b`）、上游失败 → 502（app 层处理器）。
+7. **前端三条入口汇到一个函数**（按钮 / 拖拽 / 粘贴截图 → `addImage()`）；
+   压缩复用从 settings.js 抽出的 `image-util.js`（两份拷贝迟早漂移成"一边压到
+   1600、一边把手机原图整张发出去"）。识别失败**保留原图**（用户可能本就想存）。
+
+**明确不做**：
+
+- **不把原图当档案**：存的是压缩后 JPEG（长边 1600 ≈ 150dpi），"事后对照"够用；
+- **不做孤儿目录清扫**：`ingest --reindex` 清空行会让 note-media 目录无人认领
+  （记入 limitations，留二期）；
+- **不做批量多图一次识别**：前端串行（识别十几秒一张，并发只会互相排队）；
+- **不实测 Ollama VLM**：本期只给 `ollama pull qwen2.5vl:7b` 的指引。
+
+**后果**：任意档位都能配识图——api 档开箱可用，local 档要么一键切云端、要么 pull
+本机 VLM；图片与正文解耦，检索质量完全不受影响。代价：设置面板只在问答页
+（知识库页没有入口，跨页配置是既成事实，用文案指路）；除删除笔记外没有自动清理
+原图的路径（用户可在编辑器里逐张删）。
+
+**代码**：`config/settings.py`（`VisionConfig` / `note_media_dir` /
+`write_section_overlay` 的读-改-写）、`providers/vision.py`（新，含魔数嗅探与
+`NoVision` 的可操作报错）、`providers/llm.py`（抽出 `build_openai_client`）、
+`web/routers/documents.py`（`/api/notes/ocr` + media 四端点 + 删除连带）、
+`web/routers/settings.py`（`/api/settings/vision` 三端点）、`web/schemas.py`、
+`web/services.py`（`services.vision` + `rebuild_vision`）、前端
+`static/js/{image-util,vision-settings,note-editor,reader,settings}.js` +
+`index.html` + `style.css`；测试 `tests/unit/providers/test_vision.py`、
+`tests/unit/web/test_note_ocr_api.py`、`test_note_media_api.py`、
+`test_vision_settings_api.py`、`tests/unit/config/test_user_config.py`；
+E2E `tools/chrome_note_ocr.py`（假多模态服务 + 真浏览器全流程）、
+`tools/chrome_model_settings.py`（扩视觉段，含"配视觉不伤模型段"的端到端红线）。
+
+## ADR-0028 公式在本地排版：把 KaTeX 内置进发布物
+
+**背景**：用户在自由问答里问了道高等数学题，答案内容正确、结构也清楚，但里面
+`$$…$$` 的块级公式全是**源码原样显示**——用户原话"为什么这个文字的排版是这样的，
+特别的乱"。查下来不是回归：本项目**从来没有渲染过公式**。`renderAnswer` 是一套
+手写的轻量 Markdown 渲染器（围栏代码、行内代码、粗体、标题、列表、表格、`---`、
+引用角标），`$…$` / `\frac{}` 一律当普通文字输出；全仓 grep
+`KaTeX|MathJax|LaTeX` 是 0 命中。
+
+**决定**：把 KaTeX 0.18.7（`katex.min.js`、`katex.min.css`、20 个 `.woff2` 字体、
+`LICENSE`）内置到 `web/static/vendor/katex/`，并在 `renderAnswer` 里以**前置一遍**
+的方式排版公式：从**原始文本**抽出 LaTeX → 换成占位符 → 走既有的
+（esc → 受控替换）管线 → 最后把 KaTeX 的 HTML 还原回去。
+
+**为什么是前置字符串处理、而不是渲染后再扫 DOM**：KaTeX 的 `renderToString` 是纯
+字符串函数，这样"无构建链、不依赖 DOM"这条性质原封不动（Node 冒烟里也能跑真
+KaTeX）。而且必须在 `esc()` **之前**抽：放到之后，交给 KaTeX 的会是 `x &lt; y`，
+渲染出来是错的。
+
+**两道闸**：先摘掉围栏代码与行内代码（`echo $HOME` 不是公式）；成对的 `$` 也不够
+——内容里有中文且不含 LaTeX 命令、或整体是纯数字的，按散文/金额处理
+（`价格$5到$10之间`、`$1000$`）。这条判据的**第一版太严**，在用户那条回答里
+静默漏掉了 8 处真公式（`(-1, 1]`、`n!`、`2n+1`、`o(x)`），已改成"先排除、其余
+默认放行"，并用冒烟断言把这个漏法钉死。
+
+**考虑过并否决**：让模型别写 LaTeX（恰好在最需要公式的学科里变得难读）；MathJax
+（更重，且它按 DOM 遍历的设计跟这个"返回字符串"的渲染器不合）；CDN 加载（这个应用
+必须离线可用，桌面窗口没有可靠的联网前提——本项目已经在 GitHub 连通性上栽过一天）。
+
+**代价与收益**：公式密集的回答会带上约 150 KB 的 KaTeX HTML（用户那份泰勒展开：
+15 个块级 + 42 个行内 → 渲染后 148 KB，原文 6 KB），发布包增大 545 KB；换来的是
+公式可读、可选、可复制，且断网也能用。KaTeX 缺席时（脚本没加载 / Node 冒烟）原样
+显示 LaTeX 源码，**绝不吞内容**。
+
+**代码**：`web/static/vendor/katex/**`（内置的 MIT 资源，已由
+`tools/make_third_party_notices.py` 记进 `THIRD_PARTY_NOTICES.md`）、
+`web/static/js/common.js`（"公式渲染"段）、四个页面（vendor 样式排在 `style.css`
+**之前**，好让项目里的字号覆盖生效）、`css/style.css`（`.katex` / `.katex-display`，
+长公式横向滚动而不是撑破气泡）；测试 `tools/smoke_render.mjs`（假 KaTeX：接线、
+代码遮蔽、货币误判）、`tools/smoke_math.mjs`（真 KaTeX，24 条断言）、
+`tests/unit/web/test_frontend_static.py`（文件在 + 四页都引 + 样式顺序）。
