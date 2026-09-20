@@ -93,4 +93,24 @@ const hasError = (html) => html.includes("katex-error") || html.includes('mathco
   assert((html.match(/class="katex"/g) || []).length === 2, "混排时公式各自渲染");
 }
 
+/* ---- 2026-09-20 实测漏渲染的两种写法（本地模型整篇 14 处公式全漏）---- */
+{
+  // ① 定界符内侧带空格（$ e^x $）——第一版判据禁了空格，直接整段跳过
+  const spaced = render("以 $ e^x $ 的麦克劳林展开为例，$ \\sin x $ 同理。");
+  assert((spaced.match(/class="katex"/g) || []).length === 2, "内侧带空格的 $ … $ 要渲染");
+  assert(!hasError(spaced), "内侧带空格不触发 KaTeX 错误");
+
+  // ② 块级公式折行（$$ 与正文各占一行）——第一版逐行扫描看不见跨行的 $$…$$
+  const multiline = render(
+    "举例：\n$$\ne^x = \\sum_{n=0}^{\\infty} \\frac{x^n}{n!} = 1 + x + \\cdots\n$$\n其他展开式如下。"
+  );
+  assert(multiline.includes('class="katex-display"'), "跨行 $$…$$ 要按块级渲染");
+  assert(!multiline.includes("$$"), "跨行的 $$ 不残留");
+  assert(!hasError(multiline), "跨行块级公式不触发 KaTeX 错误");
+
+  // ③ 回归护栏：代码块里的 $ 与货币写法仍然不许被吃掉
+  const guard = render("```sh\necho $HOME $1\n```\n价格 $5 到 $10 之间，还有 $1000$。");
+  assert(!guard.includes('class="katex"'), "放宽定界符之后：代码里的 $ 与货币/金额仍不渲染");
+}
+
 console.log(`✓ smoke_math：${passed} 条断言全部通过（KaTeX ${katex.version}）`);

@@ -303,6 +303,14 @@ const free = (text, citations = []) => renderAnswer(text, citations, false); // 
   const plainNumber = free("单价 $1000$ 元");
   assert(!plainNumber.includes("katex-fake"), "孤立金额（纯数字）不误渲染");
 
+  // 2026-09-20 实测：本地模型的整篇数学回答 14 处公式**一处都没渲染**，两个原因都在这
+  const spaced = free("以 $ e^x $ 为例，且 $ \\sin x $ 也是");
+  assert((spaced.match(/<katex-fake /g) || []).length === 2, "定界符内侧带空格也要渲染（$ e^x $）");
+  const multiline = free("看这个：\n$$\ne^x = 1 + x\n$$\n就这么简单。");
+  assert((multiline.match(/<katex-fake /g) || []).length === 1, "跨行块级公式（$$ 换行）要渲染");
+  assert(multiline.includes("e^x = 1 + x"), "跨行块级公式内容完整");
+  assert(!multiline.includes("$$"), "跨行的 $$ 定界符不残留");
+
   const inList = free("- 指数函数 $$e^x$$ 收敛域 $(-\\infty, +\\infty)$");
   assert(inList.includes("<li>指数函数 ") && inList.includes('<katex-fake data-display="true">e^x</katex-fake>'), "列表项里的块级公式");
   assert(inList.includes("(-\\infty, +\\infty)"), "列表项里的行内公式");

@@ -252,6 +252,8 @@ export async function ssePost(path, body, onFrame) {
 const PH_MATH = "\ue001";
 /** 抽公式前先把行内代码藏起来的占位符。 */
 const PH_CODE = "\ue002";
+/** 抽公式前把围栏代码块整段藏起来的占位符。 */
+const PH_FENCE = "\ue003";
 
 /**
  * `$...$` 里这一段"看起来像公式"吗——只用来挡货币写法。
@@ -287,20 +289,37 @@ function katexHtml(tex, display) {
   }
 }
 
-/** 块级公式：`$$...$$` 与 `\[...\]`。 */
+/**
+ * 块级公式：`$$...$$` 与 `\[...\]`。**允许跨行**——模型很常写成
+ *
+ *     $$
+ *     e^x = \sum_{n=0}^{\infty} \frac{x^n}{n!}
+ *     $$
+ *
+ * 第一版把公式预扫描做成**逐行**的，跨行写法整段漏掉（2026-09-20 实测：用户那条
+ * 本地模型回答 14 处公式**一处都没渲染**），所以这里改成整篇扫描。
+ */
 const MATH_BLOCK = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]/g;
-/** 行内公式：`$...$` 与 `\(...\)`；`\$` 是转义美元符，不算分隔符。 */
-const MATH_INLINE = /(?<!\\)\$(?!\s)((?:\\\$|[^$\n])+?)(?<!\s)(?<!\\)\$|\\\(([\s\S]+?)\\\)/g;
+/**
+ * 行内公式：`$...$` 与 `\(...\)`。
+ *
+ * **允许紧贴定界符的空格**（`$ e^x $` 是极常见的模型写法，第一版禁了空格 →
+ * 同样是那条回答里半屏公式全漏）。货币误判（`$5 到 $10`）改由 `looksLikeMath`
+ * 那道闸兜底，不再靠"不许有空格"这种误伤极大的规则。
+ * `$$` 已在块级那一遍消费掉，这里的 `(?!\$)` 只是防住落单的 `$$`。
+ */
+const MATH_INLINE =
+  /(?<!\\)\$(?!\$)((?:\\\$|[^$\n])+?)(?<!\\)\$(?!\$)|\\\(([\s\S]+?)\\\)/g;
 
-/** 一行正文里的公式 → 占位符；HTML 存进 tokens，由调用方在最后统一还原。 */
-function stashMathLine(line, tokens) {
+/** 一段**非代码**正文里的公式 → 占位符；HTML 存进 tokens，由调用方最后统一还原。 */
+function stashMathInText(chunk, tokens) {
   const stash = (html) => {
     tokens.push(html);
     return `${PH_MATH}${tokens.length - 1}${PH_MATH}`;
   };
   // 行内代码先藏起来：里面的 $ 不是公式
   const codes = [];
-  let out = line.replace(/`[^`]+`/g, (m) => {
+  let out = chunk.replace(/`[^`]*`/g, (m) => {
     codes.push(m);
     return `${PH_CODE}${codes.length - 1}${PH_CODE}`;
   });
@@ -308,6 +327,7 @@ function stashMathLine(line, tokens) {
     const html = katexHtml(tex, display);
     return html === null ? raw : stash(html);
   };
+  // 块级先来（可跨行）；顺序反了的话 `$$…$$` 会被当成两个行内 `$`
   out = out.replace(MATH_BLOCK, (raw, dollars, brackets) =>
     swap(raw, dollars ?? brackets, true)
   );
@@ -320,22 +340,33 @@ function stashMathLine(line, tokens) {
 }
 
 /**
- * 整篇正文预处理：逐行抽公式。
+ * 整篇正文预处理：把**围栏代码块整段摘出去**，只对正文抽公式，最后原样拼回。
  *
- * 围栏代码块**整段跳过**（``` 之间是代码不是公式）；`stashMathLine` 内部再
- * 把行内代码摘出去。返回的文本里公式已变成占位符，可安全走后续 markdown 管线。
+ * 为什么不能逐行处理：块级公式经常折行（见 `MATH_BLOCK` 的说明），逐行扫描会
+ * 整段漏掉。这里按行切开只为**定位围栏**，正文片段仍按整块交给公式扫描，
+ * 所以跨行的 `$$…$$` 能被看见。
  */
 function stashMath(text, tokens) {
+  const parts = [];
   let inFence = false;
-  return text
-    .split(/\r?\n/)
-    .map((line) => {
-      if (/^\s*```/.test(line)) {
-        inFence = !inFence;
-        return line;
-      }
-      return inFence ? line : stashMathLine(line, tokens);
-    })
+  let buf = [];
+  const flush = (isCode) => {
+    if (buf.length) parts.push({ code: isCode, value: buf.join("\n") });
+    buf = [];
+  };
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*```/.test(line)) {
+      flush(inFence);
+      inFence = !inFence;
+      // 围栏行本身也是"代码边界"，不能参与公式扫描
+      parts.push({ code: true, value: line });
+      continue;
+    }
+    buf.push(line);
+  }
+  flush(inFence);
+  return parts
+    .map((part) => (part.code ? part.value : stashMathInText(part.value, tokens)))
     .join("\n");
 }
 
