@@ -1,0 +1,108 @@
+# 发布流水线：打 tag（v*）→ 构建 zip + 安装包 + 校验和 → 建成**草稿** Release。
+#
+# 为什么是草稿、不是直接发布：
+#   1. 应用内更新只认 /releases/latest 的**正式版**，草稿对用户不可见——
+#      构建失败或验货不过时不会有人被推送到坏包；
+#   2. 产物还需要一次"双击能开"的人工验收（CI 没有交互式桌面，验不了），
+#      这一步只有人能按。
+#   草稿把"构建 + 上传 + 写说明"的体力活交给机器，把"点发布"那一下留给人。
+#   全程用仓库自带的 GITHUB_TOKEN，不需要任何 PAT。
+#
+# 手动触发（workflow_dispatch）默认 dry_run：只构建 + 留构件、不建 Release，
+# 用于在没有新 tag 时先把这条流水线本身验证一遍。
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "只构建、留构件，不创建草稿 Release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write # 建 Release + 上传资产
+
+jobs:
+  build:
+    name: build (win64)
+    runs-on: windows-latest
+    env:
+      # 与 CI 同款：英文 Windows 控制台默认 cp1252，中文日志会变成问号
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,local,packaging]"
+
+      - name: Check the tag matches the packaged version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          version=$(python -c "import mikasa; print(mikasa.__version__)")
+          tag="${GITHUB_REF_NAME#v}"
+          echo "tag=$GITHUB_REF_NAME  version=$version"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag（v$tag）与 src/mikasa/__init__.py 的版本（$version）不一致——先 bump 再打 tag"
+            exit 1
+          fi
+
+      # 质量门与本地同一条基线：ruff format --check / ruff check / mypy / pytest。
+      # tag 可能打在从未跑过 CI 的提交上，所以这里不省。
+      - name: Lint, type-check and test
+        run: |
+          python -m ruff format --check src tests
+          python -m ruff check src tests
+          python -m mypy src
+          python -m pytest -q
+
+      # --clean 不是可选项：Mikasa.spec 会缓存 EXE 级中间产物，
+      # 换了图标/资源而没清，就会得到"时间戳是新的、图标是旧的"的假新包。
+      - name: Build the app (PyInstaller)
+        run: python -m PyInstaller --clean --noconfirm packaging/Mikasa.spec --distpath dist --workpath build
+
+      - name: Package the zip and the checksum manifest
+        run: python tools/make_release.py
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build the installer
+        run: python tools/build_installer.py
+
+      # 构建产物一律留档：dry run 的唯一产出就是它；正式发包时也是
+      # "草稿 Release 挂了、但包还能从这里拿"的兜底
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mikasa-win64
+          path: |
+            dist/Mikasa-Setup-*-win64.exe
+            dist/Mikasa-v*-win64.zip
+            dist/SHA256SUMS.txt
+
+      - name: Create a draft release
+        if: startsWith(github.ref, 'refs/tags/') && (github.event_name == 'push' || inputs.dry_run == false)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          setup="dist/Mikasa-Setup-${version}-win64.exe"
+          zip="dist/Mikasa-v${version}-win64.zip"
+          # 说明用 GitHub 自动生成（按提交），人可以在草稿里改过再点发布
+          gh release create "$tag" --draft --title "Mikasa ${tag}" --generate-notes \
+            "$setup" "$zip" "dist/SHA256SUMS.txt" \
+            || gh release upload "$tag" --clobber "$setup" "$zip" "dist/SHA256SUMS.txt"
+          gh release view "$tag" --json isDraft,assets \
+            --jq '"draft=\(.isDraft)  " + ([.assets[] | "\(.name)(\(.size))"] | join("  "))'
