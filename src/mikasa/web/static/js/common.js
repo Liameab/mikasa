@@ -530,6 +530,10 @@ export function renderMarkdown(md) {
   function cells(row) {
     return row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((s) => s.trim());
   }
+  /** 单元格文本：esc 之后只回填 **粗体**（报告表格用它标"自动生成"一类记号）。 */
+  function mdCell(text) {
+    return esc(text).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  }
 
   while (i < lines.length) {
     const line = lines[i];
@@ -551,14 +555,15 @@ export function renderMarkdown(md) {
         i += 1;
       }
       const head = cells(rows[0]);
-      const body = rows.slice(1).filter((r) => !/^\s*\|[\s:-|]+\|\s*$/.test(r)); // 去 --- 分隔行
+      // 分隔行判据：整行只由 | 、- 、空格（及对齐冒号）组成。字符类里的 `-`
+      // 必须放末尾——写成 `[\s:-|]` 会被当作 `:` 到 `|` 的**范围**，`-` 自己
+      // 反而不在其中，于是 `| --- | --- |` 匹配不上、每张表都多渲染一行
+      // 分隔行（2026-09-20 E2E 截图实拍到，"---" 当成数据行显示）。
+      const body = rows.slice(1).filter((r) => !/^\s*\|[\s|:-]+\|\s*$/.test(r));
       const htmlRows = [
         `<thead><tr>${head.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead>`,
         `<tbody>${body
-          .map(
-            (r) =>
-              `<tr>${cells(r).map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`
-          )
+          .map((r) => `<tr>${cells(r).map((c) => `<td>${mdCell(c)}</td>`).join("")}</tr>`)
           .join("")}</tbody>`,
       ];
       out.push(`<table>${htmlRows.join("")}</table>`);

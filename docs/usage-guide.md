@@ -212,7 +212,12 @@ directory), **Chat appearance** lives in the browser (localStorage, this browser
 
 ## 9. Evaluation Page
 
-"Golden-set evaluation" uses the built-in question set (golden set, derived from sample-corpus) to verify retrieval and anti-hallucination metrics: recall@k / MRR / refusal rate / out-of-range and invalid citations / false refusals. Click Run (a single task slot) → the past-reports area expands to show per-question details and a metrics summary. A real run consumes actual LLM calls (roughly 4–5 minutes per round on `api`, 25–35 minutes on `local`) — for a fast, deterministic offline demo use `--profile offline`.
+"Golden-set evaluation" uses a question set (golden set) to verify retrieval and anti-hallucination metrics: recall@k / MRR / refusal rate / out-of-range and invalid citations / false refusals. Click Run (a single task slot) → the past-reports area expands to show per-question details and a metrics summary. A real run consumes actual LLM calls (roughly 4–5 minutes per round on `api`, 25–35 minutes on `local`) — for a fast, deterministic offline demo use `--profile offline`.
+
+**Two banks** (switch on the "题库 / Bank" row next to the question count):
+
+- **Built-in sample corpus**: 63 hand-written questions aimed at `sample-corpus` (47 answerable across easy/medium/hard + 16 unanswerable). Against a different corpus the questions stop matching their gold answers — the report then lists each affected item as **skipped** instead of scoring against a stale answer.
+- **My material**: click "为我的资料生成题库" (generate a bank from my material) and a model samples **your own library**, reads one passage and writes a question only that passage answers — the passage itself becomes the gold answer, so any corpus can be evaluated. Requires the api or local profile (the offline mock profile says so up front). **Synthesized questions are easier than hand-written ones and score higher by construction: they support relative comparisons only** (two retrieval changes against the same bank), never absolute comparison with the built-in bank — the report header states this.
 
 ---
 

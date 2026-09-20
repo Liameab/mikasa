@@ -126,19 +126,23 @@ def test_eval_run_missing_golden_exits_1_with_hint(tmp_path, monkeypatch):
     assert "build_golden" in result.output  # 给出可执行修复指引
 
 
-def test_eval_run_fingerprint_mismatch_exits_1(tmp_path, monkeypatch):
+def test_eval_run_survives_unrelated_corpus_change(tmp_path, monkeypatch):
+    """库里多了不相干的文档，评测照跑（2026-09-19 起逐题校验取代全库指纹）。
+
+    这条原先是 `test_eval_run_fingerprint_mismatch_exits_1`：那时往库里加一篇
+    笔记就让整份题库作废、CLI 红字退出——而真正的风险只涉及题目引用的那几个
+    分块，守卫范围远大于风险范围。
+    """
     settings = _isolate(tmp_path, monkeypatch)
     _seed(settings, tmp_path)
     golden_path = _freeze(settings, tmp_path)
-    # 语料增补 → 指纹变化 → run 必须拒绝执行
     extra = tmp_path / "notes" / "extra.md"
-    extra.write_text("# 新文档\n\n新增一段与题库无关的内容改变指纹。\n", encoding="utf-8")
+    extra.write_text("# 新文档\n\n新增一段与题库无关的内容。\n", encoding="utf-8")
     IngestService(settings).ingest_paths([extra.parent])
 
     result = runner.invoke(app, ["eval", "run", "--golden", str(golden_path)])
-    assert result.exit_code == 1
-    assert "语料指纹不匹配" in result.output
-    assert "tools/build_golden.py" in result.output
+    assert result.exit_code == 0, result.output
+    assert "recall@5" in result.output
 
 
 def test_eval_list_empty_then_after_run(tmp_path, monkeypatch):

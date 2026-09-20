@@ -17,7 +17,7 @@ const source = fs.readFileSync(
   "utf8"
 );
 const mod = await import("data:text/javascript;base64," + Buffer.from(source).toString("base64"));
-const { renderAnswer, renderCitations, fmtLatency, fmtSeconds, errorMessage } = mod;
+const { renderAnswer, renderCitations, renderMarkdown, fmtLatency, fmtSeconds, errorMessage } = mod;
 
 let passed = 0;
 const assert = (cond, msg) => {
@@ -220,6 +220,29 @@ const free = (text, citations = []) => renderAnswer(text, citations, false); // 
   assert(errorMessage({}, "纯文本错误", 500) === "纯文本错误", "JSON 无 detail 时回退原文");
   assert(errorMessage(null, null, 503) === "请求失败（HTTP 503）", "最终兜底带状态码");
   assert(errorMessage({ detail: [] }, null, 422) === "请求失败（HTTP 422）", "空数组不产出空文案");
+}
+
+/* ---- 评测报告 markdown（renderMarkdown，只服务 report.js）---- */
+{
+  const html = renderMarkdown(
+    [
+      "## 阶段A 检索层",
+      "",
+      "| 项目 | 值 |",
+      "| --- | --- |",
+      "| 黄金集 | mikasa-auto（题量 32），**自动生成**（fake-eval-1） |",
+    ].join("\n")
+  );
+  assert(html.includes("<h4>阶段A 检索层</h4>"), "报告二级标题映射 h4");
+  assert(html.includes("<thead><tr><th>项目</th><th>值</th></tr></thead>"), "报告表头为 th");
+  // 2026-09-20 修：字符类写成 [\s:-|] 会被解析成 `:` 到 `|` 的范围，`-` 不在
+  // 其中 → "| --- | --- |" 匹配不上，每张报告表都多渲染一行分隔符（E2E 截图实拍）
+  assert(!html.includes("<td>---</td>"), "分隔行不当数据行渲染");
+  assert(html.includes("<strong>自动生成</strong>"), "单元格里的 **粗体** 生效");
+  assert(
+    html.includes("<td>mikasa-auto（题量 32），<strong>自动生成</strong>（fake-eval-1）</td>"),
+    "含粗体的单元格内容完整"
+  );
 }
 
 console.log(`✓ smoke_render：${passed} 条断言全部通过`);

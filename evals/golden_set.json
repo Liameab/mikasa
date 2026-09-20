@@ -1,6 +1,8 @@
 {
   "name": "mikasa-golden",
   "corpus_sha256": "65213bf5ce966989c81de04ea8aa7e436a6482382a1fa24f469729a0ce2784a5",
+  "source": "builtin",
+  "model": "",
   "created": "2026-09-19",
   "items": [
     {
@@ -10,6 +12,9 @@
       "difficulty": "easy",
       "gold_chunk_ids": [
         6
+      ],
+      "gold_hashes": [
+        "d456e57841b9ab96d5d8134f14e82e191af7409aa1caf73ff8a5cbcf5eef4b0e"
       ],
       "notes": "线性关系 y=w·x+b；MSE=预测与真实之差的平方的平均；训练目标是最小化损失。",
       "reason": null
@@ -22,6 +27,9 @@
       "gold_chunk_ids": [
         6
       ],
+      "gold_hashes": [
+        "d456e57841b9ab96d5d8134f14e82e191af7409aa1caf73ff8a5cbcf5eef4b0e"
+      ],
       "notes": "正规方程 w=(XᵀX)⁻¹Xᵀy；闭式解无需迭代；代价是求逆 O(n·d²)、XᵀX 可能不可逆。",
       "reason": null
     },
@@ -32,6 +40,9 @@
       "difficulty": "easy",
       "gold_chunk_ids": [
         7
+      ],
+      "gold_hashes": [
+        "6804df4686d3031c0f43a51ac9bd2fdad838c4b317f82e1466d20fc1de654184"
       ],
       "notes": "学习率控制每次更新步长；太大震荡/发散，太小收敛缓慢——需要适中或调度。",
       "reason": null
@@ -44,6 +55,9 @@
       "gold_chunk_ids": [
         8
       ],
+      "gold_hashes": [
+        "8942d49cfa95f8271d12c7dc0765dcdf6cbf368810f2118de82acf3b05a8de24"
+      ],
       "notes": "sigmoid 把 z 压缩到 (0,1) 视为正类概率；σ≥0.5 判正类；边界在原空间仍为（超）直线。",
       "reason": null
     },
@@ -54,6 +68,9 @@
       "difficulty": "easy",
       "gold_chunk_ids": [
         9
+      ],
+      "gold_hashes": [
+        "3cdc10df8444df0ebd29f7442f67668e21e95e2b43b539f69e52883580d593c6"
       ],
       "notes": "MSE 在分类上损失非凸、优化困难；交叉熵最小化等价于让模型分布逼近真实分布。",
       "reason": null
@@ -66,6 +83,9 @@
       "gold_chunk_ids": [
         11
       ],
+      "gold_hashes": [
+        "c630ed89c8e0b2a0c2734c558fe4d528666a938f356302897b3f1d6000c6a59b"
+      ],
       "notes": "过拟合=训练好测试差，容量超过数据信息量、把噪声当规律；欠拟合=模型太简单连训练集都学不好。",
       "reason": null
     },
@@ -76,6 +96,9 @@
       "difficulty": "easy",
       "gold_chunk_ids": [
         12
+      ],
+      "gold_hashes": [
+        "6d16cfafd450af5876ac852c73fcd668ca86179f70ea1f233ed8c17d0714ed5a"
       ],
       "notes": "L2=λ‖w‖²，梯度 −2λw 每步把权重向零收缩；鼓励小而分散的权重、假设空间变平滑。",
       "reason": null
@@ -88,6 +111,9 @@
       "gold_chunk_ids": [
         12
       ],
+      "gold_hashes": [
+        "6d16cfafd450af5876ac852c73fcd668ca86179f70ea1f233ed8c17d0714ed5a"
+      ],
       "notes": "训练随机置零造子网络集合；测试全用但不丢弃；inverted dropout 训练期除以 p 保期望一致。",
       "reason": null
     },
@@ -98,6 +124,9 @@
       "difficulty": "easy",
       "gold_chunk_ids": [
         15
+      ],
+      "gold_hashes": [
+        "2d1a7a4542e4d0bf97b1911d331fd9bc0c26f0fe82df67e783d43a23bc0637cf"
       ],
       "notes": "树分裂只从随机特征子集选切分点；作用=降树间相关性、强化方差削减。",
       "reason": null
@@ -110,6 +139,9 @@
       "gold_chunk_ids": [
         18
       ],
+      "gold_hashes": [
+        "e4c68053839f1f2419c03ca1bd3a4c2cdf99a1a57c739ad411f64b9043c11801"
+      ],
       "notes": "大尺度特征主导欧氏距离计算；必须标准化/归一化后再算距离。",
       "reason": null
     },
@@ -120,6 +152,9 @@
       "difficulty": "easy",
       "gold_chunk_ids": [
         21
+      ],
+      "gold_hashes": [
+        "f1030d60208ede23c05f0789545ac79e785fd913f12346815798a82ba0dac608"
       ],
       "notes": "线性复合仍线性→深网络退化等价单层线性；ReLU/sigmoid/tanh 提供非线性。",
       "reason": null
@@ -132,6 +167,9 @@
       "gold_chunk_ids": [
         26
       ],
+      "gold_hashes": [
+        "eb0c572b7e4410526fa8a63379c6d72158b1a5124e360e8d58c7c929c0f276c8"
+      ],
       "notes": "局部连接+权值共享；编码了图像特征平移不变性的先验；参数量与图尺寸无关。",
       "reason": null
     },
@@ -142,6 +180,9 @@
       "difficulty": "easy",
       "gold_chunk_ids": [
         30
+      ],
+      "gold_hashes": [
+        "2c8a4a7ca788fa6ed1f3cb3aa820821d75df0e6fa7d31291dd041d14672d9859"
       ],
       "notes": "除 √dₖ 防点积方差随维度过大；避免 softmax 饱和区梯度消失。",
       "reason": null
@@ -154,6 +195,9 @@
       "gold_chunk_ids": [
         32
       ],
+      "gold_hashes": [
+        "7412e4c387fe8234f785b43002f4536414c615c0071918816a0fbbe8ec391ece"
+      ],
       "notes": "one-hot=维度灾难+词向量正交无语义关系；词嵌入低维稠密且语义相近距离近，类比关系进向量几何。",
       "reason": null
     },
@@ -164,6 +208,9 @@
       "difficulty": "easy",
       "gold_chunk_ids": [
         38
+      ],
+      "gold_hashes": [
+        "a2ebd4dc3d583dffc193b474449bd96ffabc10f77290e00f71fbe91121dd56de"
       ],
       "notes": "资料可随时增删、无需训练、成本低——私域问答主流方案。",
       "reason": null
@@ -176,6 +223,9 @@
       "gold_chunk_ids": [
         40
       ],
+      "gold_hashes": [
+        "7998d66bf6339ecabf452a0be11a875ff57f55e828c7a0c371d47a1ef17988f5"
+      ],
       "notes": "训练集学参数；验证集调超参/早停；测试集只在全部决定后评一次，防乐观偏差。",
       "reason": null
     },
@@ -186,6 +236,9 @@
       "difficulty": "medium",
       "gold_chunk_ids": [
         7
+      ],
+      "gold_hashes": [
+        "6804df4686d3031c0f43a51ac9bd2fdad838c4b317f82e1466d20fc1de654184"
       ],
       "notes": "批量=全样本慢但梯度准；小批量=每小批估一次梯度，稳定性与速度折中。",
       "reason": null
@@ -198,6 +251,9 @@
       "gold_chunk_ids": [
         7
       ],
+      "gold_hashes": [
+        "6804df4686d3031c0f43a51ac9bd2fdad838c4b317f82e1466d20fc1de654184"
+      ],
       "notes": "尺度不齐→等高线狭长椭圆→之字形震荡慢；对策=特征标准化。",
       "reason": null
     },
@@ -208,6 +264,9 @@
       "difficulty": "medium",
       "gold_chunk_ids": [
         11
+      ],
+      "gold_hashes": [
+        "c630ed89c8e0b2a0c2734c558fe4d528666a938f356302897b3f1d6000c6a59b"
       ],
       "notes": "训练损失降但验证损失回升=过拟合信号；验证集独立于训练集故信号可靠。",
       "reason": null
@@ -220,6 +279,9 @@
       "gold_chunk_ids": [
         12
       ],
+      "gold_hashes": [
+        "6d16cfafd450af5876ac852c73fcd668ca86179f70ea1f233ed8c17d0714ed5a"
+      ],
       "notes": "L1 梯度恒 ±λ 把不重要权重压零→稀疏解→特征选择；L2 把权重向零收缩→小权重平滑解。",
       "reason": null
     },
@@ -230,6 +292,9 @@
       "difficulty": "medium",
       "gold_chunk_ids": [
         13
+      ],
+      "gold_hashes": [
+        "c88fa313864f555064df96d16060762751543900ff35fbe84dc854c216d91fe9"
       ],
       "notes": "更多数据/数据增强扩样本；早停=验证集不再改善即停，等效限制容量、成本最低；常多手段组合。",
       "reason": null
@@ -242,6 +307,9 @@
       "gold_chunk_ids": [
         14
       ],
+      "gold_hashes": [
+        "9c5d97be45c5a1498d3164e76105a29724033bedd3de66ebc21b5163cf225660"
+      ],
       "notes": "ID3 用信息增益（熵）；C4.5 用信息增益率；CART 用基尼指数。",
       "reason": null
     },
@@ -252,6 +320,9 @@
       "difficulty": "medium",
       "gold_chunk_ids": [
         15
+      ],
+      "gold_hashes": [
+        "2d1a7a4542e4d0bf97b1911d331fd9bc0c26f0fe82df67e783d43a23bc0637cf"
       ],
       "notes": "Bagging（随机森林）降方差：并行+投票平均；Boosting（GBDT/XGBoost）串行学残差：降偏差。",
       "reason": null
@@ -264,6 +335,9 @@
       "gold_chunk_ids": [
         16
       ],
+      "gold_hashes": [
+        "93e6dacead6437f7f8ad571b30296b95e0b39c4516ce11fbf95b5c146bdec4cf"
+      ],
       "notes": "C 在间隔与误分类间权衡；C 大不容忍误分→易过拟合；C 小边界宽松。",
       "reason": null
     },
@@ -274,6 +348,9 @@
       "difficulty": "medium",
       "gold_chunk_ids": [
         16
+      ],
+      "gold_hashes": [
+        "93e6dacead6437f7f8ad571b30296b95e0b39c4516ce11fbf95b5c146bdec4cf"
       ],
       "notes": "解只由间隔边界上的支持向量决定；对远离边界的样本不敏感。",
       "reason": null
@@ -286,6 +363,9 @@
       "gold_chunk_ids": [
         18
       ],
+      "gold_hashes": [
+        "e4c68053839f1f2419c03ca1bd3a4c2cdf99a1a57c739ad411f64b9043c11801"
+      ],
       "notes": "K 小→过拟合噪声敏感；K 大→边界过平滑混类；K 是唯一主要超参数。",
       "reason": null
     },
@@ -296,6 +376,9 @@
       "difficulty": "medium",
       "gold_chunk_ids": [
         19
+      ],
+      "gold_hashes": [
+        "d7af0e6227da261025e62f27c243179ccfd51932ea4797e813cafadf8decccc6"
       ],
       "notes": "K-means++ 让初始中心分散 / 多次随机初始化取最优；肘部法则=SSE-K 曲线拐点选 K。",
       "reason": null
@@ -308,6 +391,9 @@
       "gold_chunk_ids": [
         30
       ],
+      "gold_hashes": [
+        "2c8a4a7ca788fa6ed1f3cb3aa820821d75df0e6fa7d31291dd041d14672d9859"
+      ],
       "notes": "每位置一步直达全序列任意位置、一步建模全局依赖——相对 RNN 逐时刻递推的最大优势。",
       "reason": null
     },
@@ -318,6 +404,9 @@
       "difficulty": "medium",
       "gold_chunk_ids": [
         31
+      ],
+      "gold_hashes": [
+        "615bf75261c8a7b851505dd2d4e4a9a07c6ee6783a6acf8f524009879d921193"
       ],
       "notes": "自注意力不感知顺序故需位置编码；原论文正余弦、后有可学习位置编码与 RoPE 变体。",
       "reason": null
@@ -330,6 +419,9 @@
       "gold_chunk_ids": [
         32
       ],
+      "gold_hashes": [
+        "7412e4c387fe8234f785b43002f4536414c615c0071918816a0fbbe8ec391ece"
+      ],
       "notes": "CBOW 上下文预测中心词 / Skip-gram 反向；负采样以正+若干负样本二分类代替全词典 softmax 降计算。",
       "reason": null
     },
@@ -340,6 +432,9 @@
       "difficulty": "medium",
       "gold_chunk_ids": [
         33
+      ],
+      "gold_hashes": [
+        "dfe6a649d757337f02f49ef109eeaeb8d865518ff34fa28212e94e5b02cbecd0"
       ],
       "notes": "跨语料不可直接比；PPL 降不代表生成质量升；仍是训练主监控指标。",
       "reason": null
@@ -352,6 +447,9 @@
       "gold_chunk_ids": [
         36
       ],
+      "gold_hashes": [
+        "2b885fd1eecc467aeb9f54dd6664bbc8c602171ccf5423590b39cdc0ae922652"
+      ],
       "notes": "示例占上下文窗口；示例的选择与顺序都影响效果。",
       "reason": null
     },
@@ -362,6 +460,9 @@
       "difficulty": "medium",
       "gold_chunk_ids": [
         38
+      ],
+      "gold_hashes": [
+        "a2ebd4dc3d583dffc193b474449bd96ffabc10f77290e00f71fbe91121dd56de"
       ],
       "notes": "BM25 精确匹配术语、dense 语义相似；RRF 融合常优于任意单路。",
       "reason": null
@@ -374,6 +475,9 @@
       "gold_chunk_ids": [
         41
       ],
+      "gold_hashes": [
+        "c9f0e6001a8b68db6d603782c22570b9f79c576cc71d57ba5d3c4356b3451d17"
+      ],
       "notes": "一次只切换一个组件；同时改多处→指标变化无法归因。",
       "reason": null
     },
@@ -384,6 +488,9 @@
       "difficulty": "medium",
       "gold_chunk_ids": [
         44
+      ],
+      "gold_hashes": [
+        "36f1c10128b91f2178f91474032df1446c6ceeb5d75390820eb967b204e5c44d"
       ],
       "notes": "总误差=偏差²+方差+噪声；正则化在偏差与方差之间权衡。",
       "reason": null
@@ -397,6 +504,10 @@
         6,
         7
       ],
+      "gold_hashes": [
+        "d456e57841b9ab96d5d8134f14e82e191af7409aa1caf73ff8a5cbcf5eef4b0e",
+        "6804df4686d3031c0f43a51ac9bd2fdad838c4b317f82e1466d20fc1de654184"
+      ],
       "notes": "正规方程局限=O(n·d²) 求逆、XᵀX 可能不可逆；对策=梯度下降（+标准化），收敛到全局最优。",
       "reason": null
     },
@@ -409,6 +520,10 @@
         8,
         10
       ],
+      "gold_hashes": [
+        "8942d49cfa95f8271d12c7dc0765dcdf6cbf368810f2118de82acf3b05a8de24",
+        "6ff09215a7ab2983e0fd81ff3522bfb29b21ea6caa2a10680fe4be9239ee0b31"
+      ],
       "notes": "σ 单调→阈值在 z 空间等价线性超平面；softmax 把 logits 变分布，是 sigmoid 多类推广。",
       "reason": null
     },
@@ -419,6 +534,9 @@
       "difficulty": "hard",
       "gold_chunk_ids": [
         11
+      ],
+      "gold_hashes": [
+        "c630ed89c8e0b2a0c2734c558fe4d528666a938f356302897b3f1d6000c6a59b"
       ],
       "notes": "容量超数据信息量→噪声当规律；正则化（容量惩罚）/数据增强（加信息量）从两端修正。",
       "reason": null
@@ -431,6 +549,9 @@
       "gold_chunk_ids": [
         22
       ],
+      "gold_hashes": [
+        "71847fd273425b58733be9e8615962b70dc68f746a55316b3ef275e603c14cd9"
+      ],
       "notes": "数值差分每参数一次、代价高不精确；BP 一次前向+一次反向得全部梯度；框架=计算图+自动微分。",
       "reason": null
     },
@@ -441,6 +562,9 @@
       "difficulty": "hard",
       "gold_chunk_ids": [
         29
+      ],
+      "gold_hashes": [
+        "26daaaf823abe7db7c580acf35a0f7c2f5cbb5a49407f7b44eb4bb4c3f87e900"
       ],
       "notes": "梯度回传每步乘 U 的 Jacobian，奇异值<1 指数衰减/大于 1 爆炸；LSTM 以细胞状态传送带+三门的近恒等通路保长距离信息。",
       "reason": null
@@ -455,6 +579,11 @@
         30,
         31
       ],
+      "gold_hashes": [
+        "26daaaf823abe7db7c580acf35a0f7c2f5cbb5a49407f7b44eb4bb4c3f87e900",
+        "2c8a4a7ca788fa6ed1f3cb3aa820821d75df0e6fa7d31291dd041d14672d9859",
+        "615bf75261c8a7b851505dd2d4e4a9a07c6ee6783a6acf8f524009879d921193"
+      ],
       "notes": "串行难并行+长序列遗忘风险；自注意力一步全局依赖；全序列可并行训练快。",
       "reason": null
     },
@@ -465,6 +594,9 @@
       "difficulty": "hard",
       "gold_chunk_ids": [
         34
+      ],
+      "gold_hashes": [
+        "d751016425731b68606a92bcc9d01751cb205012da0c82ffaa33942a171c5806"
       ],
       "notes": "BERT 双向预训练擅长理解但生成不友好；decoder-only 统一理解+生成、因果注意力适配自回归。",
       "reason": null
@@ -477,6 +609,9 @@
       "gold_chunk_ids": [
         35
       ],
+      "gold_hashes": [
+        "1c41346b6b12e8e54a3ea62d7bb68ec9a5f937849fbd3c9f8b96c163d9d9d559"
+      ],
       "notes": "SFT→奖励模型→PPO 三步；能力分层=预训练定基础、对齐塑遵循与价值观；评测看真实任务表现。",
       "reason": null
     },
@@ -487,6 +622,9 @@
       "difficulty": "hard",
       "gold_chunk_ids": [
         38
+      ],
+      "gold_hashes": [
+        "a2ebd4dc3d583dffc193b474449bd96ffabc10f77290e00f71fbe91121dd56de"
       ],
       "notes": "块太大噪声多、块太小上下文割裂；按标题结构切分+重叠窗口缓解边界切断。",
       "reason": null
@@ -499,6 +637,9 @@
       "gold_chunk_ids": [
         39
       ],
+      "gold_hashes": [
+        "cbfd53d81d8f08e0b4f9ebbfd03f3c0216f393e98431ee0e450b801016592821"
+      ],
       "notes": "分层=检索层 recall@k 看真相关是否召回、生成层看引用精确率与拒答准确率；有据能答、无据能拒，两者都要测。",
       "reason": null
     },
@@ -509,6 +650,9 @@
       "difficulty": "hard",
       "gold_chunk_ids": [
         55
+      ],
+      "gold_hashes": [
+        "d746d50d4bdc48e0692a01591a3788200c90544a68ed325dde4164f143b35e17"
       ],
       "notes": "四段式笔记=动机-方法-实验-局限；追问=方法放进自己 RAG 项目消融实验怎么设计。",
       "reason": null
@@ -521,6 +665,9 @@
       "gold_chunk_ids": [
         3
       ],
+      "gold_hashes": [
+        "502749b65d87d257efe6b5777af55ae341d4ccb58625425d87ef0d612c4900c3"
+      ],
       "notes": "每个设计决策能说出取舍；每张评测表来自真实实验——可复现可归因。",
       "reason": null
     },
@@ -530,6 +677,7 @@
       "question": "杭州明天会下雨吗？",
       "difficulty": null,
       "gold_chunk_ids": [],
+      "gold_hashes": [],
       "notes": "天气信息语料全无，属时间敏感的开放信息，必须拒答。",
       "reason": "unrelated"
     },
@@ -539,6 +687,7 @@
       "question": "在家做一杯拿铁咖啡的正确步骤是什么？",
       "difficulty": null,
       "gold_chunk_ids": [],
+      "gold_hashes": [],
       "notes": "咖啡制作与学习资料无关，任何\"给出步骤\"的回答都来自模型自身知识。",
       "reason": "unrelated"
     },
@@ -548,6 +697,7 @@
       "question": "推荐一本适合复习间隙看的侦探小说。",
       "difficulty": null,
       "gold_chunk_ids": [],
+      "gold_hashes": [],
       "notes": "语料不含任何文学作品信息，推荐即幻觉。",
       "reason": "unrelated"
     },
@@ -557,6 +707,7 @@
       "question": "从北京坐高铁到上海需要多长时间？",
       "difficulty": null,
       "gold_chunk_ids": [],
+      "gold_hashes": [],
       "notes": "交通时长是外部事实数据，语料无此信息。",
       "reason": "unrelated"
     },
@@ -566,6 +717,7 @@
       "question": "最近有什么适合写代码时听的歌单推荐吗？",
       "difficulty": null,
       "gold_chunk_ids": [],
+      "gold_hashes": [],
       "notes": "音乐推荐超出知识库范围且依赖时效信息。",
       "reason": "unrelated"
     },
@@ -575,6 +727,7 @@
       "question": "8GB 显存的显卡能跑多大的大模型？",
       "difficulty": null,
       "gold_chunk_ids": [],
+      "gold_hashes": [],
       "notes": "硬件规格与显存推理配置语料未覆盖，属设备经验问题。",
       "reason": "unrelated"
     },
@@ -584,6 +737,7 @@
       "question": "训练一个模型通常要循环几个 epoch 才够？",
       "difficulty": null,
       "gold_chunk_ids": [],
+      "gold_hashes": [],
       "notes": "语料只讲训练算法原理，没有训练轮数的经验值，具体 epoch 取决于任务规模。",
       "reason": "insufficient"
     },
@@ -593,6 +747,7 @@
       "question": "给高斯核选 γ 一般有哪些经验做法？",
       "difficulty": null,
       "gold_chunk_ids": [],
+      "gold_hashes": [],
       "notes": "语料只给出 RBF 核公式，没有超参数调优经验，硬答即编造。",
       "reason": "insufficient"
     },
@@ -602,6 +757,7 @@
       "question": "RAG 论文在开放域问答基准上具体提升了多少个百分点？",
       "difficulty": null,
       "gold_chunk_ids": [],
+      "gold_hashes": [],
       "notes": "语料只说\"显著提升事实准确性\"，未给出任何数值结果。",
       "reason": "insufficient"
     },
@@ -611,6 +767,7 @@
       "question": "把 KNN 用在文本分类上效果通常怎样？",
       "difficulty": null,
       "gold_chunk_ids": [],
+      "gold_hashes": [],
       "notes": "语料仅提及文本高维稀疏用余弦相似度更合适，未讨论 KNN 文本分类的整体表现。",
       "reason": "insufficient"
     },
@@ -620,6 +777,7 @@
       "question": "语料对\"大模型什么时候会涌现\"给出过明确的条件吗？",
       "difficulty": null,
       "gold_chunk_ids": [],
+      "gold_hashes": [],
       "notes": "语料只说更大的模型会出现涌现能力，未定义涌现的条件与阈值——提问的\"明确条件\"资料没有。",
       "reason": "insufficient"
     },
@@ -629,6 +787,7 @@
       "question": "Attention Is All You Need 这篇论文一共有几位作者？",
       "difficulty": null,
       "gold_chunk_ids": [],
+      "gold_hashes": [],
       "notes": "语料提到论文与贡献，但作者人数属于模型可能\"记得\"的外部知识，资料中没有，必须拒答。",
       "reason": "hallucination_bait"
     },
@@ -638,6 +797,7 @@
       "question": "Transformer 的每一层参数量大概是多少？",
       "difficulty": null,
       "gold_chunk_ids": [],
+      "gold_hashes": [],
       "notes": "语料讲了结构与机制，没有任何参数量数字；模型凭常识能编出数字，正是幻觉高发题。",
       "reason": "hallucination_bait"
     },
@@ -647,6 +807,7 @@
       "question": "ResNet-50 的结构里一共用了多少次池化操作？",
       "difficulty": null,
       "gold_chunk_ids": [],
+      "gold_hashes": [],
       "notes": "语料只介绍残差连接思想与经典网络演进，ResNet-50 具体结构数字资料没有。",
       "reason": "hallucination_bait"
     },
@@ -656,6 +817,7 @@
       "question": "当前公认最强的开源大模型叫什么？",
       "difficulty": null,
       "gold_chunk_ids": [],
+      "gold_hashes": [],
       "notes": "时效性事实（最强模型随发布变化），语料不可能覆盖，答\"某个模型\"即幻觉+过期信息。",
       "reason": "hallucination_bait"
     },
@@ -665,6 +827,7 @@
       "question": "Attention 机制最早是被提出用来解决什么任务的？",
       "difficulty": null,
       "gold_chunk_ids": [],
+      "gold_hashes": [],
       "notes": "语料只讲注意力的计算与在 Transformer 中的作用，不涉及机制的历史溯源。",
       "reason": "hallucination_bait"
     }

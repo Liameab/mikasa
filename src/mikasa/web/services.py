@@ -108,6 +108,87 @@ class EvalJobManager:
             return self._job.to_snapshot() if self._job is not None else None
 
 
+@dataclass
+class SynthJob:
+    """一次后台出题任务的进度状态（与 EvalJob 同款单槽状态机）。"""
+
+    status: str  # running / done / error
+    total: int
+    done: int = 0
+    stage: str = "准备中"  # 可答题 / 不可答题 / 完成
+    started_at: str = ""
+    answerable: int = 0  # done 后回填：生成的可答题数
+    unanswerable: int = 0
+    gold_path: str = ""
+    error: str = ""
+
+    def to_snapshot(self) -> dict:
+        return {
+            "status": self.status,
+            "total": self.total,
+            "done": self.done,
+            "stage": self.stage,
+            "started_at": self.started_at,
+            "answerable": self.answerable,
+            "unanswerable": self.unanswerable,
+            "gold_path": self.gold_path,
+            "error": self.error,
+        }
+
+
+class SynthJobManager:
+    """单槽自动出题管理器：同一时刻只允许一次出题在跑。
+
+    为什么单独一个槽、不跟评测共用一个：出题要调几十次 LLM（分钟级），
+    评测要跑几十道题（也是分钟级），两者串行才是用户预期——但它们的进度
+    含义不同（"到第几题" vs "已生成几道"），合成一个状态机会把轮询端搞乱。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._job: SynthJob | None = None
+
+    def start(self, total: int) -> bool:
+        with self._lock:
+            if self._job is not None and self._job.status == "running":
+                return False
+            self._job = SynthJob(
+                status="running",
+                total=total,
+                started_at=datetime.now().isoformat(timespec="seconds"),
+            )
+            return True
+
+    def on_progress(self, progress) -> None:
+        """synth.SynthProgress 回调：推进计数与阶段标签。"""
+        with self._lock:
+            if self._job is not None and self._job.status == "running":
+                self._job.done = progress.done
+                self._job.total = progress.total
+                self._job.stage = progress.stage
+
+    def finish(self, *, answerable: int, unanswerable: int, gold_path: str) -> None:
+        with self._lock:
+            if self._job is not None:
+                self._job.status = "done"
+                self._job.answerable = answerable
+                self._job.unanswerable = unanswerable
+                self._job.gold_path = gold_path
+                self._job.stage = "完成"
+                self._job.done = self._job.total
+
+    def fail(self, message: str) -> None:
+        with self._lock:
+            if self._job is not None:
+                self._job.status = "error"
+                self._job.error = message
+                self._job.stage = "失败"
+
+    def snapshot(self) -> dict | None:
+        with self._lock:
+            return self._job.to_snapshot() if self._job is not None else None
+
+
 class AppServices:
     """应用服务容器：路由经 deps.get_services 取用，测试可整体替换。"""
 
@@ -116,6 +197,7 @@ class AppServices:
         self.ask = AskService(settings)
         self.ingest = IngestService(settings)
         self.eval_jobs = EvalJobManager()
+        self.synth_jobs = SynthJobManager()
         # 更新链路：检查器带 TTL 缓存、下载是单槽后台任务（见 update 包）
         self.updates = UpdateChecker()
         self.update_jobs = UpdateManager()

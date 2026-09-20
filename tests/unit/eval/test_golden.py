@@ -177,10 +177,20 @@ def test_load_golden_missing_file_raises(tmp_path):
 
 
 def test_load_golden_rejects_foreign_json(tmp_path):
-    # 缺 corpus_sha256 等必填字段 → pydantic 校验失败（结构错配即拒绝，不留静默默认值）
+    # 缺 items 这种结构字段 → pydantic 校验失败（结构错配即拒绝，不留静默默认值）
     path = tmp_path / "bad.json"
-    path.write_text(json.dumps({"name": "x", "items": []}), encoding="utf-8")
+    path.write_text(json.dumps({"name": "x"}), encoding="utf-8")
     with pytest.raises(ValidationError):
+        load_golden(path)
+
+
+def test_load_golden_rejects_a_bank_with_only_one_kind(tmp_path):
+    # 只有可答题（或只有不可答题）不算黄金集：召回质量与拒答纪律各占一半评分信号。
+    # corpus_sha256 自 2026-09-19 起是可选元信息（逐题校验取代了全库指纹），
+    # 所以这条只能靠 kind 覆盖面来拦，不能靠"必填字段"。
+    path = tmp_path / "half.json"
+    path.write_text(json.dumps({"name": "x", "items": []}), encoding="utf-8")
+    with pytest.raises(EvalError):
         load_golden(path)
 
 

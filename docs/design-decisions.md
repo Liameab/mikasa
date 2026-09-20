@@ -51,6 +51,7 @@
 | ADR-0023 | A fourth source, DOAJ: key-free Chinese open-access journals, the licensing line, and no WAF bypassing | Accepted |
 | ADR-0024 | Resumable downloads, adoptable jobs: the "observation window" and slot self-healing (amends ADR-0022 points 3 and 7) | Accepted |
 | ADR-0025 | Relicensed to AGPL-3.0: the distributed build bundles AGPL PyMuPDF (change the license, not the dependency) | Accepted |
+| ADR-0026 | Synthesized question banks plus per-item verification: evaluate your own corpus, not just the sample one | Accepted |
 
 ---
 
@@ -1468,3 +1469,83 @@ requires offering them the source. A few legally cautious companies will therefo
 a public personal project that is an acceptable price, and it beats claiming MIT while bundling AGPL.
 **The already-published v0.1.1-v0.1.4 builds still carry the MIT notice** (that cannot be recalled);
 from the next release onward the repository and the artifacts agree.
+
+---
+
+## ADR-0026 Synthesized question banks and per-item verification: evaluation stops being tied to one corpus
+
+- Status: Accepted | 2026-09-19 (landed after the user asked to "evaluate my own material")
+- Related: ADR-0003 / ADR-0018 (pluggable providers — synthesis reuses the same LLM client and the model
+  configured through the settings panel)
+
+**Problem**: two things were stuck together.
+
+1. **A hand-written bank can only evaluate the corpus it was written for**: every answerable item in
+   `evals/questions.yaml` carries an anchor quoted verbatim from the sample corpus — point it at a
+   different corpus and the questions stop matching their gold answers. Yet "evaluate *my* material"
+   is the form the user actually wants. That path can only come from generation: nobody has written
+   gold answers for the user's own documents.
+2. **The whole-corpus fingerprint guarded far more than it protected**: the pre-run check compared the
+   entire (chunk_id, content hash) sequence, so adding any one document or renaming a title
+   invalidated the whole bank — while the real risk only concerns "did the few chunks the questions
+   cite change?".
+
+**Decision**:
+
+1. **Synthesized banks** (`eval/synth.py`): sample chunks from the current corpus, have the model read
+   one and write a question "only this passage can answer", and **that chunk becomes the gold answer**
+   (gold = chunk id + content_sha256). Three sampling rules: **round-robin across documents**
+   (otherwise the bank piles up on the longest document and measures that document's retrieval
+   quality), **a chunk-length window** (very short chunks make thin questions and are nearly
+   impossible to *miss*), and a **fixed seed** (the same corpus regenerates the same bank, so two
+   retrieval changes can be compared head-to-head).
+2. **Both question kinds are mandatory**: alongside answerable items the bank must contain
+   **unanswerable** ones (several chunks, one question none of them answers) — the refusal discipline
+   is this system's core promise (see limitations) and cannot be measured without them. If either
+   kind comes up empty the whole synthesis fails and nothing is written to disk.
+3. **Mismatch protection becomes per-item verification** (`GoldenItem.gold_hashes` aligned
+   one-to-one with `gold_chunk_ids`): before a run, every item is checked — "is this chunk still
+   here, is its content unchanged?" — and items that fail are **skipped**, with the count stated in
+   the report header and each item listed with its reason. **Skip, not let through**: silently
+   scoring against a stale gold answer produces numbers that look fine and mean nothing, the worst
+   failure mode an evaluation tool has. **Keep a visible record, not silence**: quietly shrinking the
+   denominator makes scores look better. Only "every answerable item was skipped" is a hard error
+   (the corpus was rebuilt from scratch). `corpus_sha256` is demoted to metadata (the report shows
+   which corpus the bank was written for).
+4. **The honest boundary goes into the report**: synthesized questions are written by a model that
+   just read the passage, so they are **easier** than hand-written ones and score higher by
+   construction — they support **relative comparisons only** (two retrieval changes against the same
+   bank), never absolute comparison with the hand-written bank. The report header marks them with
+   `source: synthesized` and an explicit "自动生成 / machine-generated" label.
+5. **A real model is required**: synthesis is dozens of LLM calls, so the offline mock profile gets a
+   clear 400 up front (rather than letting the user discover a run full of junk questions); the bank
+   lands in the data directory at `eval/golden-auto.json` (user data, not shipped); one job slot plus
+   1-second progress polling — **separate from the evaluation slot**, because the two progress
+   meanings differ ("questions generated" vs "answering question N") and merging them into one state
+   machine would confuse the polling clients.
+
+**Explicitly not doing**:
+
+- **No automatic regeneration**: a failed check points the user at rebuilding (CLI `tools/build_golden.py`,
+  or the web button), it never silently re-runs an LLM pass.
+- **No difficulty tiers**: model self-assessment is not trustworthy; synthesized items are pinned to medium.
+- **Not a replacement for the hand-written bank**: the built-in set remains the only ruler covering
+  easy/medium/hard and the three unanswerable categories — that takes a human picking corners and
+  cross-passage inference, which generation cannot do.
+
+**Consequences**: any corpus (including the user's own library) can now be evaluated; the price is
+that synthesized absolute scores cannot be compared against the hand-written bank, and the tie between
+bank and corpus is looser — held together by "skip per item + record it in the report" rather than by
+rejecting the whole bank. Older banks without `gold_hashes` degrade to checking only that the chunk
+ids still exist.
+
+**Code**: `eval/synth.py` (sampling / question writing / unanswerables / persistence),
+`eval/golden.py` (`gold_hashes` / `check_against_corpus` / `source` / `model`), `eval/runner.py`
+(per-item verification replaces the fingerprint comparison; `skipped_items` joins `EvalResult`),
+`eval/report.py` (skipped-items section + header label), `index/manager.py`
+(`Corpus.content_hashes()`), `web/routers/eval.py` (`GET /api/eval/goldens`,
+`POST /api/eval/synthesize` + status, `POST /api/eval/runs?golden=`), `web/services.py`
+(`SynthJobManager`, single slot), `static/eval.html` + `static/js/eval.js` (bank selection,
+synthesis panel, progress polling, a full bar on completion); tests `tests/unit/eval/test_synth.py`,
+`test_golden.py`, `test_runner.py`, `tests/unit/web/test_eval_api.py`; E2E `tools/chrome_eval.py`
+(a local fake OpenAI-compatible endpoint: synthesis → a full evaluation run → the report).

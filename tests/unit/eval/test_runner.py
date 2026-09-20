@@ -143,20 +143,59 @@ def test_run_empty_corpus_raises_storage_error(tmp_path, offline_settings):
         _runner(offline_settings, golden).run()
 
 
-def test_run_fingerprint_mismatch_raises_and_hints_rebuild(tmp_path, offline_settings):
+def test_unrelated_corpus_change_keeps_the_bank_usable(tmp_path, offline_settings):
+    """往库里加不相干的文档不再让题库失效（2026-09-19 起逐题校验）。
+
+    这条原先是 `test_run_fingerprint_mismatch_raises_and_hints_rebuild`：那时
+    加一篇笔记就触发全库指纹失配、整场拒绝执行——守卫范围远大于风险范围。
+    现在只有**标准答案所在分块确实变了**的那几道题会被跳过，并在报告里写明。
+    """
     _seed(offline_settings, tmp_path)
     golden = _make_golden(offline_settings, tmp_path)
-    # 语料增补一篇 → 指纹变化 → 题库立即失效
     extra = tmp_path / "notes" / "extra.md"
-    extra.write_text("# 新文档\n\n新增一段完全不同的内容，改变语料指纹。\n", encoding="utf-8")
+    extra.write_text("# 新文档\n\n新增一段完全不同的内容。\n", encoding="utf-8")
     IngestService(offline_settings).ingest_paths([extra.parent])
-    with pytest.raises(EvalError, match="语料指纹不匹配"):
-        _runner(offline_settings, golden).run()
-    # 错误信息必须给出可执行的修复指引（重跑 build_golden）
-    try:
-        _runner(offline_settings, golden).run()
-    except EvalError as exc:
-        assert "build_golden" in str(exc)
+
+    result = _runner(offline_settings, golden).run()
+    assert result.skipped_items == []
+    assert len(result.items) == len(golden.items)
+
+
+def test_run_rejects_when_every_gold_chunk_is_gone(tmp_path, offline_settings):
+    """标准答案分块**全部**对不上才是硬错误，且必须给出重建指引。"""
+    _seed(offline_settings, tmp_path)
+    golden = _make_golden(offline_settings, tmp_path)
+    stale = golden.model_copy(
+        update={
+            "items": [
+                item.model_copy(update={"gold_chunk_ids": [90001], "gold_hashes": ["0" * 64]})
+                if item.kind == "answerable"
+                else item
+                for item in golden.items
+            ]
+        }
+    )
+    with pytest.raises(EvalError) as excinfo:
+        _runner(offline_settings, stale).run()
+    assert "完全对不上" in str(excinfo.value)
+    assert "build_golden" in str(excinfo.value)
+
+
+def test_only_the_changed_gold_chunk_is_skipped(tmp_path, offline_settings):
+    """只跳过"标准答案被改动"的那一道，并在结果里留痕（静默缩分母最危险）。"""
+    _seed(offline_settings, tmp_path)
+    golden = _make_golden(offline_settings, tmp_path)
+    broken = golden.model_copy(
+        update={
+            "items": [
+                item.model_copy(update={"gold_hashes": ["0" * 64]}) if item.id == "a2" else item
+                for item in golden.items
+            ]
+        }
+    )
+    result = _runner(offline_settings, broken).run()
+    assert [item_id for item_id, _ in result.skipped_items] == ["a2"]
+    assert all(record.id != "a2" for record in result.items)
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +244,16 @@ def test_run_full_offline_protocol_metrics(tmp_path, offline_settings):
 
     assert result.latency_sec > 0
     snapshot = result.to_metrics_json()
-    assert set(snapshot) == {"profile", "latency_sec", "retrieval", "generation", "judge", "items"}
+    assert set(snapshot) == {
+        "profile",
+        "latency_sec",
+        "retrieval",
+        "generation",
+        "judge",
+        "items",
+        "skipped_items",  # 逐题校验跳过的题（2026-09-19 起）；静默缩分母最危险
+    }
+    assert snapshot["skipped_items"] == []
     assert snapshot["generation"]["refusal_accuracy"] == 0.5
 
 

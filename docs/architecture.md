@@ -23,7 +23,7 @@
                      (no citation/refusal protocol; requires an api/local model; see ADR-0013)
 
                     ┌─────────── Eval path (CLI eval / web background) ────────┐
-  golden_set (hand-written anchors + fingerprint) ─→ three stages: A retrieval / B protocol (mock) / C LLM-as-judge
+  golden_set (hand-written / machine-generated) ─→ per-item check ─→ three stages: A retrieval / B protocol (mock) / C LLM-as-judge
                     ─→ eval_runs persisted + markdown report (same orchestration for CLI and web)
                     └──────────────────────────────────────────────────────────┘
 ```
@@ -73,8 +73,8 @@ discussing in a technical review):
 - Vectors are appended only for new or changed documents (INSERT OR REPLACE),
   embedding incrementally with the same model instead of re-embedding the whole
   database; `mikasa ingest --reindex` provides a full rebuild path (after a
-  rebuild, chunk ids shift, so golden-set fingerprints will mismatch explicitly —
-  that is a feature; see the lesson in evaluation.md §2).
+  rebuild, chunk ids shift, so items citing the old chunks are **skipped one by
+  one** and named in the report — see evaluation.md §2).
 
 The web upload endpoint, the online-paper import endpoint and the note editor all
 share one ingest tail (`documents.ingest_web_file`): all three hand it a file inside
@@ -146,8 +146,9 @@ discipline is a matter of survival for the local profile: the embeddings table
 holds one model per database (api bge-m3 at 1024 dimensions ≠ local at 512), so
 switching profiles requires `ingest --reindex`, and three safeguards enforce it —
 the doctor's three-way consistency check, the dimension guard in
-`ExactVectorStore.search`, and an explicit warning when the golden-set fingerprint
-mismatches (ADR-0014 ④).
+`ExactVectorStore.search`, and the per-item golden check before a run (old chunk
+ids are gone → those items are skipped; with nothing left the run is refused;
+ADR-0014 ④ / ADR-0026).
 
 ## 6. Generation and the citation protocol (three lines of defense against hallucination)
 
@@ -201,7 +202,7 @@ data/
 │    └── eval_runs                        # eval rows (report_md column = the full report)
 ├── uploads/           # copies of ingested documents (the single home for web uploads; deleted with the document)
 ├── indexes/meta.json  # derived snapshot: corpus fingerprint / chunk count — the source for the
-│                      #   doctor consistency check and for evaluation fingerprints (rebuildable from the DB, never authoritative)
+│                      #   doctor consistency check and for the report's "which corpus this bank was written for" (rebuildable from the DB, never authoritative)
 └── eval-reports/      # {run_id}-{name}.md evaluation reports (same origin as the eval_runs table)
 ```
 
@@ -292,12 +293,13 @@ automatically when the dialog is still open (otherwise the capsule waits for a c
 `eval/service.py::run_and_persist` is the shared "run it and persist it"
 orchestration used by both the CLI and web background tasks (moved down out of the
 CLI in M3): the golden set is loaded by each caller (the CLI prints a banner; the
-web POST validates the fingerprint synchronously and returns 400 immediately on
-mismatch, rather than failing inside the task). Persistence order: insert a
+web POST runs the per-item check synchronously and returns 400 immediately when
+no answerable item survives, rather than failing inside the task). Persistence
+order: insert a
 placeholder row to obtain a run_id → run → render the report and write it back
 (the web polls for "row exists but report_md is empty", which naturally aligns
 with the frontend's "running / already failed"). Failure semantics: structural
-failures (fingerprint mismatch, empty database) raise and are surfaced by the
+failures (no answerable item left, empty database) raise and are surfaced by the
 caller; an individual question failing is a normal part of evaluation and is
 recorded per item (record.error) without affecting how the run finishes.
 

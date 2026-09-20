@@ -15,8 +15,10 @@ runner 保持纯计算：不写数据库、不写文件——落库与报告由 
 便于测试直接断言各类聚合值。每个问题逐条留痕（ItemRecord），
 失败与裁判不一致的条目会在报告里单独列出供人工复核。
 
-防御顺序：先校验语料指纹（corpus_sha256 对不上 = 题库与库错配，
-直接拒绝跑，杜绝"静默跑错题"）；检索层任一条失败立即中止
+防御顺序：先做**逐题校验**（2026-09-19 起：核对每道题的标准答案分块还在不在、
+内容变没变；变了的那几道跳过并在报告里写明，全题被跳过才是硬错误。原先比的是
+全库指纹——加一篇文档就让整份题库作废，范围远大于风险）；
+检索层任一条失败立即中止
 （说明召回链路整体不可用，逐条吞掉只会污染均值）；
 生成层逐条容错——网络/鉴权偶发失败记 error 跳过，整场继续。
 """
@@ -30,7 +32,7 @@ from typing import TYPE_CHECKING
 
 from mikasa.config.settings import Settings
 from mikasa.errors import EvalError, StorageError
-from mikasa.eval.golden import GoldenItem, GoldenSet
+from mikasa.eval.golden import GoldenItem, GoldenSet, check_against_corpus
 from mikasa.eval.judge import Judge, LLMJudge, NoJudge
 from mikasa.eval.metrics import (
     RetrievalMetrics,
@@ -191,6 +193,9 @@ class EvalResult:
     judge: JudgeStats
     items: list[ItemRecord]
     latency_sec: float
+    # 逐题校验被跳过的题（id, 原因）：语料变动后标准答案所在分块没了/内容变了。
+    # 报告里必须显式写出来——静默缩小分母会让分数看着变好。
+    skipped_items: list[tuple[str, str]] = field(default_factory=list)
 
     def to_metrics_json(self) -> dict[str, object]:
         """metrics_json 快照：报告渲染与 DB 落库共用同一序列化口径。"""
@@ -223,6 +228,7 @@ class EvalResult:
                 "errors": judge.errors,
             },
             "items": [r.to_json() for r in self.items],
+            "skipped_items": [{"id": i, "reason": r} for i, r in self.skipped_items],
         }
 
 
@@ -258,23 +264,34 @@ class EvalRunner:
         golden = self._golden
         t0 = perf_counter()
 
-        # ---- 0. 语料快照 + 指纹校验（题库与库错配是评测第一杀手） ----
+        # ---- 0. 语料快照 + 逐题校验（题库与库错配是评测第一杀手） ----
         corpus = IndexManager(settings).corpus()
         if corpus.empty:
             raise StorageError("知识库为空：评测前先导入语料（mikasa ingest <目录>）")
-        if corpus.sha256 != golden.corpus_sha256:
+        # 逐题校验替代原先的全库指纹：不相干的文档增删不再让整份题库作废，
+        # 只有"标准答案所在分块确实变了"的那几道被跳过（原因进报告）。
+        check = check_against_corpus(golden, corpus.content_hashes())
+        golden = check.golden
+        if not golden.answerable:
+            first = check.skipped[0][1] if check.skipped else "语料为空"
             raise EvalError(
-                "语料指纹不匹配：本黄金集冻结于语料 "
-                f"{golden.corpus_sha256[:12]}…，当前语料为 {corpus.sha256[:12]}…。\n"
-                "语料增删改后题库即失效——请先运行 tools/build_golden.py 重建，"
-                "再执行 mikasa eval run。"
+                f"题库与当前语料完全对不上：{len(check.skipped)} 道可答题的标准答案分块"
+                f"都不在了（首个原因：{first}）。\n"
+                "语料被整体重灌之后题库需要重建——CLI 用 tools/build_golden.py，"
+                "Web 用评测页的「为我的资料生成题库」。"
+            )
+        if check.skipped:
+            logger.warning(
+                "逐题校验跳过 %d 题（标准答案分块已变动）：%s",
+                len(check.skipped),
+                "、".join(item_id for item_id, _ in check.skipped[:5]),
             )
         embedding = get_embedding(settings.embedding)
         with open_db(settings.db_path) as conn:
             titles = repo.document_title_map(conn)
 
         # ---- 阶段 A：检索层（关重排 + 放宽融合窗口，见模块 docstring） ----
-        retrieval_metrics = self._run_retrieval_layer(corpus, embedding)
+        retrieval_metrics = self._run_retrieval_layer(golden, corpus, embedding)
         logger.info(
             "阶段 A 完成：recall@5 均值=%.3f（%d 题）",
             retrieval_metrics.recall[5].finalize(),
@@ -312,6 +329,7 @@ class EvalRunner:
             judge=judge_stats,
             items=items,
             latency_sec=perf_counter() - t0,
+            skipped_items=check.skipped,
         )
 
     @staticmethod
@@ -326,9 +344,13 @@ class EvalRunner:
     # ------------------------------------------------------------------
 
     def _run_retrieval_layer(
-        self, corpus: Corpus, embedding: EmbeddingProvider
+        self, golden: GoldenSet, corpus: Corpus, embedding: EmbeddingProvider
     ) -> RetrievalMetrics:
-        """检索层：只测召回，不生成。任一题失败即中止（链路整体不可用）。"""
+        """检索层：只测召回，不生成。任一题失败即中止（链路整体不可用）。
+
+        golden 由调用方传入（**已过逐题校验**的那份）：用 self._golden 会把
+        被跳过的题又算回分母，分数与报告里的题数就对不上了。
+        """
         settings = self._settings
         # 覆写为"检索层口径"：关 rerank、融合窗口锚定常量。配置对象是 frozen，
         # 逐层 model_copy 出新对象，绝不污染调用方的 settings
@@ -342,7 +364,7 @@ class EvalRunner:
         )
         retriever = Retriever(retrieval_settings, corpus, embedding)
         metrics = make_retrieval_metrics(RETRIEVAL_KS)
-        for item in self._golden.answerable:
+        for item in golden.answerable:
             hits, _lat = retriever.retrieve(item.question)
             ranked = [self._require_chunk_id(hit) for hit in hits]
             # 可答题必然带难度（题本校验保证），此处兜底仅满足类型收窄

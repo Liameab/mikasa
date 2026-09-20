@@ -550,7 +550,8 @@ def run(
     """执行一次完整评测并落库 eval_runs（报告同时写入 data/eval-reports/）。
 
     前置：语料已导入 + 黄金集已冻结（tools/build_golden.py）。
-    语料任何增删改都会触发指纹校验失败，提示先重建黄金集。
+    语料变动只跳过受影响的那几道题（报告里逐条写明）；全部可答题都对不上
+    才会报错并提示重建题库。
     """
     from mikasa.eval.golden import load_golden
     from mikasa.eval.service import run_and_persist
@@ -575,7 +576,7 @@ def run(
     )
 
     # ---- 编排复用层：执行 → 落库 → 渲染回填 → 写报告 ----
-    # （cli 与 Web 后台任务共用；指纹错配/空库在此翻译为红字退出）
+    # （cli 与 Web 后台任务共用；题库全对不上/空库在此翻译为红字退出）
     try:
         persisted = run_and_persist(settings, golden_set)
     except ZhiwenError as exc:

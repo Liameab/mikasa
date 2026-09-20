@@ -57,12 +57,33 @@ def test_preflight_empty_corpus_400(client):
     assert "知识库为空" in resp.json()["detail"]
 
 
-def test_preflight_fingerprint_mismatch_400(seeded_client):
-    """语料与黄金集指纹错配（测试 NOTE ≠ 冻结语料）：即刻 400。"""
+def test_preflight_all_gold_chunks_gone_400(seeded_client, monkeypatch):
+    """标准答案分块全部对不上（语料被整体重灌）：即刻 400，别占任务槽白跑一场。
+
+    这条原先是 `test_preflight_fingerprint_mismatch_400`：那时只要全库指纹不同
+    就 400——包括"只是往库里加了一篇不相干文档"这种完全正常的使用。2026-09-19
+    起改成逐题校验，只有**一道题都评不了**才是结构性失败。
+    """
     c, _ = seeded_client
+    # 把内置题库里的标准答案分块全部指向不存在的 id，模拟"语料整体重灌"
+    import mikasa.web.routers.eval as eval_router
+    from mikasa.eval.golden import load_golden
+
+    original = load_golden(eval_router._GOLDEN_DEFAULT)
+    stale = original.model_copy(
+        update={
+            "items": [
+                item.model_copy(update={"gold_chunk_ids": [90001], "gold_hashes": ["0" * 64]})
+                if item.kind == "answerable"
+                else item
+                for item in original.items
+            ]
+        }
+    )
+    monkeypatch.setattr(eval_router, "_preflight_golden", lambda settings, bank="builtin": stale)
     resp = c.post("/api/eval/runs")
     assert resp.status_code == 400
-    assert "语料指纹不匹配" in resp.json()["detail"]
+    assert "完全对不上" in resp.json()["detail"]
 
 
 def test_preflight_golden_missing_404(client, monkeypatch, tmp_path):
@@ -160,3 +181,52 @@ def test_eval_run_conflict_409(client, offline_settings, monkeypatch):
         job = c.get("/api/eval/jobs/current").json()["job"]
         assert job["status"] == "running"
         assert job["total"] == 63
+
+
+# ---------------------------------------------------------------------------
+# 题库选择与自动出题（2026-09-19：评测支持任意语料）
+# ---------------------------------------------------------------------------
+
+
+def test_goldens_lists_both_banks_even_when_auto_is_missing(client):
+    """题库清单：内置那份永远在；自动那份没生成过也要列出来。
+
+    不列的话用户根本不知道"评我自己的资料"这条路存在——而它正是这个接口
+    存在的理由（人工题本的锚句是示例语料原文，换语料就失效）。
+    """
+    c, _ = client
+    banks = {b["id"]: b for b in c.get("/api/eval/goldens").json()["banks"]}
+    assert set(banks) == {"builtin", "auto"}
+    assert banks["builtin"]["available"] is True
+    assert banks["builtin"]["items"] > 0
+    assert banks["builtin"]["source"] == "builtin"
+    assert banks["auto"]["available"] is False
+    assert banks["auto"]["label"] == "我的资料"
+
+
+def test_synthesize_is_refused_on_the_mock_profile(client):
+    """离线档的模拟模型不会出题：400 + 人话，别让用户跑到一半才发现全是废题。"""
+    c, _ = client
+    resp = c.post("/api/eval/synthesize")
+    assert resp.status_code == 400
+    assert "需要真实模型" in resp.json()["detail"]
+
+
+def test_runs_with_auto_bank_404_before_it_exists(client):
+    """还没生成过自动题库时选它 → 404，且告诉用户该点哪里。"""
+    c, _ = client
+    resp = c.post("/api/eval/runs?golden=auto")
+    assert resp.status_code == 404
+    assert "生成题库" in resp.json()["detail"]
+
+
+def test_runs_rejects_unknown_bank(client):
+    c, _ = client
+    resp = c.post("/api/eval/runs?golden=nope")
+    assert resp.status_code == 422
+    assert "未知的题库" in resp.json()["detail"]
+
+
+def test_synthesize_status_starts_empty(client):
+    c, _ = client
+    assert c.get("/api/eval/synthesize/status").json() == {"job": None}

@@ -53,6 +53,14 @@ class Corpus:
         row = self.row_of.get(chunk_id)
         return self.chunks[row] if row is not None else None
 
+    def content_hashes(self) -> dict[int, str]:
+        """{chunk_id: content_sha256} —— 评测的逐题校验用（见 eval.golden）。
+
+        `Chunk.id` 类型是可空的（入库前的临时对象没有 id），快照里的块则必然有；
+        这里统一过滤掉 None，免得每个调用点各写一遍 `if c.id is not None`。
+        """
+        return {c.id: c.content_sha256 for c in self.chunks if c.id is not None}
+
 
 class IndexManager:
     """懒重建的索引访问门面。"""

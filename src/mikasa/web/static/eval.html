@@ -33,10 +33,18 @@
       <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
         <div>
           <h2 style="margin:0">黄金集评测</h2>
-          <div id="corpus-hint" class="muted small">语料指纹与题库需一致方可评测（否则服务端会拒绝并说明）</div>
+          <div id="corpus-hint" class="muted small">正在读取题库…</div>
         </div>
         <div class="grow"></div>
         <button id="start-eval" class="btn primary" type="button">▶ 开始评测</button>
+      </div>
+      <!-- 题库选择：内置示例语料 / 自己的资料（自动生成）。两个按钮而不是下拉框——
+           只有两项，且要能一眼看出哪份可用、各有多少题 -->
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px">
+        <span class="small muted">题库</span>
+        <span id="golden-banks"></span>
+        <div class="grow"></div>
+        <button id="synth-bank" class="btn ghost" type="button">为我的资料生成题库</button>
       </div>
       <!-- 后台任务进度（仅 running 时显示；done/error 由轮询收尾处理） -->
       <div id="job-panel" hidden>
@@ -46,6 +54,15 @@
         </div>
         <div class="progress-track"><div class="progress-bar" id="job-bar"></div></div>
         <div class="small muted" id="job-meta"></div>
+      </div>
+      <!-- 出题进度：与评测进度分开，两条进度条混在一起会看不出在等什么 -->
+      <div id="synth-panel" hidden>
+        <div style="display:flex;justify-content:space-between;margin:14px 0 6px">
+          <span class="small muted" id="synth-label">准备中…</span>
+          <span class="small" id="synth-ratio">0 / 0</span>
+        </div>
+        <div class="progress-track"><div class="progress-bar" id="synth-bar"></div></div>
+        <div class="small muted" id="synth-meta"></div>
       </div>
     </section>
 

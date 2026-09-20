@@ -30,36 +30,49 @@ second gold chunk on hard synthesis questions — q036/q037 put gold chunks at r
 independently by a runner constant, so shrinking it in the product later cannot
 move A's methodology. Both configurations are disclosed in the same report.
 
-## 2. The golden set: two guards against questions that no longer match the corpus
+## 2. The golden set: two banks + guards against questions that no longer match the corpus
 
-Golden questions are **hand-written** (`evals/questions.yaml`, 63 of them: 47
+**The built-in bank is hand-written** (`evals/questions.yaml`, 63 of them: 47
 answerable graded easy/medium/hard + 16 unanswerable classified as unrelated /
-insufficient / hallucination_bait). They are not auto-generated — auto-generation
-would only learn the corpus's biases all over again.
+insufficient / hallucination_bait). Its value is that a human does not phrase
+questions the way the corpus does — auto-generation would only learn the corpus's
+biases all over again.
 
-- **Unique anchor hit**: every answerable question carries anchors copied verbatim
-  from the corpus text. When `tools/build_golden.py` resolves anchors into real
-  chunk_ids, both zero hits (question and corpus disagree) and multiple hits
-  (ambiguity from chunk overlap) **refuse to freeze**, reporting every problem in a
-  single pass;
-- **Corpus fingerprint freeze**: the golden-set JSON is written to disk together
-  with a corpus_sha256, which is checked again before evaluation — any addition,
-  removal, edit, **or rebuild** of the corpus makes the fingerprint mismatch, and
-  `mikasa eval run` fails immediately with a prompt to re-run
-  `tools/build_golden.py`. That rules out the silent mismatch of "stale question
-  set, fresh corpus."
+**The synthesized bank** (2026-09-19, `src/mikasa/eval/synth.py`) covers the other
+half: hand-written anchors are verbatim quotes from the sample corpus, so they die
+with a corpus swap — and nobody has written gold answers for *your* documents. The
+synthesizer samples chunks from your own corpus and asks the model for a question
+only that chunk can answer; **that chunk becomes the gold answer**, so any corpus
+can be evaluated. The cost is stated in the report: a synthesized question is
+written by a model that has just read the source text, so it is easier than a
+hand-written one and scores run high — use it for **relative** comparisons (two
+retrieval changes on the same bank), never against hand-written absolute numbers.
+The report header marks such banks as **auto-generated**.
 
-  The fingerprint has a subtlety: the hashed object is the (chunk_id,
-  content_sha256) pair, and **the id must be part of it**. Lesson (pitfall hit
-  during the first real acceptance round, 2026-09-09): the chunk table uses
-  AUTOINCREMENT, so after a `--reindex` rebuild ids shift wholesale and are never
-  reused (old database 1-49 → new database 50-98). Hash only the content sequence
-  and a database where "the content is unchanged but every id moved" keeps the same
-  fingerprint, while the golden set's gold_chunk_ids are all misaligned — all 63
-  questions score recall 0 and the fingerprint check still passes. Once ids are
-  mixed in, any rebuild triggers an explicit mismatch, forcing a re-run of
-  build_golden to re-resolve the anchors onto the new ids (idempotent, takes
-  seconds).
+Two guardrails (2026-09-19):
+
+- **Unique anchor hit** (built-in bank only): every answerable question carries
+  anchors copied verbatim from the corpus text. When `tools/build_golden.py`
+  resolves anchors into real chunk_ids, both zero hits (question and corpus
+  disagree) and multiple hits (ambiguity from chunk overlap) **refuse to freeze**,
+  reporting every problem in a single pass;
+- **Per-chunk freeze** (both banks): each answerable question is frozen together
+  with the content_sha256 of its gold chunks. Before a run every question is
+  checked — "is that chunk still there, is it still the same text?" — and the ones
+  that fail are **skipped**, with the count in the report header and the ids and
+  reasons listed in the body. Only a bank whose answerable questions are *all*
+  stale is a hard error.
+
+  **Changed from the old global fingerprint**: the guard used to hash the whole
+  corpus as a (chunk_id, content_sha256) sequence, so adding any single document —
+  or renaming one — invalidated the entire bank, while the actual risk only ever
+  concerned the few dozen chunks a question points at. Chunk-level checking keeps
+  what matters: a `--reindex` that shifts ids (old ids no longer resolve → skip)
+  and an edited chunk (hash mismatch → skip). Skipping rather than proceeding is
+  the point: scoring against misaligned gold answers produces numbers that look
+  normal and mean nothing, which is the worst failure mode an evaluation tool has.
+  Showing the skips is the other half: silently shrinking the denominator makes the
+  score look better.
 
 One pitfall to note: the chunker keeps an **overlap window** between adjacent
 chunks (a sentence at the end of one chunk reappears in the next), so such

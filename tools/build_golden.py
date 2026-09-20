@@ -51,9 +51,14 @@ def _resolve_drafts(questions, chunks) -> tuple[list[GoldenItem], list[str]]:
 
     零命中 / 多命中都记为错误并继续处理其余题目——一次运行报全所有
     对不上的题，而不是修一道错一次。
+
+    同时冻结**每个标准答案分块的内容哈希**（gold_hashes，2026-09-19）：
+    评测时逐题核对"这一块还是当初那一块"。原先只比全库指纹，往库里加一篇
+    文档就让整份题库作废；现在换成分块级校验，不相干的增删不影响评测。
     """
     items: list[GoldenItem] = []
     errors: list[str] = []
+    hashes = {chunk.id: chunk.content_sha256 for chunk in chunks}
     for draft in questions.items:
         if draft.kind == "unanswerable":
             items.append(
@@ -93,6 +98,7 @@ def _resolve_drafts(questions, chunks) -> tuple[list[GoldenItem], list[str]]:
                 question=draft.question,
                 difficulty=draft.difficulty,
                 gold_chunk_ids=sorted(gold_ids),
+                gold_hashes=[hashes[cid] for cid in sorted(gold_ids)],
                 notes=draft.notes,
             )
         )

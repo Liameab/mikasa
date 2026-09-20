@@ -45,6 +45,17 @@ def render_report(
     add("")
     add(_meta_table(settings, golden, result, run_id=run_id, created_at=created_at))
     add("")
+    if result.skipped_items:
+        # 放在最前：这是"这次评测少测了什么"，比任何指标都该先被看见
+        add("## 跳过题（语料变动）")
+        add("")
+        add("这些题的标准答案分块在当前语料里已不存在或内容已变，**未计入任何指标**：")
+        add("")
+        add(_table(["题号", "原因"], [[i, r] for i, r in result.skipped_items]))
+        add("")
+        add("要把它们重新纳入评测：重建题库（CLI 用 `python tools/build_golden.py`，")
+        add("Web 用评测页的「为我的资料生成题库」）。")
+        add("")
 
     # ---------------- 阶段 A：检索层 ----------------
     add("## 阶段A 检索层（关 rerank，窗口独立锚定，见附录配置）")
@@ -205,17 +216,26 @@ def _meta_table(
 ) -> str:
     """报告头部元信息表。"""
     judge_note = _judge_policy_text(settings, result.judge.judge_model)
+    # 自动生成的题库必须自报家门：题是模型照着原文出的，分数天然比人工题偏高，
+    # 不标注就会被当成同一把尺子去比
+    set_label = f"{golden.name}（题量 {len(golden.items)}）"
+    if golden.source == "synthesized":
+        set_label += f"，**自动生成**（{golden.model or '未知模型'}）"
+    rows = [
+        ["run id", str(run_id) if run_id is not None else "—（未落库）"],
+        ["时间", created_at or datetime.now().isoformat(timespec="seconds")],
+        ["profile", result.profile],
+        ["黄金集", set_label],
+        ["生成模型", f"{settings.llm.backend} / {settings.llm.model}"],
+        ["语义裁判", judge_note],
+        ["总耗时", f"{result.latency_sec:.1f}s"],
+    ]
+    if result.skipped_items:
+        # 静默缩小分母会让分数看着变好——跳过几道必须写在首部，并逐条列出（见下）
+        rows.append(["跳过题", f"{len(result.skipped_items)} 题（标准答案分块已变动）"])
     return _table(
         ["项目", "值"],
-        [
-            ["run id", str(run_id) if run_id is not None else "—（未落库）"],
-            ["时间", created_at or datetime.now().isoformat(timespec="seconds")],
-            ["profile", result.profile],
-            ["黄金集", f"{golden.name}（题量 {len(golden.items)}）"],
-            ["生成模型", f"{settings.llm.backend} / {settings.llm.model}"],
-            ["语义裁判", judge_note],
-            ["总耗时", f"{result.latency_sec:.1f}s"],
-        ],
+        rows,
     )
 
 
