@@ -15,7 +15,7 @@ modes → M4 local profile → M4.5 session management (including the first real
 English passages → document reader with citation jump → pre-M5 audit (23 fixes, 4 of them
 data-safety) → packaged installer → model settings in the panel. Currently **943 tests passing**,
 ruff + mypy clean, ~93% coverage. Windows portable zip and installer builds are published
-(v0.1.0 → v0.1.6) with in-app update checking — downloads resume across dropped connections, and
+(v0.1.0 → v0.1.7) with in-app update checking — downloads resume across dropped connections, and
 closing the dialog, switching pages or reloading no longer interrupts them (progress lives in a
 top-bar pill; ADR-0024).
 
@@ -194,6 +194,7 @@ API docs (Swagger) at http://127.0.0.1:8000/docs.
 | v0.1.4 | Resumable downloads, adoptable jobs (ADR-0024); same batch added related papers / cited-by / references and search history | ✅ 815 tests |
 | v0.1.5 | A round of fixes only: re-uploading no longer duplicates a document, reindex verifies every copy first, note optimistic locking, cross-process migration lock, deeper paging (OpenAlex/DOAJ to item 10,000), code blocks indexed, relicensed to AGPL-3.0 (ADR-0025) | ✅ 859 tests |
 | v0.1.6 | Photos into notes (vision as its own section, recognition as a draft, images kept, ADR-0027) + question banks synthesized from your own corpus (ADR-0026) + **formula typesetting** (bundled KaTeX, ADR-0028) + "local model times out" fixed (`localhost` normalisation) + reconnecting downloads on a bad network | ✅ 918 tests |
+| v0.1.7 | The local profile moves to **Ollama's native API**: "thinking mode / context length" knobs (thinking off, context 16384 by default — fixing a silent cut that processed only 2050 tokens of every prompt, ADR-0029) + an output-shape contract (sections, tables, formulas, diagrams) + **v0.1.6 double-click fixed** (leftover websockets stub; release sentinel `smoke_frozen` added) + four-lane audit, 17 fixes (cross-site writes 403, panel host allow-list, interrupted ingests self-heal, reindex mapping persisted…) + formula pre-pass misses (multiline `$$`, spaced `$ x $`) | ✅ 943 tests |
 
 ## Engineering notes
 
