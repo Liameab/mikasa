@@ -86,6 +86,14 @@ a = Analysis(  # noqa: F821 - PyInstaller 注入
         "mypy",
         "ast_serialize",
         "librt",
+        # WebSocket 协议栈：本应用只有 SSE，没有 WebSocket 端点（uvicorn 也已
+        # 显式 ws="none"）。**排除而不是"顺手带上"**是刻意的——v0.1.6 的
+        # 启动崩溃就是因为打包环境里那份 websockets 不完整：uvicorn 一旦能
+        # `import websockets` 就会去加载它的协议实现，加载失败即整个服务器
+        # 线程 ImportError（"服务启动超时"，见 limitations §四）。
+        # 带上一份坏的比什么都不带更糟：什么都不带时 uvicorn 会优雅回退。
+        "websockets",
+        "wsproto",
     ],
     noarchive=False,
 )

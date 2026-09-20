@@ -220,6 +220,13 @@ def _serve_forever(port: int) -> None:
             # log_config=None = "别动日志配置、用现成的"：保留自挂的文件
             # handler，输出级别由 _attach_uvicorn_file_log 决定。
             log_config=None,
+            # **ws="none"：本应用没有任何 WebSocket 端点**（流式走 SSE）。
+            # 不关掉的话，uvicorn 启动时会 import websockets 并加载它的协议
+            # 实现——打包环境里只要那份 websockets 有一点不完整（v0.1.6 实测：
+            # 升级残留的空壳目录让它变成命名空间包），整个服务器线程就 ImportError
+            # 死掉、界面弹"服务启动超时"（见 limitations §四）。
+            # 显式关掉 = 从源头不碰它：装没装、装得对不对都不影响启动。
+            ws="none",
         )
         uvicorn.Server(config).run()
     except BaseException:

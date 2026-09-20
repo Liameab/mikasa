@@ -808,6 +808,9 @@ def serve(
         )
     )
 
+    # ws="none"：本应用没有 WebSocket 端点（流式走 SSE）。不关掉的话 uvicorn
+    # 启动时要 import websockets 并加载协议实现，任何一份不完整的 websockets
+    # 都会把服务直接打崩——v0.1.6 打包版实测（升级残留的空壳目录，见 limitations §四）。
     if reload:
         # reload 模式：import string + factory——uvicorn 的热重载子进程
         # 通过字符串重新 import，闭包/实例都会在子进程里失效
@@ -817,9 +820,10 @@ def serve(
             host=listen_host,
             port=listen_port,
             reload=True,
+            ws="none",
         )
     else:
-        uvicorn.run(create_app(settings), host=listen_host, port=listen_port)
+        uvicorn.run(create_app(settings), host=listen_host, port=listen_port, ws="none")
 
 
 def _ensure_console_encoding() -> None:

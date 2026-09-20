@@ -82,6 +82,17 @@ Name: "chinese"; MessagesFile: "languages\ChineseSimplified.isl"
 ; 实测把它挂在 Task 上时，静默安装（Inno 沿用上一轮的 task 记忆）根本没建出来。
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加快捷方式："
 
+[InstallDelete]
+; 升级时先把上一版的载荷目录整个清掉，再拷新的。
+; **为什么必须显式删**：Inno 的升级只是"覆盖拷贝"，新版不再随包的文件会原地
+; 残留。v0.1.6 实测栽在这——上一版留下的 `_internal\websockets\` 空壳（只剩一个
+; .pyd）让 `import websockets` 变成没有 `__version__` 的命名空间包，uvicorn 加载
+; WebSocket 协议实现时 ImportError，服务线程当场死、界面弹"服务启动超时"。
+; 清整个目录而不是逐个点名残留物：每次残留的东西都不一样（那份空壳就不是任何
+; 构建"故意"放进去的），逐个点名等于给下一次事故留伏笔。
+; 上面的 InitializeSetup 已经 taskkill 过 Mikasa，这里不会撞文件占用。
+Type: filesandordirs; Name: "{app}\_internal"
+
 [Files]
 ; 载荷 = PyInstaller 的 onedir 产物（Mikasa.exe + _internal）
 Source: "..\dist\Mikasa\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
