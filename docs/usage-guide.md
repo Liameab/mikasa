@@ -1,268 +1,268 @@
-# Usage Guide
+# Mikasa 使用说明（内部中文版）
 
-> A complete guide that takes you from zero to productive use: the three pages, the paper
-> research workflow, detailed AI Q&A usage, corpus management, settings and data privacy.
-> Companion piece to docs/ideas-and-backlog.md (the idea ledger).
-
----
-
-## 1. What Mikasa Is
-
-A local-first personal document RAG workspace:
-
-- **Knowledge-base Q&A (kb)**: upload your material (md/txt/pdf/docx) first, then ask questions — answers **quote chunks of the original corpus** (`[n]` markers; click one to highlight the source), and when retrieval finds nothing the system refuses explicitly (an anti-hallucination feature, not a matching failure);
-- **Free-form Q&A (free)**: no knowledge-base lookup, goes straight to the model for a detailed answer — good for "follow-up questions the material doesn't cover";
-- **All data stays on this machine**: SQLite (data/mikasa.db) + uploaded copies (data/uploads) + indexes, with no third-party cloud in the path; the offline profile works with the network disconnected.
-
-The typical loop (a user scenario): you hit an unfamiliar concept while working through problems → kb gives you a precise, citation-traced answer from your notes → free expands on the underlying principles and related ideas → you write the new understanding back into your notes and ingest them. Knowledge accumulates; that is the loop.
+> 面向"从零到会用"的完整使用文档：三页功能、查论文工作流、AI 提问细节用法、
+> 语料管理、设置与数据隐私。上 GitHub 公开发布前改写为英文或精简版（M5 事项）。
+> 与 docs/ideas-and-backlog.md（想法总账）互为姊妹篇。
 
 ---
 
-## 2. Quick Start
+## 1. Mikasa 是什么
 
-**Double-click `Mikasa.bat`** (or the "Mikasa" desktop shortcut) → it brings up Ollama (if it isn't already running) plus the service → the browser opens http://127.0.0.1:8787/ automatically. To stop it, close the minimized "Mikasa service" window in the taskbar.
+本地运行的个人文档 RAG 问答工作台：
 
-Manual start (developers):
+- **知识库问答（kb）**：先把资料（md/txt/pdf/docx）上传入库，再提问——答案**引用语料原文块**（`[n]` 角标，点击高亮出处），检索不到就明确拒答（防幻觉特性，不是匹配失败）；
+- **自由问答（free）**：不查知识库、直连大模型细答——适合"资料里没有的引申问题"；
+- **全部数据留在本机**：SQLite（data/mikasa.db）+ 上传副本（data/uploads）+ 索引，不经过任何第三方云；断网也能用离线档。
+
+典型闭环（用户场景）：写题遇不懂的知识点 → kb 从笔记里拿带溯源的精确答案 → free 引申原理与关联 → 把新理解写进笔记入库沉淀。
+
+---
+
+## 2. 快速开始
+
+**双击 `Mikasa.bat`**（或桌面「Mikasa」快捷方式）→ 自动拉起 Ollama（未运行时）+ 服务 → 浏览器自动打开 http://127.0.0.1:8787/。停止 = 关任务栏最小化的「Mikasa服务」窗口。
+
+手动启动（开发者）：
 ```bash
 .venv\Scripts\mikasa.exe serve --profile local --port 8787
 ```
-Three profiles: `api` (DeepSeek generation + SiliconFlow embeddings/reranking, best quality, needs keys in .env) / `local` (Ollama qwen3:8b + fastembed, free and offline) / `offline` (MockLLM, zero-key demos and evaluation; the free-chat toggle is greyed out). Default data directory = `data/` at the repository root.
+三个 profile：`api`（DeepSeek 生成 + SiliconFlow 嵌入/重排，最强效果，需 .env 密钥）/ `local`（Ollama qwen3:8b + fastembed，免费离线）/ `offline`（MockLLM，零密钥演示与评测，自由问答开关置灰）。默认数据目录 = 仓库根 `data/`。
 
 ---
 
-## 3. Page Tour
+## 3. 页面导览
 
-Three pages in the top bar: **Chat** (home) / **Library** / **Evaluation**; the status pill in the top right shows the current model and the live connection state.
+顶栏三页：**问答**（主页）/ **知识库** / **评测**；右上角状态胶囊显示当前模型与连接实况。
 
-| Page | Left | Right |
+| 页 | 左侧 | 右侧 |
 |---|---|---|
-| Chat | Session tree | Chat area (with the free-chat toggle) |
-| Library | Corpus folder tree + search box | Upload area + details of the selected document |
-| Evaluation | — | Golden-set evaluation runs + past reports |
+| 问答 | 会话管理树 | 聊天区（含自由问答开关） |
+| 知识库 | 语料文件夹树 + 查找框 | 上传区 + 选中文档详情 |
+| 评测 | —— | 黄金集跑评测 + 历史报告 |
 
 ---
 
-## 4. Knowledge-Base Q&A (Including the Paper Research Workflow)
+## 4. 知识库问答（含"查论文"工作流）
 
-**The mode switch** sits above the input box: `KB` / `Free chat` (locked while an answer is streaming; the toggle state belongs to the individual message).
+**模式开关**在输入框上方：`知识库` / `自由问答`（流式回答期间锁定，一条消息一个开关态）。
 
-### 4.1 Researching a Paper or Looking Up Material in Five Steps
-1. Switch to the **Library** page and drag in or browse to your papers/notes (md/.txt/pdf/docx, max 500 MB per file; duplicate content is skipped automatically; re-uploading an updated file under the same name replaces it in place, keeping both its title and its folder placement);
-2. Optionally **create folders to organize** the tree on the left (drag a document row into a folder, or use the ⋯ at the end of a row → Move to…);
-3. Go back to the **Chat** page and confirm the mode is KB;
-4. Ask a question — preferably one **the corpus can actually answer** (paraphrases land just as reliably: recall@10 = 1.000 in the acceptance run):
-   - ✅ "Why does L2 regularization prevent overfitting?", "Compare the update rules of Adam and SGD", "Why is dk square-rooted in the attention mechanism?"
-   - ⚠️ Material that genuinely isn't there triggers a **refusal with an explanation** — that is the anti-hallucination design (see 4.3 for follow-ups);
-5. The answer body carries `[n]` citation markers — **clicking one locates and highlights the matching source chunk in the message area**, so every claim can be traced back; points with insufficient support are called out explicitly;
-6. **When English-language sources are hit, the answer automatically appends an "original vs. translation" section** (api/local profiles, `answer.bilingual`) — each cited English chunk is listed as a pair: `[n] original` + `[n] Chinese translation`, and the `[n]` markers inside those blocks are clickable too. Chinese questions work exactly as before, just with an extra bilingual section; the offline/mock profile makes no extra calls and produces no such block.
-7. **A live timer runs while you wait, and a per-stage breakdown appears once the answer lands**: after you ask, the line above the message ticks up as `Retrieving from the knowledge base… 12.3s`, then becomes `Took 33.1s (generate 25.3s · translate query 4.2s · …)` when it finishes — local qwen3 often needs tens of seconds per turn, and this tells you whether it is thinking or stuck. The breakdown is replayed along with past sessions (the total "took" time is not, since that needs the wall clock of the original turn).
-8. **Clicking a `[n]` marker opens the reader panel on the right, positioned at that chunk** (since 2026-09-10) — the cited passage is highlighted in amber, with its position and surrounding context readable above and below. The reader has two tabs:
+### 4.1 查论文 / 查资料五步
+1. 切到 **知识库** 页，拖入或点选论文/笔记（md/.txt/pdf/docx，单文件 ≤ 500 MB；重复内容自动跳过；同名更新文件再传 = 原地替换，改名与文件夹归属都保留）；
+2. 可在左侧树里**建夹归档**（拖文档行进夹 / 行尾 ⋯ → 移动到…）；
+3. 回到 **问答** 页，确认模式 = 知识库；
+4. 提问——建议问"**语料能回答的问题**"（同义问法都能命中，检索召回率 recall@10=1.000 实证）：
+   - ✅「L2 正则化为什么能防止过拟合？」「对比一下 Adam 与 SGD 的更新规则」「注意力机制里的 dk 为什么要开根号？」
+   - ⚠️ 资料里确实没有的内容会**拒答并解释**——这是防幻觉设计（可按 4.3 追问）；
+5. 回答正文带 `[n]` 引用角标——**点击角标在消息区定位/高亮对应原文块**，逐条可溯；来源不充分的点会被明示；
+6. **英文文献命中时，回答末尾自动附「原文与译文对照」**（api/local 档，`answer.bilingual`）——被引用的英文块按 `[n] 原文` + `[n] 中文翻译` 成对列出，块内 `[n]` 同样可点击定位。中文问答照常，只是多一段对照；offline/mock 档零额外调用、不产出该块。
+7. **等待期间显示已等时长，答完显示各阶段耗时**：提问后消息上方是 `正在检索知识库并作答… 12.3s` 逐秒跳动，答完换成 `用时 33.1s（生成 25.3s · 译查询 4.2s · …）`——本地 qwen3 单轮常需数十秒，靠它判断"在思考"还是"卡住了"。耗时明细也随历史会话回放（不含"用时"总时长，那需要当轮墙钟）。
+8. **点 `[n]` 角标会打开右侧阅读面板并定位到原文那块**（2026-09-10 起）——被引用的那一段是琥珀色高亮的，上下还能读到它在全文中的位置与上下文。阅读区有两个标签页：
 
-   - **Text**: the continuous body text reassembled from the ingested chunks; you can jump to and highlight passages. Note that markdown `#` heading lines and code fences are not visible here (they never entered the chunks), so subheadings are re-laid out from `heading_path`;
-   - **Page** (PDF only, since 2026-09-11): renders the PDF **exactly as it is** into page images and **highlights the chunk you asked about by its coordinates** — **use this when you want the real layout with highlights drawn on it**. Tables, figures, and formulas are all there, untouched. You can page forward and back and jump to a page; to select text or use Ctrl+F, click "↗ Original file" in the top right (the browser's built-in viewer, opened in a new tab). For md/txt this tab is called **Original file**: it shows the text as imported; for docx it offers a download link.
+   - **文本**：按入库分块拼回的连续正文，可定位、可高亮。注意这里**看不到 md 的 `#` 标题行与代码围栏**（它们本就没进分块），所以小标题是按 `heading_path` 重排的；
+   - **页面**（PDF 专用，2026-09-11 起）：把 PDF **原样渲染**成页面图，并把你问到的引用块**按坐标高亮**上去——**想看真实排版和标注高亮就点它**。表格、图片、公式全都原样在。可以上一页/下一页/跳页；要选中文字或 Ctrl+F 就点右上「↗ 原文件」（浏览器自带阅读器，新标签开）。md/txt 这里叫**原文件**：显示导入时的原文，docx 给下载链接。
 
-   **The page-number box at the top works in both views, but it jumps differently**: in **Original file** it turns to that page of the PDF; in **Text** it **scrolls to that page's body text and highlights the chunk** (reference sections and the like are stripped during parsing, and a page with no body text says so explicitly). The upper bound is the **original file's** real page count, not the number of pages left after parsing.
+   **顶部的页码框两个视图里都能用，但跳法不同**：在「原文件」里是翻到 PDF 的那一页；在「文本」里是**滚到该页的正文并高亮那一块**（解析时参考文献区等会被剔除，若某页没有正文会明确提示）。上界用的是**原文件**的真实页数，不是解析出的正文页数。
 
-   **The same reader panel appears in two forms**:
+   **同一套阅读区有两种出场方式**：
 
-   | Where | Form | How to open | How to close |
+   | 在哪 | 形态 | 怎么开 | 怎么关 |
    |---|---|---|---|
-   | Chat page | Floating panel on the right | Click a `[n]` marker | ✕ / `Esc` / click outside the panel |
-   | **Library page** | **Embedded in the right column** | Click any document row on the left | ✕ to collapse (back to the upload view) |
+   | 问答页 | 右侧浮层 | 点 `[n]` 角标 | ✕ / `Esc` / 点浮层外 |
+   | **知识库页** | **内嵌在右栏** | 点左侧任意文档行 | ✕ 收起（回到上传视图） |
 
-   After you select a document on the Library page, the right column *is* the **document text itself** (no longer a handful of metadata fields), with a persistent footer line showing `location · type · chunks · characters · status`. The upload area only holds that space when nothing is selected — select something and the space goes to the text.
+   知识库页选中一篇文档后，右栏就是**正文本身**（不再是几张元数据字段），底部一行常驻显示 `位置 · 类型 · 分块 · 字符 · 状态`。上传区只在未选中时占位——要看正文就把位置让给正文。
 
-   **Reader font size**: `A-` / `A+` in the header scale only the reader's body text; the choice is stored locally and remembered next time. **Every citation card has an "↗ Open original file" button** — if you never guessed that the markers were clickable, this is the explicit entry point.
+   **阅读区字号**：头部 `A-` / `A+` 只放大阅读区正文，选择存在本地、下次打开记得。**每张引用卡都有「↗ 打开原文件」按钮**——不知道角标能点也没关系，这是明示入口。
 
-### 4.2 Follow-Up Techniques
-- Chain follow-ups within one turn (the context stays coherent): "What about vanishing gradients?", "What if we switch to L1?";
-- Push for depth with compare / example / boundary questions: "Give me an example", "When does it not apply?";
-- Locating things in a long document is what the citation markers are for — there is no need to paste the whole thing into your question.
+### 4.2 追问技巧
+- 一轮里连续追问（上下文连贯）：「那梯度消失呢」「换成 L1 会怎样」；
+- 用"对比/举例/边界"催促展开：「举例说明」「什么情况下它不适用？」；
+- 长文档的定位靠引用角标，不必把整篇贴进问题。
 
-### 4.3 When the Knowledge Base Can't Answer
-- Switch to **free chat** and ask the same question there (it unfolds the principles and gives examples);
-- **Write the new understanding into your notes and upload them again** (re-uploading the same file updates it in place) → the KB can answer from then on — knowledge accumulates; that is the loop closing.
-
----
-
-## 5. Free-Form Q&A in Detail
-
-- No upload, no retrieval, no refusal. The answer style is tuned: **conclusion first → supporting argument → one or two concrete examples → common mistakes and likely test points for study-oriented questions**; length scales with complexity (a few lines when simple, 200–500 characters when moderate, unconstrained when complex but never padded) — capped at 4096 tokens on the `api` profile and 2048 on `local`.
-- **Rich answer rendering**: tables (horizontally scrollable), code blocks (their own dark region with one-click copy in the top right), headings, lists, block quotes, and horizontal rules are all rendered as blocks, as tidy as the Doubao/DeepSeek clients.
-- Suggested ways to ask (treat the model as a sparring partner):
-  - Extend: "Why doesn't the Transformer use a recurrent structure?" (a deep follow-up beyond your notes)
-  - Correct / discriminate: "L2 and Dropout both guard against overfitting — what's the difference, and which do I tune first?"
-  - Self-test: "Give me 3 short-answer questions on this chapter, no answers yet" … "I've answered; grade me"
-  - Summarize: "Turn my questions above into a knowledge framework"
-- When an answer is worth keeping → copy the key points into your notes → upload them to the knowledge base (see 4.3).
+### 4.3 知识库答不上时
+- 换 **自由问答** 模式追问同一问题（会展开原理、给例子）；
+- 把新理解**补进笔记重新上传**（同文件覆盖式更新）→ 从此 kb 能答——知识在沉淀，这就是闭环。
 
 ---
 
-## 6. Library Page · Managing the Corpus Folder Tree
+## 5. 自由问答（AI 提问）细节用法
 
-**Search box**: live filtering at the top — matches folder names and document titles, auto-expanding the branches that match; shows a placeholder hint when nothing matches; ✕ clears it and restores the whole tree in one click.
-
-**Folders** (freely nestable, the same shape as the session tree):
-- Create: the `＋ New folder` button (at the root) or a folder's ⋯ menu → New subfolder;
-- Clicking a row expands/collapses it (arrow ▸/▾);
-- ⋯ menu: expand/collapse / new subfolder / **rename** (inline input; Enter commits, Esc cancels) / **move to…** (opens a path picker, with the folder itself and its descendants greyed out to prevent cycles) / delete (**empty folders only**: a folder containing subfolders or documents returns 409 with a count — a container never takes its documents down with it, so move them out first, then delete).
-
-**Document rows**:
-- Click = select → the right column switches to the **reading view** for that document (body text or original file, with a status bar carrying path / type / chunk count / character count / ingest status);
-- **Drag** = drop onto a folder row to move it in (collapsed folders expand automatically), drop onto a document row to move it into that document's folder, drop on empty space to move it back to the root; the source row goes semi-transparent and the target row is outlined in green;
-- ⋯ menu: rename / move to… / delete (deleting opens an **in-app confirmation dialog** — not a native browser popup; it states plainly that "the chunks and the in-library copy are cleared together, and this cannot be undone", and confirms with a red button. `Esc` or a click outside cancels, so nothing is deleted by accident. Session deletion works the same way).
-
-**Semantics worth remembering**: renaming changes only the display name inside the library (the file in uploads is untouched); deleting a document removes its retrieval chunks and its uploaded copy together; re-uploading identical content is skipped, while re-uploading the same file with new content updates it (organizational placement preserved); and the full rebuild after switching embedding models (`reindex`) likewise preserves your organization.
-
-## 6c. Writing Notes · Markdown straight into the library (M6 ①)
-
-**＋ New note** (left column) opens a modal editor: write Markdown on the left, see it rendered on the
-right, pick a folder, save. The note becomes an ordinary library document — it shows up in the tree,
-drags into folders like anything else, and is searchable/citable by the very next question. Notes are
-labelled **笔记** instead of `md` in the tree so they are distinguishable from files you uploaded, and
-their ⋯ menu gains **编辑笔记**.
-
-- **Editing** re-ingests automatically: the note is replaced in place (same row in the tree, same file in
-  uploads), so nothing is duplicated and your folder placement is kept. Pressing save without changing
-  anything is a no-op.
-- **Unsaved changes are protected**: `Esc`, 取消 or a click on the backdrop asks for confirmation before
-  discarding, and a failed save keeps the window and your text open so you can fix and retry.
-- **What gets searched**: the note's prose, headings, tables and — since 2026-09-20 — **the contents of
-  fenced code blocks**. A block is indexed as plain text, so a `#` inside it is not mistaken for a
-  heading, and a note that is *only* code can now be saved and found. One exception remains: a note with
-  **nothing but headings** produces no indexable paragraph and is still rejected with 400.
-- **The note file is the only copy.** Unlike an uploaded paper — where you still have your original —
-  a note exists only inside the library (`data/uploads/`). Back up `data/` before switching embedding
-  models or moving machines.
-
-### Photos into notes (M6 ②)
-
-**识别图片** at the bottom of the editor turns a photo into note text — whiteboards, textbook pages and
-handwritten outlines become searchable notes. You can also **drag an image** onto the editor or
-**paste** a screenshot (`Ctrl+V`).
-
-- **Recognition is a draft**: the text lands at the cursor and you **correct it before saving** (OCR
-  always has errors, handwriting especially — characters the model cannot read come back as 「□」
-  rather than a guess). Saving without touching it is allowed; just know it is the raw recognition.
-- **The original image is kept with the note**: a thumbnail strip sits at the bottom of the editor
-  (✕ removes one), and the reader shows the images at the top of a note (click to open). What is
-  stored is a compressed copy (1600 px long edge) — enough to check against, not a scan.
-- **You need a vision model first**: **Settings (⚙) → 视觉模型** — pick SiliconFlow (cloud, strong on
-  Chinese handwriting) or a local Ollama model (free, offline, requires
-  `ollama pull qwen2.5vl:7b`). With nothing connected, "识别图片" says exactly what to do instead of
-  failing silently. The default is **not connected**: recognition sends your photo to whichever model
-  you pick, so that switch is yours to flip.
-- **Generation and recognition are separate**: run your everyday chat on local Ollama and send only
-  recognition to SiliconFlow — the two sections do not interfere. The vision section shares its key
-  slot with the retrieval side; to clear the key, do it in the model section.
-
-## 6b. Find-Papers Page · Searching the literature and importing what you find
-
-The **找论文** page is its own tab (ADR-0020). Four free sources are queried at once — arXiv (preprints, all open access), OpenAlex (journal metadata including Chinese journals), CORE (an open-access aggregator with full-text links) and **DOAJ** (the open-access journal directory, **no key required**, which is where Chinese open-access journals such as 工业水处理 live) — and a result can be imported straight into your corpus, where it becomes askable like any other document. **Three of the four need no registration at all** (only OpenAlex prefers a free key, see below).
-
-- **Left column — filters.** Year range, sort (relevance / most cited / newest), which sources to search, language, and "only open access". Options a selected source cannot honour are greyed out with an explanation: arXiv has no citation counts, so "most cited" is only offered while a source that has them is selected; CORE ignores year *parameters* upstream, so its year filtering runs through the query instead. When every selected source is entirely open access, "only open access" shows up checked and disabled — that condition is *already satisfied*, which is not the same as unsupported.
-- **Search history**: recent queries appear as small chips under the search box (kept in this browser, at most 8) — click one to search again, and the input's native suggestions come from the same list. **Suggestions come only from your own history**, never from an upstream endpoint (the upstream type-ahead measured over ten seconds, which on a keystroke just looks like a hang).
-- **Middle column — results.** Type a query in Chinese or English and search. The four sources are queried **in parallel** and their results rotate, so a page always shows a mix rather than one source burying the others; a page is 50 rows (raised from 20 on 2026-09-19). Each row carries the title, source badge, authors, year, journal, citation count (or "该来源不提供" when the source has none — 0 citations and "unknown" are different things), and a two-line abstract preview.
-- **Clicking a row opens the paper's own page in a new browser tab** (2026-09-20: the first thing you do with a paper is go read it). To see the full abstract, import it into the corpus, or walk its citation graph, click the **「详情」** button inside the row — the right-hand pane is where that lives now.
-- **Paging** (2026-09-20, replacing the old "load more" button): the strip under the list has previous/next, page numbers (1 … current±2 … last) and a "jump to page N" box. The **total page count** is computed from the hit counts the sources report (summed, and the status line shows where that number comes from, e.g. "上游合计 72,600 条"), **capped by what the upstreams actually allow**: the page-numbered sources (OpenAlex, DOAJ) stop at their 10,000th result, and with n sources sharing each 50-row page the cap is 200 x n (800 pages with all four selected). Fewer sources means a shallower cap — that is the upstream's reality, not a number we picked. A page past the end of the data says so plainly rather than inventing a last-page number.
-- **Publication date is two date boxes** (from / to): click for a calendar, or type `2026-09-20`. The old "不限 / last 3 / 5 / 10 years" shortcut chips were removed on 2026-09-20 — they were a second path to the same thing the calendar already does.
-- **The status line reports each source's upstream hit count** (e.g. "OpenAlex 命中 591,095 条"). That is the number the source itself claims, shown so you can feel how large the corpus is; it is unrelated to how many rows this page holds, and CORE's is especially inflated (it counts broad matches).
-- **A page waits at most 30 seconds.** The links to these free services intermittently hang (25–40 seconds measured for a single source). At the deadline the app delivers what has arrived and says so plainly — the missing source is listed as "响应太慢，本次已跳过", and searching again usually works. **For steady results, register a free OpenAlex key** (bottom of the left column): anonymous access gets only a small trial quota, and once it is spent OpenAlex answers 429 and the source gets skipped; a key raises it to 100k credits per day.
-- **Full text comes in three states**, and the detail pane says which one you are looking at: ① a direct PDF link →「导入知识库」works; ② **open access, but the source only offers a landing page** (true for most Chinese journals indexed by DOAJ) → the import button is disabled and tells you to open the original page; ③ not open access → the import button is disabled with that reason.
-- **Right column — details.** Click **「详情」** inside a result row to read the full abstract and metadata, then **导入知识库** to download the PDF and ingest it. Below it sit **three ways to keep going**: *related papers* (a fresh cross-source search using this paper's title keywords — measured to beat the upstream recommendation, which for one Chinese gas-hydrate paper suggested cardiac surgery and a choir concert), *cited by* (who cites it, sorted by citation count, with the total), and *references* (what it cites). The latter two come from OpenAlex's citation graph; papers from other sources are bridged by **DOI**, and a paper without one (an arXiv preprint, say) says so plainly instead of inventing results. The row and the detail pane both switch to **已在库中** and offer **去提问** / **去知识库**; importing the same paper twice is skipped by content hash. Papers without an open-access full text have their import button disabled up front.
-- **Coverage, stated honestly**: this is a CNKI-like experience, not CNKI's data. CNKI/Wanfang/VIP exclusive full text is paywalled with no public API, so Chinese social-science coverage is near zero, while DOI-carrying Chinese science/engineering journals are covered. Some CORE records point at `http://` repository links, which the downloader's security policy refuses — those records cannot be imported.
-- **OpenAlex 密钥** (bottom of the left column) stores an optional [OpenAlex API key](https://openalex.org) — free registration, 100k credits/day, anonymous access only gets a small trial quota. It is written to the data directory's `.env` and takes effect immediately; the saved value is never displayed, only whether one exists (empty the box and save to clear it).
+- 免上传、免检索、不拒答；回答风格已调优：**结论先行 → 展开论证 → 1-2 个具体例子 → 学习类点出易错点/考点**；篇幅随复杂度伸缩（简单几行、中等 200-500 字、复杂放开但注水）——上限 api 档 4096 token / local 档 2048。
+- **回答富渲染**：表格（横向滚动）、代码块（独立深色区域 + 右上角一键复制）、标题、列表、引用、分割线均按块级渲染，像豆包/DeepSeek 客户端一样工整。
+- 推荐问法（把模型当陪练）：
+  - 引申：「Transformer 为什么不用循环结构？」（笔记外的深度追问）
+  - 纠错/辨析：「L2 和 Dropout 都在防过拟合，区别是什么？哪个先调？」
+  - 出题自查：「就这一章给我出 3 道简答题，先别给答案」「我答完你批改」
+  - 总结：「把我上面的问题串成一个知识框架」
+- 回答觉得"有用"想沉淀 → 复制要点存入你的笔记 → 上传知识库（见 4.3）。
 
 ---
 
----
+## 6. 知识库页 · 语料文件夹树管理
 
-## 7. Session Management (Left Side of the Chat Page)
+**查找框**：顶部实时过滤——按文件夹名/文档标题匹配，命中链自动展开；无匹配显示占位提示；✕ 一键清空恢复全树。
 
-- `＋ New session` / `＋ Folder` (nestable);
-- Sessions are titled automatically by **distilling the first question** (≤16 characters), and can be renamed via ⋯ → Rename (a manual name is never overwritten by the auto title; once you clear it, the auto title takes over again);
-- Drag a session row into a folder / ⋯ → Move to… (path picker, cycle prevention greyed out); deleting a session cascades to its messages;
-- Finding old sessions: folder organization plus memorable titles (session tree visuals: folders carry a green ring, sessions inside folders an amber ring, plain root-level conversations no decoration).
+**文件夹**（可自由嵌套，与会话树同款形态）：
+- 新建：`＋ 新建文件夹` 按钮（根级）或文件夹 ⋯ 菜单 →「新建子文件夹」；
+- 行点击 = 展开/收起（箭头 ▸/▾）；
+- ⋯ 菜单：展开收起 / 新建子文件夹 / **重命名**（行内输入，Enter 提交、Esc 取消）/ **移动到…**（弹路径表，自身与后代灰显防环）/ 删除（**只允许删空夹**：含子夹或文档会 409 并提示计数——容器绝不连坐删除文档，先移出再删）。
 
----
+**文档行**：
+- 点击 = 选中 → 右栏切到该文档的**阅读视图**（正文或原文件），底部状态栏给位置路径/类型/分块数/字符数/入库状态；
+- **拖动** = 拖到文件夹行移入（折叠夹自动展开）、拖到文档行 = 移入它所在夹、拖到空白区 = 移回根级；源行半透明、目标行绿框提示；
+- ⋯ 菜单：重命名 / 移动到… / 删除（删除会弹出**应用内确认框**——不是浏览器原生弹窗；框内明示"分块与库内副本一并清除、不可恢复"，红钮确认。`Esc` 或点框外即取消，不会误删。会话删除同款）。
 
-## 8. Settings (⚙ in the Top Right of the Chat Page)
+**语义备忘**：改名只改库内显示名（uploads 文件不动）；删除文档 = 连同检索分块与上传副本一起删；重传同内容跳过、重传同文件更新内容（组织归属保留）；切换嵌入模型后的 reindex 全量重建同样保留你的整理结果。
 
-The panel has two groups with different homes: **Model** is stored server-side (in the data
-directory), **Chat appearance** lives in the browser (localStorage, this browser only).
+## 6c. 写笔记 · 直接把 Markdown 写进知识库（M6 ①）
 
-### 8.1 Model — pick a provider, paste a key, done
+左栏的 **＋ 新建笔记** 打开一个居中编辑器：左边写 Markdown，右边实时看渲染效果，选好文件夹保存。
+笔记就是库里的一篇普通文档——树里有它、能拖进文件夹、下一次提问就能检索到并引用它。树里它以
+**笔记** 标识（而不是 `md`）与上传的文件区分开，⋯ 菜单里多一项 **编辑笔记**。
 
-- **Source presets**: Ollama (local, free, keyless), DeepSeek (official API),
-  SiliconFlow (has free models — the cheapest way to try a cloud model), or Custom (any
-  OpenAI-compatible endpoint: a `/v1` URL + model name + key).
-- **Connection test**: sends one tiny request and reports "connected · 123ms" or the real
-  error — it never changes your saved configuration.
-- **Save and apply**: takes effect immediately, no restart (the answer pill in the top bar
-  picks up the new model within ~20 s; open questions finish on the old model).
-- **Where it is stored**: `%LOCALAPPDATA%\Mikasa\config.yaml` (the model choice) and
-  `%LOCALAPPDATA%\Mikasa\.env` (the key, plain text, this machine only) — or `data/…` when you
-  run from source. The key is never sent back to the browser and never leaves your machine
-  except to the provider you configured.
-- **To change the key later**: type a new one and save; to delete it, clear the field and save.
-- **Scope**: this only changes the answering model. The retrieval embedding model still comes
-  from the startup profile (changing it requires re-indexing the whole corpus, so it stays a
-  CLI decision: `mikasa ingest --reindex`).
-- If the configuration came from an explicit `--config` or a `config.yaml`, the panel is
-  read-only and tells you which file to edit instead.
+- **编辑即自动重新入库**：笔记被**原地替换**（树里仍是那一行、uploads 里仍是那一个文件），不会多出
+  一篇，你的文件夹归属也保留。打开编辑器什么都没改就点保存 = 什么都不做。
+- **未保存的修改有保护**：按 `Esc`、点取消或点遮罩都会先弹确认框；保存失败时窗口不关、正文不清空，
+  补一下就能重试。
+- **什么内容能被搜到**：正文、小标题、表格、**代码围栏里的内容**（2026-09-20 起）。代码整块按纯文本
+  进索引，所以代码里的 `#` 不会被当成标题，同时"整篇只有一段代码"的笔记也存得下、搜得到。
+  仍有一条例外：**整篇只有标题**（没有任何正文）的笔记产不出可检索段落，保存会被 400 拒。
+- **笔记文件是唯一副本。** 上传的论文你手里还有原件，笔记没有——它只存在于库内（`data/uploads/`）。
+  切换嵌入模型或换机器之前，请先备份 `data/`。
 
-### 8.2 Chat appearance (local to this browser)
+### 拍照 / 图片转笔记（M6 ②）
 
-- **My nickname**: re-signs past message bubbles instantly (a local display-layer feature, and the stand-in until accounts exist);
-- **Message font size**: slider, 12–20;
-- **Chat background color**: 6 presets + a custom color picker;
-- **Background image**: pick a local image → it is compressed automatically (JPEG, long edge 1600) and used as the chat background; removable at any time. The background applies only to the message area.
+编辑器底部的 **识别图片** 把一张照片变成笔记正文——板书、书页、手写提纲拍下来即可。
+也可以直接把图片**拖进编辑器**，或**粘贴**一张截图（`Ctrl+V`）。
 
-### 8.3 About · version and updates (v0.1.1; download behaviour since v0.1.4)
+- **识别结果只是草稿**：文本会插到光标处，你**先改再保存**（OCR 一定有错字，手写尤其——
+  模型认不出的字会写成「□」而不是猜一个）。不改就保存也行，但请知道那是识别原文。
+- **原图会跟着笔记存下来**：缩略图条在编辑器底部，✕ 可以逐张删除；打开笔记时原图也在
+  阅读区顶部（点开看大图）。存的是压缩后的图（长边 1600），够事后对照，不是扫描件。
+- **需要先接入视觉模型**：**设置（⚙）→ 视觉模型** 里选一个——SiliconFlow（云端，识别中文
+  板书效果好）或 本机 Ollama（免费离线，需先 `ollama pull qwen2.5vl:7b`）。没接入时点
+  「识别图片」会直接告诉你怎么办，不会静默失败。默认档位是**未接入**：识图会把照片发往
+  你选的模型，这个开关交给用户自己开。
+- **生成与识图可以分开**：比如日常用本机 Ollama 问答、只在识图时走 SiliconFlow——两段配置
+  互不影响。「视觉模型」的密钥与检索侧共用（同一个 SiliconFlow 密钥槽），要清除请到
+  「模型」段操作。
 
-- On startup the app **checks once for a newer version** (silently — a failure never nags you); if one exists, a dialog lists what changed;
-- **"Download and install"**: the app fetches the installer into `updates/` inside your data directory (with a progress bar), verifies its sha256 against the `SHA256SUMS.txt` published with the release, and then starts the wizard — the wizard closes Mikasa first and reopens the new version when it is done. Your data (library, uploads, settings) is untouched;
-- **The download runs in the background; the UI is just a window onto it** (v0.1.4): the dialog can be closed ("Keep downloading in the background"), and progress moves to a small topbar capsule — **visible on every feature page**, and clicking it reopens the dialog. Switching pages, reloading, even closing the app never restarts the download from zero;
-- **A dropped connection resumes** (v0.1.4): what has been downloaded stays on disk and the next attempt continues from that offset (the dialog says so honestly: "connection dropped, retrying (attempt N)"). If it ultimately fails, "Open release page" is still there as the browser fallback — and browsers resume too, so both paths behave the same now;
-- **It will not press install for you**: if the download finishes while you are on another page, the capsule becomes "update ready · click to install" and you decide when — the installer closes Mikasa first, so it does not act while you are elsewhere;
-- **"Skip this version"** silences that version; to bring it back, press "Check for updates" in settings (a manual check ignores the skip marker);
-- **"Check for updates on startup"** can be turned off entirely — the app then makes no automatic check at all (the manual button still works);
-- The update dialog can only appear **in v0.1.1 and later**: older builds do not contain the code and cannot know a new release exists. The same holds for **the v0.1.4 resume/reattach behaviour** — you need the new build first, so this upgrade is still best done in a browser.
+## 6b. 找论文页 · 检索文献并导入
 
----
+**找论文**是顶部导航里的独立一页（ADR-0020）。一次同时检索四个免费来源——arXiv（预印本，全部开放获取）、OpenAlex（期刊元数据，含中文期刊）、CORE（开放获取聚合库，带全文链接）与 **DOAJ**（开放获取期刊目录，**免密钥**，中文 OA 期刊如《工业水处理》都在里面）——搜到的论文可直接导进语料库，之后与普通文档一样能被提问。**四个来源里有三个不需要任何注册**（只有 OpenAlex 想要免费 key，见下面的说明）。
 
-## 9. Evaluation Page
+- **左栏 · 筛选**：年份区间、排序（相关度 / 被引最多 / 最新）、来源多选、语言、只看开放获取。**所选来源做不到的选项会置灰并写明原因**：arXiv 没有被引数据，所以只有在选中了一个能提供被引的来源时"被引最多"才可选；CORE 的年份**参数**会被上游丢弃，它走查询语句实现年份过滤。当所选来源全部天然开放获取时，"只看开放获取"显示为**已勾选且禁用**——那是"已满足"，与"不支持"不是一回事。
+- **检索历史**：搜过的词会以小胶囊列在搜索框下方（只存本机浏览器，最多 8 条），点一下重搜；
+  在输入框里打字时，浏览器也会用这份历史做联想——**联想只来自你自己的历史**，不走上游接口
+  （上游的联想接口实测十几秒，挂在输入框上只会让人以为卡了）。
+- **中栏 · 结果**：中文或英文关键词都能搜。四个来源**并发**检索、结果**轮转出现**，一页 50 条（2026-09-19 由 20 提到 50），不会让某个来源把其余来源永远压在后面。每行给标题、来源徽标、作者、年份、期刊与被引数（该来源不提供时写明"该来源不提供"——0 次与"不知道"是两回事），外加两行摘要预览。
+- **点结果行 = 浏览器新标签打开论文原页**（2026-09-20：找论文的第一动作是去读它）；要看完整摘要、导入知识库、或翻引证关系，点行里的 **「详情」** 按钮，右侧面板会显示。
+- **翻页**（2026-09-20 取代"加载更多"）：列表下方是页码条——「上一页 / 下一页」、页码（1 … 当前±2 … 末页）、以及「跳至第 N 页」。**总页数**按各来源自报的命中数加起来算（状态行里写了这个来路，例如"上游合计 72,600 条"），并**按上游能力封顶**：按页取数的来源（OpenAlex / DOAJ）文档上限都是第 1 万条，每页 50 条由 n 个来源轮转着出，所以上限 = 200 × 当前选中的来源数（四个全选 = 800 页）。选得少就浅——这是上游的实情，不硬撑。翻到没有数据的页会如实说"这一页已经取不到结果了"，不会编一个末页数给你。
+- **发表时间只留两个日期框**（起 / 至）：点开是日历，也可以直接手输 `2026-09-20`；原先把"不限/近3年/近5年/近10年"做成快捷档，与日历是重复的一条路，2026-09-20 去掉了。
+- **状态行会报出各源的命中总量**（如"OpenAlex 命中 591,095 条 · CORE 命中 1,879,907 条"）——那是上游自报的数字，用来感受"这个库有多大"；它与本页显示多少条无关，CORE 的数字尤其偏大（它按宽匹配统计）。
+- **一页最多等 30 秒**：到这些免费站点的链路会间歇性挂住（实测单源 25–40 秒不返回）。到点先交付已到的结果，没回来的源在下面如实写"响应太慢，本次已跳过"——再搜一次通常就好。**想稳定的话，注册一个免费的 OpenAlex 密钥填进左栏底部**：匿名只有小额试用额度，用光就会回 429、接着被跳过；有密钥是每日 10 万积分。
+- **全文状态分三种**，详情面板会如实说清：① 有直链 PDF → 可「导入知识库」；② **开放获取但来源只给了文献页链接**（DOAJ 收录的中文刊多数如此）→ 导入按钮禁用，提示点「打开原页」去出版商页面阅读或下载；③ 不是开放获取 → 导入按钮禁用，提示写明。
+- **右栏 · 详情**：点任意一条看完整摘要与元数据，再点**导入知识库**下载 PDF 并入库。详情下方还有**三个出口**，都是"看完一篇接着找"的路子：
+  - **相关论文**：拿这条的标题关键词（中文取前 8 字）**跨来源再检索一次**——实测比上游的推荐靠谱得多（OpenAlex 给一篇「南海北部天然气水合物」的推荐是心脏外科和合唱音乐会）；
+  - **引用了它**：谁引用了这篇（按被引降序，附总数）；
+  - **参考文献**：它引用了谁。
 
-"Golden-set evaluation" uses a question set (golden set) to verify retrieval and anti-hallucination metrics: recall@k / MRR / refusal rate / out-of-range and invalid citations / false refusals. Click Run (a single task slot) → the past-reports area expands to show per-question details and a metrics summary. A real run consumes actual LLM calls (roughly 4–5 minutes per round on `api`, 25–35 minutes on `local`) — for a fast, deterministic offline demo use `--profile offline`.
-
-**Two banks** (switch on the "题库 / Bank" row next to the question count):
-
-- **Built-in sample corpus**: 63 hand-written questions aimed at `sample-corpus` (47 answerable across easy/medium/hard + 16 unanswerable). Against a different corpus the questions stop matching their gold answers — the report then lists each affected item as **skipped** instead of scoring against a stale answer.
-- **My material**: click "为我的资料生成题库" (generate a bank from my material) and a model samples **your own library**, reads one passage and writes a question only that passage answers — the passage itself becomes the gold answer, so any corpus can be evaluated. Requires the api or local profile (the offline mock profile says so up front). **Synthesized questions are easier than hand-written ones and score higher by construction: they support relative comparisons only** (two retrieval changes against the same bank), never absolute comparison with the built-in bank — the report header states this.
-
----
-
-## 10. Data and Privacy
-
-- **Everything is local**: data/mikasa.db (SQLite) + data/uploads (ingested copies) + data/indexes (index files) + data/logs; model configuration lives in `config.yaml` and `.env` inside the data directory (written by the settings panel); chat appearance lives in browser localStorage.
-- **Backup** = copy the whole `data/` directory (safest with the service stopped first); the database schema upgrades automatically (the v1→v2→v3 migration path has been rehearsed on a real database), so keep whole-directory backups to allow rollback.
-- API keys live only in `.env` (the data directory's `.env` when set from the panel; the repo-root `.env` in the api profile), never in the database and never uploaded; the key is never echoed back to the browser (the API answers with a yes/no flag only). The GitHub repository contains neither data/ nor .env.
-- **The one automatic outbound request is the startup update check** — it asks GitHub for the latest version number and nothing else: no local data, no credentials, and it can be switched off in settings (§8.3). Asking, retrieval and ingest all stay on this machine — unless you point the model provider at a cloud API yourself.
-- For known boundaries and the failure archive, see docs/known-issues.md and docs/limitations-and-failures.md.
+  后两个来自 OpenAlex 的引证数据；非 OpenAlex 的论文按 **DOI 桥接**过去，没有 DOI 的（如 arXiv 预印本）会如实说「无法关联到引证网络」，不编结果。结果行与详情面板同时转成**已在库中**并给出**去提问** / **去知识库**两个出口；同一篇重复导入按内容哈希跳过。没有开放获取全文的那条，导入按钮提前禁用。
+- **覆盖面如实说**：这是"知网式体验"，不是"知网的数据"。知网/万方/维普的独家全文在付费墙后且无公开 API，社科中文覆盖近乎为零；带 DOI 的理工中文期刊能覆盖。CORE 有一部分记录的全文链接是 `http://` 的仓储地址，会被下载器的安全策略拒收——那些记录导不进来。
+- **OpenAlex 密钥**（左栏底部）可存一个可选的 [OpenAlex API key](https://openalex.org)（免费注册、每日 10 万积分；匿名只有少量试用额度）。密钥写入数据目录的 `.env` 并立即生效；已存的值永不回显，只显示"是否已保存"（清空输入框再保存 = 删除）。
 
 ---
 
-## 11. Troubleshooting Quick Reference
+## 7. 会话管理（问答页左侧）
 
-| Symptom | Cause / Fix |
+- `＋ 新会话` / `＋ 文件夹`（可嵌套）；
+- 会话自动以**首问提炼标题**（≤16 字），可 ⋯ → 重命名（手动名不被自动标题覆盖；清除标题后自动标题恢复接管）；
+- 拖会话行入夹 / ⋯ → 移动到…（路径表，防环灰显）；删除会话 = 级联清消息；
+- 找旧会话：文件夹归档 + 标题记忆（会话树视觉：文件夹绿环、夹内会话琥珀环、根级普通对话无装饰）。
+
+---
+
+## 8. 设置（问答页右上角 ⚙）
+
+面板分两组，落点不同：**模型**存在服务端（数据目录），**聊天外观**存在浏览器
+（localStorage，仅本机本浏览器生效）。
+
+### 8.1 模型 —— 选来源、贴密钥、保存即用
+
+- **来源预设**：Ollama 本机（免费离线免密钥）、DeepSeek（官方接口）、
+  SiliconFlow（有免费模型，云端试用最省事）、自定义（任何 OpenAI 兼容服务：
+  `/v1` 地址 + 模型名 + 密钥）。
+- **测试连接**：发一个极短请求，回"已连通 · 123ms"或真实报错；**不改已保存的配置**。
+- **保存并生效**：立即生效、不用重启（顶栏胶囊约 20 秒内刷新出新模型名；
+  正在回答的问题用旧模型答完）。
+- **存哪**：`%LOCALAPPDATA%\Mikasa\config.yaml`（模型选择）与
+  `%LOCALAPPDATA%\Mikasa\.env`（密钥，明文、只存本机）——源码运行则是 `data/` 下。
+  密钥永不下发回浏览器、除你配置的服务商外不外发。
+- **换/删密钥**：输入新密钥保存即替换；清空输入框保存即删除。
+- **作用范围**：只换"回答用的模型"；检索用的向量模型仍随启动档位
+  （换它要重建整个索引，属 CLI 决策：`mikasa ingest --reindex`）。
+- 若配置来自显式 `--config` 或 `config.yaml`，面板为只读并提示改哪个文件。
+
+### 8.2 聊天外观（本机浏览器）
+
+- **我的昵称**：历史气泡署名即时换名（本地显示层，账号体系上线前的接户口）；
+- **消息字号**：滑条 12–20；
+- **聊天空背景色**：6 个预设 + 自定义取色；
+- **背景图**：选择本地图片 → 自动压缩（JPEG/长边 1600）作聊天背景，可随时移除。背景只作用于对话消息区。
+
+### 8.3 关于 · 版本与更新（v0.1.1，下载行为见 v0.1.4）
+
+- 打开应用时**自动查一次有没有新版本**（静默，失败不打扰）；有新版会弹窗，列出更新内容；
+- **「下载并安装」**：应用自己把安装包下到数据目录 `updates/`（带进度），与官方发布的
+  `SHA256SUMS.txt` **逐字节核对校验和**通过后，自动启动安装向导——向导会先关掉 Mikasa，
+  装完自动打开新版本；你的资料（库/上传件/设置）不受影响；
+- **下载是后台的事，界面只是观察窗**（v0.1.4）：弹窗可以关（「后台继续」= 关掉它接着下），
+  进度会落到顶栏一枚小胶囊上——**切到别的功能页也看得见**，点它回到进度弹窗；
+  切页、刷新、甚至关掉应用，都不会让下载从头再来；
+- **网络断了会自动接着下**（v0.1.4）：已下的部分留在磁盘上，重连后从断点续传（弹窗会如实
+  写「连接中断，正在重试（第 N 次）」）；彻底失败了就留「打开发布页」从浏览器手动下载兜底
+  （浏览器下载同样支持续传，两边现在一样）；
+- **下完之后不替你按安装**：如果下载完成时你在别的页面，胶囊会变成「更新包已就绪 · 点此安装」，
+  由你自己决定什么时候装（安装器会先关掉 Mikasa，所以不在你眼前时不动手）；
+- **「跳过此版本」**：这个版本不再提示；想恢复就点设置里的「检查更新」（手动检查不受跳过标记影响）；
+- **「启动时检查更新」**可以整个关掉——关掉后应用不再自动联网检查（手动按钮仍然可用）。
+- 更新弹窗本身**必须由 v0.1.1 及以后的版本才能弹**：更早的版本里没有这段代码，不会自己知道有新版；
+  同理，**v0.1.4 的续传/接续也要装上新版才有**——这一次仍建议用浏览器手动装。
+
+---
+
+## 9. 评测页
+
+「黄金集评测」= 用评测题集（golden set）验证检索与防幻觉指标：recall@k / MRR / 拒答率 / 引用越界与违规 / 误拒。点运行（单任务槽）→ 历史报告区可展开看逐题明细与指标摘要。跑评测会真实消耗 LLM 调用（api 档约 4-5 分钟/轮、local 档 25-35 分钟）——离线演示用 `--profile offline` 的确定性快跑。
+
+**两份题库**（题量上限旁的「题库」一行切换）：
+
+- **内置示例语料**：人工出题的 63 题，题目面向 `sample-corpus`（47 可答分 easy/medium/hard + 16 不可答）。换一份语料做知识库时，题目与标准答案对不上，报告会把受影响的题**逐条列为"跳过"**而不是拿错答案硬算。
+- **我的资料**：点右侧「为我的资料生成题库」，让模型从**你自己库里**抽样出题——它读一段、出一道"只有这段能回答"的题，那段原文就是标准答案，所以任意语料都能评测。需要 api 或 local 档（离线 mock 档会直接提示）。**自动题比人工题简单、分数天然偏高：只能横向比**（同一份题库下比较两次检索改动），不能跟内置题库的绝对分比——报告首部会写明这一点。
+
+---
+
+## 10. 数据与隐私
+
+- **一切在本机**：data/mikasa.db（SQLite）+ data/uploads（入库副本）+ data/indexes（索引）+ data/logs；模型配置存数据目录的 `config.yaml` 与 `.env`（设置面板写入）；聊天外观存浏览器 localStorage。
+- **备份** = 整个 `data/` 目录复制一份（先停服务再拷最稳）；数据库 schema 会自动升级（v1→v2→v3 迁移路径已用真库演练），备份请整目录保留以便回退。
+- 密钥只存在 `.env`（面板保存的是数据目录那份；api 档为仓库根 `.env`），不入库、不上传、**也不回显**（接口只回"有没有"布尔）；上 GitHub 的仓库不含 data/ 与 .env。
+- **唯一一处自动对外请求 = 启动时的更新检查**（只读地问 GitHub "最新版本号是多少"，不带任何本地数据、不带凭据；可在设置里关掉，见 §8.3）。问答、检索、入库全部不出本机——除非你自己把模型来源换成了云端 API。
+- 已知边界与踩坑史见 docs/known-issues.md、docs/limitations-and-failures.md。
+
+---
+
+## 11. 常见问题速查
+
+| 现象 | 原因 / 解法 |
 |---|---|
-| The top bar is stuck on "connecting to the service…" | The service isn't running: double-click Mikasa.bat, or start it manually with `mikasa serve --profile local --port 8787` |
-| Chat shows a red "LLM call failed (qwen3:8b…)" | Ollama isn't running (Mikasa.bat starts it automatically; manually, run `ollama.exe serve`); on the api profile it means a missing key or a network problem |
-| Upload reports "unsupported file type" / "size limit" | Extension whitelist (md/txt/pdf/docx) / max 500 MB per file |
-| Deleting a folder returns 409 with a count | The folder contains subfolders or documents; move them out first (see §6) |
-| The KB answers "that isn't in these materials…" | The anti-hallucination refusal feature, not a bug; paraphrase hit rates are verified by evaluation (see §4.1) |
-| The free-chat button is greyed out | A limitation of the offline (zero-key demo) profile; available on api/local |
-| Session titles don't match what you expected | Auto-distilled to ≤16 characters; rename to lock in your own (see §7) |
-| You want a different answering model | Open ⚙ → **Model** in the top right, pick a source, paste the key, Save (see §8.1) — no restart, no `.env` editing |
-| The ⚙ panel's model fields are greyed out | The service was started with `--config`/`config.yaml`; the panel reports the file to edit instead |
-| You want different retrieval quality | Start with a different profile (api is strongest / local is free); changing the embedding model means re-indexing (`mikasa ingest --reindex`) |
+| 顶栏一直"正在连接服务…" | 服务没起：双击 Mikasa.bat；手动 `mikasa serve --profile local --port 8787` |
+| 问答红字"LLM 调用失败（qwen3:8b…）" | Ollama 没运行（Mikasa.bat 会自动拉起；手动则起 ollama.exe serve）；api 档则为密钥缺失/网络 |
+| 上传报"不支持的文件类型" / "大小上限" | 后缀白名单（md/txt/pdf/docx）/ 单文件 ≤ 500 MB |
+| 删文件夹报 409 带计数 | 夹里有子夹/文档，先移出再删（见 §6） |
+| 知识库答"这些资料里没有…" | 防幻觉拒答特性，非 bug；同义问法命中率经评测验证（见 §4.1） |
+| 自由问答按钮置灰 | offline（零密钥演示）档限制；api/local 档可用 |
+| 会话标题与预期不同 | 自动提炼 ≤16 字；可重命名锁住（见 §7） |
+| 想换回答用的模型 | 右上角 ⚙ →「模型」：选来源、贴密钥、保存即生效（见 §8.1），不用重启也不用改 .env |
+| ⚙ 面板模型项全是灰的 | 服务是用 `--config`/`config.yaml` 起的；面板会提示该改哪个文件 |
+| 想换默认问答效果 | 换 profile 启动即可（api 最强 / local 免费）；检索侧改动要 `mikasa ingest --reindex` |

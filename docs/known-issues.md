@@ -1,71 +1,63 @@
-# Known Issues and Backlog
+# 已知问题与改进 backlog
 
-> **Purpose**: one place to track what is unfinished or deliberately postponed, with its current
-> status. Evidence and reasoning are **not** repeated here — see
-> [evaluation.md](evaluation.md) §5 for the full evidence chain and ablations,
-> [limitations-and-failures.md](limitations-and-failures.md) for recorded boundaries and failure
-> cases, and [design-decisions.md](design-decisions.md) for the "why" behind each trade-off. This
-> file answers three questions only: **what is missing, where the evidence is, and what the status
-> is**.
+> **定位**：全项目"没修完 / 没来得及做"之事的集中清单与状态跟踪。
+> 与其它文档分工——**证据与论证不在此重复**，一律引用出处：
+> [evaluation.md](evaluation.md) §5（质量缺口的完整证据链与消融）、
+> [limitations-and-failures.md](limitations-and-failures.md)（已记录的
+> 限制边界与失败档案）、[design-decisions.md](design-decisions.md)
+> （每个取舍的"为什么"）。本文件只回答三件事：**还差什么、证据在哪、
+> 现在的状态是什么**。
 >
-> **Maintenance discipline**: update the status and date when something is fixed or lands, and
-> never delete a row — keep the trace of "this was once unresolved" (for example "closed after
-> Mx"). If a status here contradicts the code, that is document drift: fix one or the other, never
-> leave them disagreeing.
+> **维护纪律**：修复/落地时更新状态行与日期，不删行——留"曾悬而未决"
+> 的可追溯痕迹（写"Mx 后关闭/落地"）。打开本文件时若某状态与代码不符，
+> 视为文档漂移，修代码或修状态，二选一。
 
 ---
 
-## 1. Unfixed quality gaps (investigated; ruled as local-profile boundaries)
+## 一、未修复的质量问题（已勘验，裁决=接受为 local 档边界）
 
-> All ruled on 2026-09-09 (M4.1 investigation, see evaluation.md §5). Conclusion: all three are
-> **capability boundaries** of the model or retriever, with no low-cost engineering fix. Re-check
-> entry point after any relevant change: `mikasa eval run --profile local` (63 questions, ~30
-> minutes).
+> 全部裁决于 2026-09-09（M4.1 勘验，见 evaluation.md §5）；结论：三个缺口
+> 都是模型/检索**能力边界**，无低成本工程修复。复跑/改动后的复查入口：
+> `mikasa eval run --profile local`（63 题 ~30 分钟）。
 
-| # | Issue | Measured | Evidence | Fixes considered | Status |
+| # | 问题 | 量化表现 | 证据 | 曾考虑的修复路线 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Retrieval gap on hard questions in the local profile (512-d bge-small vs 1024-d bge-m3 on api) | recall@10 = 0.982 overall, **0.931 across the 12 hard questions**; the misses are exactly q036's second gold chunk and q041's third (fused rank 14–24) | evaluation.md §5 "M4.1 investigation": ablating over 3 windows gives **zero change** in recall@10 | Tuning fusion and sub-window parameters (empirically ineffective); switching to a larger qwen/bge model | **Accepted as a boundary** (2026-09-09) |
-| 2 | Refusal discipline breaks in the local profile (qwen3:8b is less compliant than DeepSeek — the two are mirror images of each other) | 13/16 refused; q057 answered with fabricated citations, q058 answered bare, q059 hallucinated (a deliberately planted sentinel question that catches the small model) | evaluation.md §5 plus per-item traces; prompt rule 3 and its worked example already cover these cases, and DeepSeek refuses 16/16 under the same rules | Switching to qwen3:14b (~9 GB more to download, tight on 8 GB VRAM, markedly slower, **no guarantee of zero failures**); tightening the prompt (touches a shared protocol, needs a full replay, low marginal gain) | **Accepted as a boundary** (2026-09-09) |
-| 3 | Citation precision is lower in the local profile | citation gold ratio 0.798 vs 0.848 on api (p50 is 1.000 for both; a few questions partially miss) | evaluation.md §5 | Same as #2 — a generation-capability issue | **Accepted as a boundary** (2026-09-09) |
+| 1 | local 档 hard 检索缺口（512 维 bge-small vs api 档 1024 维 bge-m3） | recall@10 = 0.982（总）/ **0.931（hard 12 题）**；漏检精确到 q036 第二金块、q041 第三金块（融合名次 14–24） | evaluation.md §5「M4.1 勘验」：3 窗口消融对 recall@10 **零变化** | fusion/子窗口调参（实证无效）；换 qwen/bge 大模型 | **接受为边界**（2026-09-09） |
+| 2 | local 档拒答纪律失守（qwen3:8b 服从性不足，与 DeepSeek 保守拒互为镜像） | 拒答 13/16；q057 编引用作答、q058 裸答、q059 幻觉答（故意埋的哨兵题咬住小模型） | evaluation.md §5 + 生成留痕；提示词规则 3 与示范例已全覆盖，DeepSeek 同规则 16/16 | 换 qwen3:14b（再下 ~9GB、8G 显存吃紧、生成显著变慢，**不保证归零**）；强化提示词（动共享协议需全档回归，边际收益低） | **接受为边界**（2026-09-09） |
+| 3 | local 档引用精度低于 api 档 | citation gold ratio 0.798 vs api 0.848（p50 均 1.000，少数题部分不中） | evaluation.md §5 | 同 #2（生成模型能力问题） | **接受为边界**（2026-09-09） |
 
-## 2. Feature backlog (wanted, not scheduled)
+## 二、功能 backlog（想做、未排期）
 
-> All of these are already recorded in ADRs, project notes, or milestone plans; this table keeps
-> only the pointer and the status. Scheduling rule: pick them up one at a time, as time allows,
-> after M4.5 / M5 (git + GitHub + CI) wraps up.
+> 已全部建档于 ADR / memory / 里程碑计划，此处只保留指针与状态。
+> 排期口径：等 M4.5 / M5（git + GitHub + CI）收工后按时间预算逐个做。
 
-| # | Candidate | Description | Origin / motivation | Status |
+| # | 候选 | 内容 | 出处 / 动机 | 状态 |
 | --- | --- | --- | --- | --- |
-| F1 | Automatic hybrid mode | When KB evidence is insufficient, fall back to free chat and say so, instead of only refusing | Reported study workflow (2026-09-09); ADR-0013 context | Unscheduled |
-| F2 | One-click ingest of a free-chat answer | Turn a good free-chat answer into a stored note | The loop the product is aiming at (2026-09-09) | Unscheduled |
-| F3 | M6: knowledge base → notes | Four stages: **(1) write a note and have it searchable immediately — shipped 2026-09-16, ADR-0021** → (2) photo upload converted to note text → (3) LLM-generated knowledge links (mind the schema-migration discipline) → (4) knowledge map | Project notes | Stage 1 done; stages 2-4 unscheduled |
-| F4 | Query rewriting for multi-turn chat | Retrieval quality for follow-up questions that use pronouns or elide context; the deliberate omission and its v2 candidate are documented in limitations §3 | limitations-and-failures.md | Unscheduled |
-| F5 | Local reranker (local profile) | Enabling rerank requires a fastembed version survey first | ADR-0014 ②; the LocalReranker case in limitations §4 | Unscheduled |
-| F6 | Session-management follow-ups | Drag-and-drop moves, titles that keep updating as a thread grows, search / archive / pin, persisted expand state | The "explicitly out of scope" list from the M4.5 plan | Unscheduled |
-| F7 | Mobile (in the spirit of the DeepSeek / Doubao apps) | Explicitly "not polished, can wait". Two tiers: (1) same-Wi-Fi LAN access, which already works (`serve --host 0.0.0.0` plus a firewall rule, then open it in a phone browser) → (2) away from home: cloud server plus domain (paid, standalone milestone, domain and HTTPS solved together) | The essence is "which machine runs the service the phone can reach" — a web UI needs no app | Unscheduled |
+| F1 | 自动混合模式 | kb 证据不足时自动降级 free 问答并明示（而非只会拒答） | 用户 2026-09-09 亲述学习场景；ADR-0013 语境 | 待排期 |
+| F2 | free 回答一键入库 | 自由问答的优质回答一键 ingest 沉淀为笔记 | 用户 2026-09-09 愿景闭环 | 待排期 |
+| F3 | M6「知识库 → 笔记库」 | 四期：**①记录/写笔记入库即被检索（2026-09-16 收工，ADR-0021）** → ②拍照上传转文本 → ③LLM 生成知识链（注意 schema 迁移纪律）→ ④知识导图 | memory 项目档案（用户亲述） | 第①期已落地；②③④ 待排期 |
+| F4 | 查询改写（chat 多轮） | 续问代词/省略的检索质量保证；刻意不做的原因与 v2 候选记录见 limitations §三 | limitations-and-failures.md | 待排期 |
+| F5 | 本地重排器（local profile） | 开 rerank 前必须先做 fastembed 版本选型 | ADR-0014 ②；limitations §四 LocalReranker 案例 | 待排期 |
+| F6 | 会话管理后续 | 拖拽移动、标题随轮次持续更新、会话搜索/归档/固定、展开态持久化 | M4.5 计划「明确不做」清单 | 待排期 |
+| F7 | 手机移动端（移动版 DeepSeek/豆包 式） | 用户 2026-09-09 亲述愿景，明确"不精做、可后置"。两档：①同一 WiFi 局域网（现成零开发：serve `--host 0.0.0.0` + Windows 防火墙放行，手机浏览器访问）→ ②出门在外 = 云服务器 + 域名部署（付费，独立里程碑，届时域名/HTTPS 一并解决） | 用户亲述；本质是"服务跑在哪台手机连得到的机器上"，网页形态无需 App | 待排期 |
 
-## 3. Engineering candidates (re-runs and hardening)
+## 三、工程候选（复跑/加固类）
 
-| # | Candidate | Description | Status |
+| # | 候选 | 内容 | 状态 |
 | --- | --- | --- | --- |
-| E1 | Local semantic-quality comparison | The judge is disabled in the local profile (ADR-0014 ③), so semantic quality has no judge confirmation — re-checking needs a local judge or a side-by-side comparison against the api profile | Unscheduled |
-| E2 | Eval wall-clock cost | A full 63-question local run takes ~25–35 minutes (4–5 on api) — CI only runs the offline protocol layer | Accepted; recorded in evaluation.md §5 |
-| E3 | Mock-LLM boundary | Offline runs carry no semantics (protocol self-check only); 7/16 unanswerable questions mis-answered is evidence of the mock's limits | Accepted; recorded in evaluation.md §5 and limitations §3 |
-| E4 | Coverage baseline guard | The baseline was 91% — new M4.5 modules need a fresh measurement and an update in evaluation.md | Updated: 93% (M4.5 wrap-up, 2026-09-09; see evaluation.md) |
+| E1 | local 语义质量对照 | local 档 judge 关闭（ADR-0014 ③），语义质量无裁判确认——复查需先接本地裁判或与 api 档对照 | 待排期 |
+| E2 | eval 真跑耗时 | local 档全量 63 题 ~25–35 分钟（api 档 4–5 分钟）——CI 只跑 offline 协议层 | 已接受，记录于 evaluation.md §5 |
+| E3 | mock LLM 边界 | offline 场次无语义（协议自检），误答 7/16 是 mock 局限实证 | 已接受，记录于 evaluation.md §5 + limitations §三 |
+| E4 | 覆盖率基线守护 | 基线 91%——M4.5 新增模块需回归测量并在 evaluation.md 更新 | 已更新：93%（2026-09-09 M4.5 收尾，见 evaluation.md） |
 
-## 4. Explicitly not doing (so it does not get re-litigated)
+## 四、当前明确不做（防反复翻案）
 
-- **No** session drag-and-drop (menu-based moves are the decided interaction); **no** cascading
-  folder deletion (the non-empty → 409 semantics is settled);
-- **No** drag-and-drop, continuous title updates, session search / archive / pin, or persisted
-  expand state (outside the M4.5 scope — see F6);
-- **No new dependencies** (no alembic, no frontend framework, no JS library — migrations are
-  hand-written, per the discipline of the ADR-0004 revision);
-- The single-process web shape is a deliberate design, not a defect (limitations §3), and is not
-  tracked as backlog;
-- Unit tests never call external services, and `doctor` never triggers a model download — see
-  evaluation.md for the CI and testing discipline.
+- **不做**会话拖拽（菜单移动已拍板）；不做文件夹级联删除（非空 409 语义已定）；
+- **不做**拖拽/标题随轮次更新/会话搜索归档固定/展开态持久化（M4.5 范围外，见 F6）；
+- **不引任何新依赖**（无 alembic / 前端框架 / JS 库——迁移手写，ADR-0004 修订版纪律）；
+- Web 单进程形态是刻意设计不是缺陷（limitations §三），不在 backlog；
+- 单测不真连外部服务、doctor 从不触发模型下载——CI/测试纪律见 evaluation.md。
 
 ---
 
-*Created 2026-09-09 (during M4.5, as a single tracking file). Maintained as milestones land.*
+*建档：2026-09-09（M4.5 期间，用户要求集中记录）。随里程碑持续维护。*

@@ -1,195 +1,206 @@
 # Mikasa
 
-> A personal document QA workspace — local-first RAG with citation tracing and automated evaluation.
-> *[中文说明见 README.zh-CN.md](README.zh-CN.md)*
+> 带引用溯源与自动化评测的个人文档问答工作台（LLM + RAG）
+> *A personal document QA workspace — local-first RAG with citation tracing and automated evaluation.*
+> *[English README](README.en.md)*
 
-Mikasa is a **from-scratch** RAG application: retrieval (self-implemented BM25 + dense vectors + RRF
-fusion), Chinese-aware structural chunking, citation tracing, and a three-stage automated evaluation
-pipeline — all hand-written, **no RAG framework**. The code is transparent and the evaluation numbers
-are reproducible.
+Mikasa是一个**从零手写**的 RAG 应用：检索（自实现 BM25 + 向量 + RRF 融合）、
+中文结构化分块、引用溯源、三阶段自动化评测全部自研，不套 RAG 框架——
+代码是透明的、评测口径是可复现的。
 
-**Status**: 859 tests passing, ruff + mypy clean. Actively developed; Windows builds (portable zip and
-installer) are published, with in-app update checking built in.
+**项目状态**：M0 骨架 → M1 核心管道 → M2 自动化评测 → M3 Web 界面 →
+M3.5 问答双模式 → M4 本地推理 profile → M4.5 会话管理升级（含首次真实
+schema 迁移 v1→v2，见 ADR-0004 修订段）→ 语料文件夹 v3 → 表格形态呈现
+→ 跨语言检索 → 英文引用附原文/译文对照 → 文档阅读视图 + 引用跳转
+→ M5 前全量排查（修 23 项，含 4 项数据安全级）→ 安装版打包 → 设置面板模型接入。
+当前 **918 tests 全绿**，ruff + mypy clean，覆盖率 ~93%。已发布 Windows 免安装包与安装向导
+（v0.1.0 → v0.1.6），应用内自带「检查更新 → 一键下载安装」——下载支持断点续传，
+关掉弹窗/切页/刷新都不会打断，进度落在顶栏胶囊上（ADR-0024）。
 
-## Highlights
+## 亮点
 
-- **Citation tracing** — every factual claim carries an `[n]` marker that links back to the exact
-  source chunk (heading path + page number). The model cannot invent markers: out-of-range numbers
-  are counted as violations.
-- **Three-layer anti-hallucination** — hard marker validation → citation-support check → refusal
-  discipline. Each layer leaves its own trace in the evaluation report; when evidence is missing,
-  the system emits a fixed refusal sentence instead of guessing.
-- **Three-stage automated evaluation** — (A) retrieval: recall@k / MRR / nDCG; (B) generation
-  protocol: citation-gold ratio, out-of-range rate, refusal accuracy; (C) semantic judging:
-  LLM-as-judge with position-swap consistency. Real acceptance run: recall@10 = 1.000, zero
-  out-of-range citations, 16/16 unanswerable questions cleanly refused.
-- **Cross-lingual retrieval** — a Chinese question against English documents is automatically
-  translated into a second query, and both retrieval paths are merged with RRF. Cited English
-  passages are shown as *original + Chinese translation* side by side.
-- **Document reader with citation jump** — click a citation marker and the source opens in a side
-  panel, either as reconstructed text or as the rendered PDF page with the cited region highlighted.
-- **Three runtime profiles** — cloud API / local inference / zero-key offline; switch with a single
-  `--profile` flag, no code changes, no hardcoded endpoints.
-- **Build-free web UI** — three plain HTML/JS pages with hand-written SSE streaming (no node_modules,
-  no bundler).
-- **Session tree** — arbitrarily nested folders for conversations, with auto-generated titles from
-  the first question (manual renames are never overwritten).
-- **Model settings in the UI** — pick a provider (local Ollama / DeepSeek / SiliconFlow / any
-  OpenAI-compatible endpoint), paste a key, test the connection, save: the LLM switches
-  immediately, no restart and no `.env` editing. Keys stay in the local data directory and are
-  never sent back to the browser.
-- **In-app updates** — on startup the app checks GitHub for a newer release (silent on failure, and
-  switchable off); a one-click download verifies the published sha256 and launches the installer.
-  The client never sees a download URL, and the installer must match the expected name inside the
-  update directory (ADR-0022).
+- **引用溯源**：回答中每个事实性陈述带 `[n]` 标记，UI 可点击回溯到
+  原文块（标题路径 + 页码）；模型无权自造编号，越界即违规计数；
+- **防幻觉三防线**：编号硬校验 → 引用支持度判据 → 拒答纪律，三层在
+  评测里各自留痕（LLM 无据时输出统一拒答句式）；
+- **自动化评测三阶段**：A 检索层（recall/MRR/nDCG）→ B 生成协议层 →
+  C 语义裁判（LLM-as-Judge，双轮位置交换防偏差）。真实验收基线：
+  召回 recall@10=1.000、引用越界率 0、16 道不可答全部干净拒答；
+- **跨语言检索**：中文提问自动译成英文作第二路查询，双路 RRF 合流；
+  被引用的英文段落以「原文 + 中文翻译」对照呈现；
+- **文档阅读视图**：点引用角标 → 侧栏打开原文，支持重建文本与 PDF
+  原页渲染（引用区域高亮定位，与原文逐框对齐）；
+- **三套运行形态**：云端 API / 本地推理 / 零密钥离线，`--profile` 一键
+  切换，代码零硬编码；
+- **零构建链 Web**：三页原生 HTML/JS + 手写 SSE 流式问答；
+- **会话管理树**：任意层嵌套文件夹（菜单移动、防环、删空夹），
+  首问自动提炼标题（LLM 一次 / 截断兜底，手动命名永不被覆盖）——
+  侧栏即工作台（ADR-0015）。
+- **界面内配置模型**：设置面板选来源（本机 Ollama / DeepSeek / SiliconFlow /
+  任意 OpenAI 兼容服务）→ 贴密钥 → 测连通 → 保存即生效，不用重启也不用改
+  `.env`；密钥只存本机数据目录、永不回显（ADR-0018）。
 
-## Documentation
+## 文档
 
-| Document | Contents |
+| 文档 | 内容 |
 | --- | --- |
-| [Architecture](docs/architecture.md) | How the system is organized and how data flows |
-| [Design decisions (ADR)](docs/design-decisions.md) | Every "why": choices, trade-offs, and decisions later overturned by data |
-| [Evaluation](docs/evaluation.md) | Three-stage methodology, golden-set mismatch guards, judge-bias correction, acceptance baseline |
-| [Limitations & failures](docs/limitations-and-failures.md) | Ecosystem pitfalls, heuristic boundaries, and a real bug archive from development |
-| [Usage guide](docs/usage-guide.md) | End-to-end workflows (paper reading, follow-up questions, what to do when it refuses) |
-| [Known issues](docs/known-issues.md) | Unfixed issues (with rulings) and unscheduled candidates |
+| [架构总览](docs/architecture.md) | 系统怎么组织、数据怎么流（含防幻觉三层防线） |
+| [设计决策记录（ADR）](docs/design-decisions.md) | 每个"为什么"：选型、取舍、被推翻的决策 |
+| [自动化评测](docs/evaluation.md) | 三阶段口径、黄金集防错配、裁判偏差修正、验收基线 |
+| [已知限制与失败案例](docs/limitations-and-failures.md) | 生态故障、启发式边界、开发期真实 bug 档案 |
+| [使用说明](docs/usage-guide.md) | 端到端工作流（查论文、追问技巧、被拒答了怎么办） |
+| [已知问题与改进 backlog](docs/known-issues.md) | 未修复问题（裁决记录）与未排期候选的统一清单 |
 
-> Documentation is written in English; the Chinese originals live in [`docs/zh-CN/`](docs/zh-CN/).
-> Source comments are in Chinese, the working language of this project's design notes.
-
-## Quick start
+## 快速开始
 
 ```bash
-# 1) Install (development mode; no compilation needed on Windows)
+# 1) 安装（开发模式；Windows 全程零编译）
 pip install -e ".[dev]"
 
-# 2) Health check (dependencies / keys / index consistency; offline needs no keys)
+# 2) 环境体检（依赖/密钥/索引一致性；offline 模式零密钥）
 mikasa doctor --profile offline
 
-# 3) Ingest a corpus (directory or single file; md / txt / pdf / docx)
+# 3) 导入语料（目录或单个文件，支持 md / txt / pdf / docx；重复导入自动跳过/替换）
 mikasa ingest sample-corpus --profile offline
 
-# 4) Ask a question (offline demo uses the built-in MockLLM)
-mikasa ask --profile offline "What is backpropagation?" --show-sources
+# 4) 提问（离线体验：--profile offline，内置 MockLLM）
+mikasa ask --profile offline "什么是反向传播？" --show-sources
 ```
 
-To use real models, copy `.env.example` to `.env` and fill in your keys (DeepSeek / SiliconFlow);
-`mikasa init` generates the config file for the selected profile.
+接入真实模型：把 `.env.example` 复制为 `.env` 填入密钥（DeepSeek /
+SiliconFlow），`mikasa init` 会基于所选 profile 生成配置文件，之后
+默认（api profile）即可使用真实模型。
 
-**Fully local inference (no API keys, no cost):**
+**纯本地推理路径（local profile，零密钥零成本）**：
 
 ```bash
-# 1) Install local extras (fastembed for CPU embeddings; Ollama itself: https://ollama.com)
+# 1) 安装本地依赖（fastembed CPU 嵌入；Ollama 本体需另行安装 https://ollama.com）
 pip install -e ".[local]"
 
-# 2) Pull the generation model (~4.9 GB)
+# 2) 拉取生成模型（约 4.9GB；可把模型目录重定向到 D 盘：
+#    setx OLLAMA_MODELS "D:\ollama\models" 后重启 Ollama）
 ollama pull qwen3:8b
 
-# 3) Should be all green (missing deps / Ollama down / model absent are reported with fixes)
+# 3) 体检应全绿（fastembed 缺失/Ollama 未起/模型未拉取/索引错配都会红行指引）
 mikasa doctor --profile local
 
-# 4) Build the index (first run downloads bge-small-zh-v1.5, ~100 MB)
+# 4) 首次导入或切换 profile 后重建索引（会触发一次 bge-small-zh-v1.5 下载 ~100MB）
 mikasa ingest --reindex --profile local
 
-# 5) Same commands, different profile
-mikasa ask --profile local "How does L2 regularization prevent overfitting?" --show-sources
+# 5) 同一条命令换成 --profile local 即可
+mikasa ask --profile local "L2 正则化如何防止过拟合？" --show-sources
 ```
 
-## Runtime profiles
+## 三种运行形态
 
-| profile | Generation | Embedding / rerank | Use case |
+| profile | 生成 LLM | 嵌入 / 重排 | 适用 |
 | --- | --- | --- | --- |
-| `api` | DeepSeek (OpenAI-compatible) | SiliconFlow bge-m3 / bge-reranker | Real QA and acceptance runs |
-| `local` | Ollama qwen3 (**no API key**) | fastembed bge-small-zh (512-d) | Fully offline inference (see ADR-0014) |
-| `offline` | Built-in MockLLM | none (BM25 only) | Zero-key demos, tests, CI |
+| `api` | DeepSeek（OpenAI 兼容 API） | SiliconFlow bge-m3 / bge-reranker | 真实问答与真实验收 |
+| `local` | Ollama qwen3（兼容端点，**免密钥**） | fastembed bge-small-zh（512 维）/ 暂无本地重排 | 全离线本地推理（见 ADR-0014） |
+| `offline` | 内置 MockLLM | 无（仅 BM25） | 零密钥演示 / 测试 / CI |
 
-All configuration lives in `config/profiles/*.yaml` with a fully commented field reference in
-`config.example.yaml`.
+配置全部走 `config/profiles/*.yaml` 与 `config.example.yaml`（全字段注释手册）。
 
-## Web UI
+## Web 界面（M3 完成）
 
 ```bash
-mikasa serve                      # api profile (real models)
-# WARNING: --host 0.0.0.0 exposes the service to your whole network.
-# There is no authentication: anyone on that network can read every
-# document you ingested, delete them, upload files, and run evaluations
-# (which spends your API credits). Only use it on a network you trust.
-mikasa serve --profile offline    # zero-key demo
-# Options: --host 0.0.0.0 (LAN access) / --port 9000 / --reload (dev)
+mikasa serve                 # 默认 api profile（真实模型）
+# 警告：--host 0.0.0.0 会把服务暴露给整个局域网，且没有登录鉴权——
+# 同网段任何人都能读走你导入的全部文档、删除文档、上传文件、
+# 跑评测（消耗你的 API 额度）。只在你信任的网络里这么用。
+mikasa serve --profile offline   # 零密钥离线演示
+# 常用选项：--host 0.0.0.0 局域网访问 / --port 9000 / --reload 开发热重载
 ```
 
-Open http://127.0.0.1:8000/ — four pages:
+浏览器打开 http://127.0.0.1:8000/：**问答**页（SSE 流式 + 可点击引用溯源 +
+多轮会话 + **知识库/自由问答双模式**：底部随时切换——知识库模式严格
+RAG 带引用，自由问答模式直连接入的模型回答任何话题；offline 下自由
+问答置灰）、**知识库**页（网页上传/删除文档，入库即被检索；**也能直接写 Markdown
+笔记**——左写右预览，保存即入库可被引用，随时回来接着改）、**找论文**页
+（一次检索 arXiv/OpenAlex/CORE/DOAJ 四源——其中三个免密钥，DOAJ 补上了
+中文开放获取期刊；带日期区间/语言/开放获取筛选与被引或时间排序；**翻页**看得见页码与
+总页数、可跳页；**点一条结果直接在浏览器打开论文原页**，「详情」按钮才展开完整
+摘要与导入——导入开放获取 PDF 到语料库后即可提问，已导入的会标「已在库中」；**检索历史**一键重搜，详情里还有**相关论文 / 引用了它 / 参考文献**三个出口继续往下找。
+各来源声明自己的能力，做不到的选项置灰并说明原因——知网式体验，不是知网
+的数据，付费墙全文拿不到）、**评测**页
+（后台跑黄金集评测、进度轮询、报告渲染）。接口文档（Swagger）在
+http://127.0.0.1:8000/docs 。
 
-- **Chat** — SSE streaming, clickable citation markers, multi-turn sessions, and a KB / free-chat
-  mode switch (KB mode is strict RAG with citations and refusals; free-chat mode talks to the model
-  directly without retrieval or citations).
-- **Library** — upload and delete documents in the browser; a folder tree organizes the corpus;
-  newly ingested documents are searchable immediately. You can also **write Markdown notes right
-  here** — type on the left, watch it render on the right, save, and the note is citable by the next
-  question (and editable later).
-- **Find papers** — search arXiv, OpenAlex, CORE and DOAJ at once (three of the four need no key;
-  DOAJ is what brings in Chinese open-access journals) with date-range/language/open-access filters
-  and citation- or date-sorting, page through the results with page numbers and jump-to-page (the
-  total is summed from the sources' own hit counts and capped by the upstreams' own depth limits), and **click a row to open
-  the paper in your browser** — 「详情」 in the row is where the full abstract, import button, and
-  the three ways to keep going live: related papers, cited by, and references. Importing pulls the
-  open-access PDF straight into the corpus (import, then ask about it right away); recent queries
-  are one click away. Results you have
-  already imported are marked "already in your library". Each source declares what it supports, so
-  options it cannot honour are disabled with a reason rather than silently ignored — a CNKI-like
-  experience, not CNKI's data: paywalled full text stays out.
-- **Evaluation** — run the golden-set evaluation in the background, poll progress, and read the
-  generated report.
+## CLI 一览
 
-API docs (Swagger) at http://127.0.0.1:8000/docs.
-
-## CLI
-
-| Command | Description |
+| 命令 | 说明 |
 | --- | --- |
-| `init` | Initialize the data directory and generate a config file |
-| `doctor` | Environment health check (versions, deps, keys, index consistency) |
-| `ingest <path>` | Ingest and index; `--reindex` rebuilds everything |
-| `list` / `index stats` | Ingested documents / index status |
-| `ask "<question>"` | Single question with refusal when evidence is missing (`--show-sources`) |
-| `chat` | Multi-turn conversation (kb mode with history summary, free mode raw history) |
-| `eval run/list` | Run the evaluation / browse past runs (`--profile offline` needs no keys) |
+| `init` | 初始化数据目录并生成配置文件 |
+| `doctor` | 环境体检（版本/依赖/密钥/本地推理依赖/索引三方一致性），CI 冒烟用 |
+| `ingest <文件或目录>` | 导入并建索引；`--reindex` 全量重建 |
+| `list` / `index stats` | 已入库文档 / 索引状态 |
+| `ask "<问题>"` | 单轮提问，无据则拒答（`--show-sources` 显示溯源；`--mode free` 直连模型自由问答） |
+| `chat` | 多轮对话（`--mode kb` 历史摘要注入 / `--mode free` 原始消息直注） |
+| `eval run/list` | 跑评测 / 历史评测回溯（`--profile offline` 零密钥可跑） |
 
-## Engineering notes
+## 评测入口
 
-- Python ≥ 3.11 (3.13 recommended); optional NVIDIA GPU for local inference;
-- Source comments and internal docs are written in **Chinese**; baseline gates are
-  `ruff format`, `ruff check`, `mypy`, and `pytest`;
-- Current suite: **859 tests**, coverage ~93% (see the regression gate in `docs/evaluation.md`);
-- Zero-compilation install on Windows + CPython 3.13 (all dependencies ship prebuilt wheels;
-  see `pyproject.toml` and ADR-0006/0008 for the version-pinning rationale).
+真实质量验收：`mikasa eval run --profile api`（DeepSeek 生成 + Qwen 裁判，
+约 4-5 分钟）；结果落 `data/eval-reports/{run_id}-{name}.md`，读报告指南
+见 evaluation.md。离线回归：`mikasa eval run --profile offline`。
 
-## Project layout
+## 里程碑
+
+| | 内容 | 状态 |
+| --- | --- | --- |
+| M0 | 工程骨架（配置体系、目录、文档计划） | ✅ |
+| M1 | 入库链路 + 双路检索 + 生成引用协议 + CLI | ✅ |
+| M2 | 黄金集 + 三阶段自动化评测（真实验收 recall@10=1.000） | ✅ |
+| M3 | Web 三页界面 + SSE 流式 + 评测后台任务 | ✅ 242 tests |
+| M3.5 | 问答双模式：知识库（kb）/ 自由问答（free），Web 开关切换 | ✅ 259 tests |
+| M4 | local profile：Ollama(qwen3:8b) + fastembed CPU(bge-small-zh-v1.5)（rerank/judge 暂关，见 ADR-0014）；实机验收：recall@5=0.975 / MRR=0.940 / 拒答 13/16，质量差异与取舍见 evaluation.md | ✅ 282 tests |
+| M4.5 | 会话管理升级：多层嵌套文件夹树（菜单移动）+ 首问自动提炼标题（LLM ≤16 字 / mock 截断兜底）+ 会话与文件夹重命名/删除（删空夹 409、防环 409）；首次 schema 迁移 v1→v2（ADR-0004 修订 + ADR-0015） | ✅ 332 tests |
+| M4.5+ | 语料文件夹 v3（文档树/拖拽/查找）→ 表格形态呈现 → 跨语言检索（中文问英文答）→ 英文引用附原文/译文 → 文档阅读视图 + 引用跳转（PDF 原页渲染 + 高亮定位） | ✅ 430 tests |
+| M5 | 文档定稿（通用示例语料 + 双语文档树）+ git 初始化 + GitHub 发布 + CI | ✅（README 2026-09-20 起中文为主，英文见 [README.en.md](README.en.md)） |
+| M7 | 在线找论文：arXiv + OpenAlex 双源检索（交错分页 + 逐源降级）+ 有防线的 PDF 下载器 + 导入复用上传尾链（ADR-0019） | ✅ 578 tests |
+| M8 | 找论文独立成页：三源（+CORE）轮转分页、来源能力声明与筛选/排序、详情面板与「已在库中」标记（documents.source_ref + v4 迁移，ADR-0020） | ✅ 679 tests |
+| M6 ① | 知识库页写 Markdown 笔记：左写右预览、保存即入库可检索、原地编辑不产生重复（笔记 = 带 `note:` 标记的普通文档，ADR-0021） | ✅ 679 tests |
+| v0.1.1 | 应用内更新：启动静默检查 → 弹窗 → 一键下载（带进度）→ 校验 sha256 → 自动安装；设置面板「关于」段可关可手查（ADR-0022） | ✅ 738 tests |
+| v0.1.4 | 更新下载可续传、任务可接续（ADR-0024）：断线带 `Range` 接着下、退避重试、槽位自愈（POST 幂等不再 409）、弹窗改成「观察窗」+ 顶栏跨页胶囊；同批含「找论文」引证关系与检索历史 | ✅ 815 tests |
+| v0.1.5 | 一轮"只修问题不加功能"：上传重传不再复制出第二篇（写侧按名兜底修脏 `file_path`）、reindex 清库前逐行校验副本、笔记乐观锁、迁移跨进程锁、翻页深度（OpenAlex/DOAJ 到第 1 万条）、代码块进检索、许可证改 AGPL-3.0（ADR-0025） | ✅ 859 tests |
+| v0.1.6 | 拍照/图片转笔记（视觉模型独立成段、识别即草稿、原图随笔记留存，ADR-0027）+ 评测"为我的资料自动生成题库"（ADR-0026）+ **公式排版**（内置 KaTeX，ADR-0028）+ 修好"本机模型一问就超时"（`localhost` 地址规范化）+ 更新下载在慢/断网下不放弃（换连接续下，ADR-0024 续作） | ✅ 918 tests |
+
+## 环境与工程纪律
+
+- Python ≥ 3.11（推荐 3.13）；可选 NVIDIA 显卡（本地推理加速）；
+- **源码注释与文档一律中文为主**（项目工作语言）：README 与 `docs/*.md` 都是中文，
+  英文镜像在 [README.en.md](README.en.md) 与 [`docs/en/`](docs/en/)——两棵树同名文件一一对应，
+  有护栏测试盯着（`tests/unit/web/test_docs_trees.py`）；ruff + mypy 三绿基线
+  `ruff format src tests && ruff check src tests && mypy src`；
+- 测试与覆盖率：**918 单测**，覆盖率 ~93%（见 evaluation.md 回归门禁）；
+- 零编译安装：Windows + CPython 3.13 全部依赖均有预编译 wheel
+  （版本锁定理由见 pyproject.toml 注释与 ADR-0006/0008）。
+
+## 项目结构
 
 ```
 src/mikasa/
-├── cli/          # typer + rich commands
-├── web/          # FastAPI + plain HTML/JS (chat / library / evaluation pages)
-├── pipeline/     # retrieve → inject → generate → verify orchestration (citation protocol)
-├── ingest/       # four-format loaders + Chinese structural chunking
-├── index/        # self-implemented BM25 / numpy exact vector search / RRF fusion
-├── eval/         # golden-set evaluation: three stages + judge
-├── providers/    # LLM / embedding / rerank: Protocol + cloud & mock implementations
-├── storage/      # SQLite + meta.json snapshots
-└── config/       # pydantic settings (three profiles merged)
-sample-corpus/    # original sample corpus (MD / TXT / DOCX / PDF)
-evals/            # golden-set source (questions.yaml → golden_set.json)
-config/           # profiles/*.yaml + commented example
+├── cli/          # typer+rich 命令
+├── web/          # FastAPI + 原生 HTML/JS（问答/知识库/评测三页）
+├── pipeline/     # 检索→注入→生成→校验编排（含引用协议）
+├── ingest/       # 四格式 loader + 中文结构分块
+├── index/        # 自实现 BM25 / numpy 精确向量 / RRF 融合 / 分词降级
+├── eval/         # 黄金集评测：三阶段口径 + 裁判
+├── providers/    # LLM/嵌入/重排：Protocol + 云端/mock 实现
+├── storage/      # SQLite + meta.json 快照
+└── config/       # pydantic 配置（三 profile 合并）
+sample-corpus/    # 原创 AI 学习笔记语料（MD/PDF/DOCX/TXT）
+evals/            # 黄金集源（questions.yaml → golden_set.json）
+config/           # profiles/*.yaml + 全字段示例
 ```
 
-## License
+## 许可证
 
-**AGPL-3.0-or-later** — see [LICENSE](LICENSE).
+**AGPL-3.0-or-later**——全文见 [LICENSE](LICENSE)。
 
-This is a strong-copyleft license, and it is deliberate: the app bundles
-[PyMuPDF](https://pymupdf.readthedocs.io/) (AGPL-3.0 or commercial) for PDF parsing and page
-rendering, so the distributed builds cannot be MIT. You may use, study, modify and redistribute
-Mikasa freely under the same terms; if you run it as a network service for other people, §13
-requires you to offer them the corresponding source. Bundled third-party components and their
-licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) (regenerate with
-`python tools/make_third_party_notices.py`).
+这是刻意选的**强著佐权（copyleft）**许可证：应用打包时捆了
+[PyMuPDF](https://pymupdf.readthedocs.io/)（AGPL-3.0 或商业许可二选一）用于 PDF 解析与页面渲染，
+所以发布物没办法继续挂 MIT。你可以自由地使用、研究、修改与再分发；
+如果你把它做成网络服务给别人用，§13 要求你向他们提供对应源码。
+随包的第三方组件与它们的许可证见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)（用 `python tools/make_third_party_notices.py` 重生成）。

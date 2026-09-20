@@ -10,8 +10,8 @@
      样式表，带 `-*` 的族名按前缀核对；
   3. 圆角五档与 z-index 阶梯里的每个数值都在样式表里出现过。
 
-**中英两份都查**（`DESIGN.md` 是事实源，`docs/zh-CN/DESIGN.md` 是镜像）：
-镜像不得各自漂移，中文版漏改一个色值同样会红。
+**中英两份都查**（`DESIGN.md` 是中文事实源，`DESIGN.en.md` 是英文镜像，并列在仓库根）：
+镜像不得各自漂移，英文版漏改一个色值同样会红。
 
 上游改了 token 却没动文档，这一份会红——把文档拉回与代码一致，或者把
 新值写进文档，两条路都行，但别让两边各自漂着。
@@ -28,12 +28,13 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[3]
 STYLE_CSS = REPO_ROOT / "src" / "mikasa" / "web" / "static" / "css" / "style.css"
 
-# (文档路径, Components 段的中英标题)——两份文档结构同源，仅标题词不同
+# (文档路径, Components 段的中英标题)——两份文档结构同源，仅标题词不同。
+# 2026-09-20 起中文为主：根 DESIGN.md 是中文事实源，英文镜像 DESIGN.en.md 并列在根。
 DESIGN_FILES = [
-    (REPO_ROOT / "DESIGN.md", "Components"),
-    (REPO_ROOT / "docs" / "zh-CN" / "DESIGN.md", "组件"),
+    (REPO_ROOT / "DESIGN.md", "组件"),
+    (REPO_ROOT / "DESIGN.en.md", "Components"),
 ]
-DESIGN_IDS = ["en", "zh-CN"]
+DESIGN_IDS = ["zh-CN", "en"]
 
 # front-matter：文件开头的 --- 块（DESIGN.md 的 token 段）
 _FRONT_RE = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n", re.DOTALL)

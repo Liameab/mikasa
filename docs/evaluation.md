@@ -1,247 +1,165 @@
-# Automated Evaluation (M2): Methodology and Usage Guide
+# 自动化评测（M2）：设计口径与使用指南
 
-> Companion code: `src/mikasa/eval/`, `tools/build_golden.py`, `evals/questions.yaml`,
-> `evals/golden_set.json`; commands: `mikasa eval run | list`.
+> 配套代码：`src/mikasa/eval/`、`tools/build_golden.py`、`evals/questions.yaml`、
+> `evals/golden_set.json`；命令：`mikasa eval run | list`。
 
-Evaluation is not meant to answer "is the model any good." It answers three
-questions that can be assessed separately: **were the sources we needed actually
-retrieved (retrieval)**, **did the answer follow the citation rules and hold the
-refusal line (generation protocol)**, and **is the answer correct and complete
-(semantics)**. Each of the three costs more and depends on more than the last, so
-evaluation is split into three stages, each run under its own configuration, so
-that no conclusion masks another.
+评测要回答的不是"模型好不好"，而是三句可以拆开回答的话：
+**要的资料有没有被捞回来（检索）**、**回答有没有按规则引用并守住拒答（生成协议）**、
+**回答内容对不对、完不完整（语义）**。三句话成本与依赖逐级上升，
+因此评测拆成三个阶段跑，每阶段用不同的配置口径，结论互不掩盖。
 
-## 1. Three-stage methodology
+## 1. 三阶段口径
 
-| Stage | What it measures | Configuration | Metrics | Runs offline |
+| 阶段 | 测什么 | 配置口径 | 指标 | 离线可跑 |
 | --- | --- | --- | --- | --- |
-| A Retrieval | Whether fusion recall brings back the material the question needs | Reranker off (fusion window independently anchored at 10, same as the current product value) | recall@5/8/10, MRR, nDCG@k (stratified by difficulty) | ✅ |
-| B Generation | Citation discipline + refusal discipline | Product configuration as-is (reranker on, top5, window 10) | citation gold ratio, out-of-range citation rate, false refusals on answerable questions, refusal accuracy | ✅ (mock LLM) |
-| C Semantic judge | Answer content quality | LLM-as-Judge (two rounds, positions swapped) | correctness 1-5, grade A-D, faithfulness, two-round agreement | ❌ needs an API key / local judge |
+| A 检索层 | 融合召回有没有把题面素材带回来 | 关重排（融合窗口独立锚定 10，与产品当前值相同） | recall@5/8/10、MRR、nDCG@k（按难度分层） | ✅ |
+| B 生成层 | 引用纪律 + 拒答纪律 | 产品配置原样（重排开 top5、窗口 10） | citation gold ratio、引用越界率、可答误拒、拒答准确率 | ✅（mock LLM） |
+| C 语义裁判 | 回答内容质量 | LLM-as-Judge（双轮位置交换） | 正确性 1-5、档位 A-D、忠实性、两轮一致性 | ❌ 需密钥/本地裁判 |
 
-Why stage A turns the reranker off: the reranker can push the material a question
-needs out of the top ranks — that is a reranker failure, not a recall failure.
-Retrieval evaluation has to decouple recall from reranking and answer only "is the
-material in the candidate set"; stage B returns to the product configuration
-(reranker on, top5) to measure the real end-to-end path. The fusion window is 10
-for both A and B (validated by the real 63-question run: a window of 8 misses the
-second gold chunk on hard synthesis questions — q036/q037 put gold chunks at ranks
-9-10, and at @10 47 questions reach recall@10=1.000) — A's window is anchored
-independently by a runner constant, so shrinking it in the product later cannot
-move A's methodology. Both configurations are disclosed in the same report.
+为什么阶段 A 要"关重排"：重排器可能把题面素材挤出前几名——那是重排的失误，
+不是召回的失误。检索层评测要把召回与重排解耦，只回答"素材在不在候选里"；
+阶段 B 才回到产品配置（重排开 top5），测真实链路端到端表现。融合窗口 A/B
+都定 10（63 题真实验收实证：窗口 8 会漏 hard 综合题的第二金块，q036/q037
+实测金块落在第 9-10 名，@10 时 47 题 recall@10=1.000）——A 的窗口由
+runner 常量独立锚定，产品将来调小也不动摇 A 口径。两个口径都在同一份报告里披露。
 
-## 2. The golden set: two banks + guards against questions that no longer match the corpus
+## 2. 黄金集：两套题库 + 题对不上库的防错配
 
-**The built-in bank is hand-written** (`evals/questions.yaml`, 63 of them: 47
-answerable graded easy/medium/hard + 16 unanswerable classified as unrelated /
-insufficient / hallucination_bait). Its value is that a human does not phrase
-questions the way the corpus does — auto-generation would only learn the corpus's
-biases all over again.
+**内置题库是人写的**（`evals/questions.yaml`，63 条：47 可答按 easy/medium/hard
+分级 + 16 不可答按 unrelated / insufficient / hallucination_bait 分类），不是自动生成的——
+人工题的价值在于它不会顺着语料的措辞出题，自动生成只会把语料的偏见再学一遍。
 
-**The synthesized bank** (2026-09-19, `src/mikasa/eval/synth.py`) covers the other
-half: hand-written anchors are verbatim quotes from the sample corpus, so they die
-with a corpus swap — and nobody has written gold answers for *your* documents. The
-synthesizer samples chunks from your own corpus and asks the model for a question
-only that chunk can answer; **that chunk becomes the gold answer**, so any corpus
-can be evaluated. The cost is stated in the report: a synthesized question is
-written by a model that has just read the source text, so it is easier than a
-hand-written one and scores run high — use it for **relative** comparisons (two
-retrieval changes on the same bank), never against hand-written absolute numbers.
-The report header marks such banks as **auto-generated**.
+**自动题库**（2026-09-19 起，`src/mikasa/eval/synth.py`）补上另一半：人工题的锚句
+是示例语料的原文，**换一份语料就天然失效**，而"评我自己的资料"这件事没人替你的文档
+写过标准答案。自动出题从你自己的语料里抽样分块，让模型出一道"只有这段能回答"的题，
+**那个分块即标准答案**，于是任意语料都能评。代价必须写在报告里：自动题是模型照着
+自己看过的原文出的，比人工题简单、分数天然偏高，**只能横向比**（同一份题库下比较两次
+检索改动），不能跟人工题的绝对分比——报告首部以「**自动生成**」显式标注。
 
-Two guardrails (2026-09-19):
+防错配（2026-09-19 起）：
 
-- **Unique anchor hit** (built-in bank only): every answerable question carries
-  anchors copied verbatim from the corpus text. When `tools/build_golden.py`
-  resolves anchors into real chunk_ids, both zero hits (question and corpus
-  disagree) and multiple hits (ambiguity from chunk overlap) **refuse to freeze**,
-  reporting every problem in a single pass;
-- **Per-chunk freeze** (both banks): each answerable question is frozen together
-  with the content_sha256 of its gold chunks. Before a run every question is
-  checked — "is that chunk still there, is it still the same text?" — and the ones
-  that fail are **skipped**, with the count in the report header and the ids and
-  reasons listed in the body. Only a bank whose answerable questions are *all*
-  stale is a hard error.
+- **锚句唯一命中**（仅内置题库）：每道可答题携带从语料原文逐字摘录的锚句（anchors）。
+  `tools/build_golden.py` 把锚句解析成真实 chunk_id 时，零命中（题面与语料对不上）
+  或多命中（分块重叠有歧义）都**拒绝冻结**，一次报全所有问题；
+- **分块级冻结**（两套题库都有）：每道可答题连同它标准答案分块的 content_sha256
+  一起落盘。评测前**逐题**核对"这一块还在不在、内容变没变"：变了的题**跳过**，
+  报告首部写明跳了几道、正文逐条列出题号与原因；全题被跳过才是硬错误。
 
-  **Changed from the old global fingerprint**: the guard used to hash the whole
-  corpus as a (chunk_id, content_sha256) sequence, so adding any single document —
-  or renaming one — invalidated the entire bank, while the actual risk only ever
-  concerned the few dozen chunks a question points at. Chunk-level checking keeps
-  what matters: a `--reindex` that shifts ids (old ids no longer resolve → skip)
-  and an edited chunk (hash mismatch → skip). Skipping rather than proceeding is
-  the point: scoring against misaligned gold answers produces numbers that look
-  normal and mean nothing, which is the worst failure mode an evaluation tool has.
-  Showing the skips is the other half: silently shrinking the denominator makes the
-  score look better.
+  **口径变更**：原先比的是**全库**指纹（哈希 (chunk_id, content_sha256) 序列）——
+  往库里加任意一篇文档、改个标题都让整份题库作废报错，而真正的风险只涉及题目引用的
+  那几十个分块，守卫范围远大于风险范围。改成分块级之后，不相干的增删不影响评测，
+  该拦的照样拦得住：`--reindex` 让 chunk id 整体平移（旧 id 查不到 → 跳过）、某个
+  分块内容被改写（哈希不符 → 跳过）。之所以要"跳过而不是放行"：静默用错位的标准
+  答案算分，会跑出看着正常、其实毫无意义的数字——这是评测工具最怕的事。之所以
+  要显式留痕：静默缩小分母会让分数看着变好。
 
-One pitfall to note: the chunker keeps an **overlap window** between adjacent
-chunks (a sentence at the end of one chunk reappears in the next), so such
-sentences cannot be used as anchors; and long PDF lines get hard-wrapped by the
-loader, so an anchor must fall inside a single line.
+注意一个坑：分块器在相邻块之间会保留**重叠窗口**（块尾句子重复出现在下一块），
+这类句子不能选作锚句；PDF 长行在 loader 阶段被折行插入换行符，锚句必须落在单行内。
 
 ```bash
-mikasa ingest sample-corpus      # 1. ingest the corpus
-python tools/build_golden.py     # 2. freeze the golden set (idempotent; re-run when the corpus changes)
-mikasa eval run --profile offline   # 3. run the evaluation (zero API keys); api/local enable the semantic judge
-mikasa eval list                 #    browse past runs
+mikasa ingest sample-corpus      # 1. 语料入库
+python tools/build_golden.py     # 2. 冻结黄金集（幂等；语料变了就重跑）
+mikasa eval run --profile offline   # 3. 跑评测（零密钥）；api/local 配置开语义裁判
+mikasa eval list                 #    历史评测回溯
 ```
 
-## 3. Metric definitions (all hand-written, no evaluation library)
+## 3. 指标口径（全部手写，不引评测库）
 
-- recall@k = |G ∩ R[:k]| / |G| — G is the set of gold chunks for the question, R
-  the retrieval result. With multiple gold chunks, each contributes its own hit
-  ratio;
-- MRR = reciprocal rank of the first gold chunk (0 if none is found); nDCG@k
-  scores the overall ranking quality across multiple gold chunks;
-- **citation gold ratio**: the share of cited chunks in an answer that hit G
-  (computed only over samples that have citations). This is the recall-side proxy
-  when the semantic judge is absent, and is deliberately not conflated with true
-  citation precision;
-- **refusal accuracy** = clean refusals / unanswerable questions. Clean refusal =
-  total − wrong answers − refusals that still carry citation markers (L3
-  violations, theoretically unreachable, so any occurrence is a protocol bug);
-- out-of-range / fabricated citation rate: among all `[n]` markers in the answer
-  body, the share whose number falls outside the injected 1..N. A model inventing
-  numbers is the core signal of citation-format discipline, and maps to "citation
-  parse failure" in production RAG systems.
+- recall@k = |G ∩ R[:k]| / |G|——题面金块集合 G，检索返回 R。
+  多金块时每块各算一次命中比例；
+- MRR = 首个金块排名的倒数（未命中 0）；nDCG@k 对多金块排序质量整体打分；
+- **citation gold ratio**：回答引用块中命中 G 的比例（只在"有引用"的样本上统计）。
+  这是语义裁判缺席时召回侧的代理指标，不与真正的引用精确率混称；
+- **拒答准确率** = 干净拒答数 / 不可答题数。干净拒答 = 总数 − 误答 − 拒答却带
+  引用标记（L3 违规，理论上不可达，出现即协议 bug）；
+- 越界/自造编号率：正文全部 `[n]` 标记中，编号超出注入片段 1..N 的占比——
+  模型自造编号是引用格式纪律的核心信号，对标真实 RAG 产品里的"引用解析失败"。
 
-Per-item values accumulate in a `_Mean` container, and `summarize` reports mean /
-p50 / p95 / min / max / n at report time. Difficulty strata and the overall
-figures are computed from the same raw per-item data, keeping the methodology
-transparent.
+逐条值用 `_Mean` 容器累加，报告期 `summarize` 输出 mean / p50 / p95 / min / max / n，
+难度分层与总体共用同一批逐条原料，口径透明。
 
-## 4. The semantic judge (stage C) and its three bias corrections
+## 4. 语义裁判（阶段 C）的三个偏差修正
 
-An LLM judge has three known biases — self-preference, position sensitivity, and
-scale drift — each addressed explicitly:
+LLM 当裁判有自偏好、位置敏感、量尺漂移三类已知偏差，逐一处理：
 
-1. **Position swap**: the same judgement is asked twice with the 【参考答案要点】
-   (reference answer points) and 【候选回答】 (candidate answer) positions reversed.
-   Only rounds that agree are admitted into the score statistics; disagreements
-   (including format-parse failures) are disclosed separately as inconsistent —
-   disagreement is itself a signal of "unstable generation or judge sensitivity",
-   so it is listed in the anomaly detail for human review rather than smoothed
-   away;
-2. **Two scales**: each round asks for both a 1-5 score and an A-D grade. Grade and
-   score are judged independently, and the report discloses the share of A/B grades
-   among agreeing samples;
-3. **Cross-vendor**: the judge and the generator default to different vendors
-   (DeepSeek for generation / SiliconFlow Qwen for judging, which the `api` profile
-   enforces; the `local` profile uses Ollama for both). This is enforced at the
-   configuration layer, and the report discloses the configuration in effect.
+1. **位置交换**：同一判题把【参考答案要点】与【候选回答】位置颠倒问两轮。
+   两轮一致才采信进分数统计；不一致（含格式解析失败）单独披露为 inconsistent——
+   不一致本身是"生成不稳定/裁判敏感"的信号，报告列在异常明细里供人工复核，不抹平；
+2. **双量尺**：每轮同时要求 1-5 分数制与 A-D 档位制。档位与分数独立判断，
+   报告披露一致样本的 A/B 档占比；
+3. **跨厂商**：裁判与生成端默认不同服务商（生成 DeepSeek / 裁判 SiliconFlow
+   Qwen，`api` 档即此约束；`local` 档都走 Ollama）。配置层落实，报告披露当次配置。
 
-Parsing relies on fixed-format lines (`正确性评分: N/5` "correctness score" /
-`档位: X` "grade" / `忠实性: 是/否` "faithfulness"), never on JSON mode — small
-Ollama models are unreliable at it, and parse failures are recorded raw for the
-audit trail. The judge scores samples that are answerable and not refused; refusals
-and empty answers short-circuit without judging (correctness is the refusal
-bucket's job). Judge material = the gold chunks' raw text concatenated (capped at
-3000 characters, to control cost and keep per-question cost fair).
+解析依赖固定格式行（`正确性评分: N/5` / `档位: X` / `忠实性: 是/否`），不依赖
+JSON mode——Ollama 小模型不稳；解析失败计 raw 留痕。裁判对可答题且未拒答的样本
+判分；拒答与空答案短路不判（正确性由拒答桶负责），判题素材 = 题面金块原文拼接
+（上限 3000 字符，控成本且让各题成本公平）。
 
-**NoJudge (protocol layer only)**: when the judge is not enabled or the api key is
-missing, the system degrades automatically to NoJudge and the report states
-explicitly that it covers "protocol-layer metrics only." Offline/CI runs have no
-semantic score, and that is the intended default — the three profiles behave
-identically, differing only in configuration.
+**NoJudge（仅协议层）**：judge 未启用或 api 密钥缺失时自动降级为 NoJudge，
+报告显式注明"仅协议层指标"。offline/CI 场次没有语义分，这是设计好的
+缺省形态——三端行为同构，只差配置。
 
-## 5. Known boundaries and limitations (an honest list)
+## 5. 已知边界与限制（诚实清单）
 
-- **The offline mock LLM has no semantics**: it only demonstrates the citation
-  protocol (it answers with a citation when the question and the corpus share a
-  ≥4-character contiguous overlap, and refuses otherwise), so citation gold ratio
-  and refusal accuracy in offline runs are a "protocol-layer self-check", not real
-  quality. In the real 63-question run, 7 unanswerable questions were answered
-  wrongly by the mock (4 of 5 bait, 3 of 5 insufficient, the rest cleanly refused) —
-  those wrong answers are exactly the evidence of the mock's limits, and they show
-  that real semantics require stage C;
-- A note on the mock's built-in noise: offline refusal accuracy ≠ the product's
-  refusal capability; do not report it externally;
-- **Real api-profile baseline (2026-09-09 acceptance run, DeepSeek generation +
-  Qwen judge)**: stage A recall@10=1.000 / MRR=0.979 / nDCG≈0.98 (hard, 12
-  questions: recall@5=0.972); out-of-range citation rate 0.000, citation gold ratio
-  mean 0.848 (p50=1.000, 44-question sample); 16/16 refusals on unanswerable
-  questions (the real model holds the line; the mock's 7 wrong answers drop to zero
-  here); 3/47 false refusals on answerable questions — q036 was missing its second
-  gold chunk in retrieval (genuinely missing material, so refusing was reasonable),
-  while q021/q031 were conservatively refused despite complete supporting material
-  (the boundary of prompt rule 4, "answer when partially covered"; granting more
-  latitude would threaten unanswerable-question discipline, so it is accepted as a
-  known boundary); judge two-round agreement 36/44 (of the 8 disagreements, most
-  are 4/B vs 5/A boundary cases and a few are faithfulness reversals; when judge
-  noise exceeds 10%, suspect the judge model before the generator); correctness
-  mean 4.83, 100% A/B grades.
-- **Real local-profile comparison (2026-09-09 run #5, qwen3:8b generation, judge
-  off → protocol-layer metrics only)**: stage A recall@5=0.975 / recall@10=0.982 /
-  MRR=0.940 — easy/medium are all 1.000 and the entire gap sits in the 12 hard
-  questions (recall@10=0.931), i.e. the loss of 512-dimension bge-small against the
-  api profile's 1024-dimension bge-m3 is concentrated in the hardest stratum; stage
-  B out-of-range citation rate 0.000, L3 violations 0, false refusals 0/47 (the
-  questions the api profile refused conservatively, q036 among them, are all
-  answered locally — semantic quality unconfirmed by a judge, protocol compliance
-  only); citation gold ratio 0.798 (n=47); **refusals 13/16**: the three wrong
-  answers on unanswerable questions, q057/q058/q059, are all of the "external
-  knowledge the model remembers from pre-training" type (including the deliberately
-  planted hallucination_bait q059 — the sentinel caught the small model as
-  intended), i.e. small local models tend to answer rather than refuse, the mirror
-  image of DeepSeek's conservative refusals; trading 3/16 of refusal discipline for
-  zero cost, with the trade-off recorded in ADR-0014 ③/⑤;
-- **M4.1 investigation (2026-09-09, full reproduction on the same fingerprint and
-  configuration, plus ablations; conclusion: all accepted as local-profile
-  boundaries)**: ① hard-stratum misses pinpointed to q036's second gold chunk 155
-  (the gradient descent chunk) and q041's third gold chunk 126 (the scaled
-  dot-product attention chunk) — fusion ranks 14/16/24; ablating fusion_top_k
-  10→20 and the bm25/dense sub-window 20→40 produced **zero change** in recall@10
-  (a wider window does not change the top-10 order; enlarging the sub-window only
-  moved 155 from 24 to 16) — the gap is fundamentally the "answer spans chunks"
-  problem of multi-gold-chunk questions: gold labels mark 2-3 chunks by answer
-  logic, while dual-path retrieval ranks on a single relevance peak (in the api
-  profile's bge-m3 era the second gold chunk also sat at the 9-10 boundary, see the
-  note in runner.py), so the tuning route is empirically ineffective; ②
-  investigation of the three refusal failures: q057 fabricated citations to
-  support an answer (leaning on a KNN chunk), q058 answered bare with no citations
-  (knew it had nothing, answered anyway), q059 hallucinated with citations attached
-  to the wrong sources (a paper chunk used to support an author count) — prompt
-  rule 3, "even if you know the answer", and its worked example (the "Earth's
-  radius" analogue) already cover all of these, and DeepSeek scores 16/16 under the
-  same rules, which shows the rules work and qwen3:8b simply complies less
-  reliably; hardening the prompt has low marginal return, and changing the shared
-  protocol would require a full-profile regression; ③ the citation gold ratio of
-  0.798 is likewise a generation-model citation-precision issue (p50=1.000, a few
-  questions partially miss). Options on record: switch to qwen3:14b (tight at 8 GB
-  of VRAM, markedly slower generation, no guarantee of reaching zero); enabling the
-  local reranker requires picking a fastembed version (ADR-0014 ②) — neither is a
-  low-cost win;
-- Judge cost: two rounds × 63 questions; a full api-profile run makes roughly 126
-  judging calls, linear in the number of questions;
-- The online effect of the reranker and dense vectors in stage B depends on local
-  models or API keys; CI covers only the protocol layer.
+- **offline 的 mock LLM 无语义**：它只演示引用协议（问题与语料有 ≥4 字连续
+  重叠就引用作答，否则拒答），所以 offline 场次的 citation gold ratio、拒答
+  准确率是"协议层自检"，不是真实质量。实测 63 题里 7 道不可答题被 mock 误答
+  （bait 5 中 4、insufficient 5 中 3，其余干净拒答）——误答恰是 mock 局限的
+  实证，也说明真实语义必须靠阶段 C；
+- mock 自带的噪声说明：offline 场次拒答准确率 ≠ 产品拒答能力，勿拿它对外汇报；
+- **真实 api 档对照（2026-09-09 验收基线，DeepSeek 生成 + Qwen 裁判）**：
+  阶段 A recall@10=1.000 / MRR=0.979 / nDCG≈0.98（hard 12 题 recall@5=0.972）；
+  引用越界率 0.000、citation gold ratio 均值 0.848（p50=1.000，44 题样本）；
+  16 道不可答拒答 16/16（真实模型守住纪律，mock 的 7 误答在此归零）；
+  可答误拒 3/47——其中 q036 检索漏了第二金块（真缺料，拒得合理），
+  q021/q031 资料完整支撑下模型仍保守拒（提示词规则 4"部分覆盖就答"的
+  边界，继续放权会威胁不可答纪律，按已知边界接受）；
+  裁判双轮一致 36/44（不一致 8 条多为 4/B vs 5/A 边界与个别忠实性翻案，
+  裁判噪声 >10% 时先怀疑裁判模型再怀疑生成）；正确性均值 4.83、A/B 档 100%。
+- **真实 local 档对照（2026-09-09 run #5，qwen3:8b 生成，judge 关闭 → 仅
+  协议层指标）**：阶段 A recall@5=0.975 / recall@10=0.982 / MRR=0.940——
+  easy/medium 全 1.000，差距全在 hard 12 题（recall@10=0.931），即 512 维
+  bge-small 相对 api 档 1024 维 bge-m3 的损失集中在最难档；阶段 B 引用越界率
+  0.000、L3 违规 0、可答误拒 0/47（api 档保守拒的 q036 等本地档全部作答——
+  语义质量无裁判确认，仅协议合规）；citation gold ratio 0.798（n=47）；
+  **拒答 13/16**：q057/q058/q059 三道不可答误答全是"模型预训练记得的外部
+  知识"型（含故意埋的 hallucination_bait q059——哨兵如期咬住小模型），
+  即本地小模型倾向作答而非拒答，与 DeepSeek 的保守拒答互为镜像；
+  零成本换 3/16 拒答纪律失守，取舍记录于 ADR-0014 ③/⑤；
+- **M4.1 勘验（2026-09-09，同指纹同配置全量复现 + 消融，结论=均接受为
+  local 档边界）**：①hard 漏检精确到 q036 第二金块 155（梯度下降块）与
+  q041 第三金块 126（缩放点积注意力块）——融合名次 14/16/24，fusion_top_k
+  10→20、bm25/dense 子窗口 20→40 消融对 recall@10 **零变化**（窗口放宽
+  不改前 10 排序；子窗口扩大只把 155 从 24 提到 16）——缺口本质是
+  多金块难题的"答案跨块"：金标按答案逻辑标 2-3 块，双路检索按相关度
+  单峰排序（api 档 bge-m3 时代第二金块亦贴边 9-10 名，见 runner.py 注），
+  调参路线实证无效；②拒答 3 误答形态勘验：q057 编引用作答（借 KNN 块
+  撑话）、q058 裸答零引用（知无料仍答）、q059 幻觉答 + 引用张冠李戴
+  （论文块撑作者数）——提示词规则 3"哪怕你知道答案"与示范（"地球半径"
+  同类例）已全覆盖、DeepSeek 同规则 16/16，证规则有效而 qwen3:8b
+  服从性不足，强化提示词边际收益低且动共享协议需全档回归；③citation
+  gold ratio 0.798 同属生成模型引用精度（p50=1.000，少数题部分不中）。
+  可选项记录：换 qwen3:14b（8G 显存吃紧、生成显著变慢，不保证归零）；
+  开 local 重排器需 fastembed 版本选型（ADR-0014 ②）——均非低成本收益；
+- 裁判开销：每题两轮 × 63 题，api 档全量跑约 126 次判题调用，按题量线性；
+- 重排器与稠密向量在阶段 B 的线上效果依赖本地模型/密钥，CI 只覆盖协议层。
 
-## 6. Reading the report
+## 6. 读报告指南
 
-`data/eval-reports/{run_id:04d}-{name}.md` comes from the same origin as the
-`eval_runs` table (the report_md column). Fixed sections:
+`data/eval-reports/{run_id:04d}-{name}.md` 与 `eval_runs` 表同源（report_md 列）。
+固定章节：
 
-- **Stage A table**: check first whether recall@10 is ≥0.95 — if not, look at
-  chunking and retrieval before touching the model;
-- **Stage B table**: false refusals > 0 → check whether "the refusal threshold is
-  too tight"; answers with no citations that were not refusals > 0 → check the
-  citation prompt; refusal accuracy < 1 → go to the anomaly detail and read the
-  per-question entries (which reason category the wrong answers cluster in tells
-  you whether to fix the prompt or the corpus);
-- **Stage C table**: the two-round disagreement rate is a health signal; above 10%,
-  suspect the judge temperature/model first, then unstable generation;
-- **Anomaly detail**: pipeline failures, false refusals, wrong answers, L3
-  violations, and judge disagreements listed one by one — this is the entry point
-  for human review; for normal items, inspect the metrics_json items for the
-  per-item audit trail.
+- **阶段A 表**：先看 recall@10 有没有 ≥0.95——没有则先查分块与检索，别急着调模型；
+- **阶段B 表**：可答误拒 >0 查"拒答阈值是否过紧"；未拒答却零引用 >0 查引用
+  提示词；拒答准确率 <1 去异常明细看逐题（误答集中在哪种 reason 分类，据此
+  补提示词或补语料）；
+- **阶段C 表**：双轮不一致率是健康信号，>10% 先怀疑裁判温度/模型，再怀疑生成不稳；
+- **异常明细**：链路失败、误拒、误答、L3 违规、裁判不一致逐条列出——这是
+  人工复核的入口，正常条目请查 metrics_json 的 items 逐条留痕。
 
-Regression gate (CI): full `pytest -q` (including 58 eval unit tests) + `ruff` +
-`mypy` + `mikasa eval run --profile offline` as a smoke test. **Coverage baseline:
-93%** (3469 statements, full re-measurement after the M4.5 conversation-management
-work landed on 2026-09-09; `--cov=mikasa --cov-report=term`, 332 test cases in
-~17s; the previous baseline was 91% = 3143 statements, re-measured after M3.5
-landed). Real quality acceptance (run manually before release): `--profile api`
-(DeepSeek generation + Qwen judge, stage C scoring); with the `local` profile the
-judge is off (ADR-0014 ③) → protocol-layer metrics only (recall / citation
-discipline / refusal), with the api profile standing in as the semantic-quality
-reference.
+回归门禁口径（CI）：全量 `pytest -q`（含 eval 单测 58 条）+ `ruff` + `mypy` +
+`mikasa eval run --profile offline` 冒烟。**覆盖率基线：93%**（3469 语句，
+2026-09-09 M4.5 会话管理收工后全量重测；`--cov=mikasa --cov-report=term`，
+332 条用例 ~17s；上版基线 91% = 3143 语句 / M3.5 收工后重测）。真实质量验收（发布前人工跑）：`--profile api`（DeepSeek 生成 + Qwen 裁判，
+阶段 C 判分）；`local` 档 judge 关闭（ADR-0014 ③）→ 只看协议层
+（召回/引用纪律/拒答），语义质量对照以 api 档近似。

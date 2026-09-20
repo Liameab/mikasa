@@ -1,1688 +1,1357 @@
-# Design Decisions (ADR)
+# 设计决策记录（ADR）
 
-> Mikasa's "why" archive. Companion code: the `ADR-XXXX` references in the header
-> comments of each `src/mikasa/` module point at entries in this file; this document
-> and [`architecture.md`](architecture.md) (how things are organized) are
-> complementary, and this one carries the main body: **why it was built this way and
-> not that way**.
+> Mikasa 的"为什么"档案。配套代码：`src/mikasa/` 各模块头注释中的
+> `ADR-XXXX` 引用即本文件条目；本文与 [`architecture.md`](architecture.md)（怎么组织的）
+> 互补，是本文档的主体：**为什么这么做、不那样做**。
 >
-> This file was completed after M3 wrapped (2026-09-09); entry dates are the milestone
-> each one belongs to. Exact decision dates were not recorded day by day at the time,
-> and this document does not pretend otherwise.
+> 本文件于 M3 收工后（2026-09-09）补记完成；条目日期为所属里程碑，
+> 精确决策日期当时未逐日记录，不假装有。
 
-## Reading Conventions
+## 阅读约定
 
-- Numbering: ADR numbers were assigned on the fly when the **first landed code file**
-  was written, and recorded in its comments. They are therefore not strictly
-  chronological; the code comments are authoritative. This document was written after
-  the fact without renumbering, to avoid breaking existing references across the
-  repository.
-- **ADR-0005 is a gap**: a planning-phase draft that was skipped and never landed any
-  decision, with zero references in code. The hole is kept (renumbering would orphan
-  every existing comment, which is not worth it).
-- Status: `Accepted` (current) / `Superseded` (replaced by a later decision, kept for
-  its record value). Superseded decisions are not deleted — in technical review, how a
-  decision was overturned by data is often worth more than the decision itself.
+- 编号规则：ADR 号在**首个落地的代码文件**撰写时随手编定并写进注释，因此
+  不是严格时间序，以代码注释引用为准；本文补写时未重排编号，避免破坏
+  全仓库既有引用；
+- **ADR-0005 编号空缺**：规划期草案跳过，从未落地任何决策，代码零引用，
+  保留空洞（重排会让既有注释全部失联，不值得）；
+- 状态：`Accepted`（现行）/ `Superseded`（被后续决策取代，保留记录价值）。
+  被取代的决策不删除——技术评审里"决策如何被数据推翻"往往比决策本身更值钱。
 
-| ID | Topic | Status |
+| 编号 | 主题 | 状态 |
 | --- | --- | --- |
-| ADR-0001 | Three profile configurations (api / local / offline) | Accepted |
-| ADR-0002 | Secrets via environment variables only, never in YAML | Accepted |
-| ADR-0003 | Provider Protocol + OpenAI-compatible protocol unifying all three backends | Accepted |
-| ADR-0004 | Minimal SQLite schema_version migration | Accepted (revised in M4.5, see entry) |
-| ADR-0005 | (numbering gap from the planning phase, see Reading Conventions) | — |
-| ADR-0006 | openai SDK version pinning and a TLS escape hatch | Accepted |
-| ADR-0007 | Text-cleaning philosophy: faithful to the original, no punctuation conversion | Accepted (original version Superseded) |
-| ADR-0008 | Chinese tokenization: two implementations + automatic fallback | Accepted |
-| ADR-0009 | Hand-written BM25, no FTS5 / Elasticsearch | Accepted |
-| ADR-0010 | Exact numpy vector search, no FAISS / hnswlib | Accepted |
-| ADR-0011 | RRF fusion, no score weighting | Accepted |
-| ADR-0012 | Structured chunker: heading boundaries + semantic split priority | Accepted |
-| ADR-0013 | free Q&A bypass: decoupled from kb/eval, mode not persisted | Accepted |
-| ADR-0014 | Landing the local profile: keyless placeholder + local reranking/judge disabled + embedding-dimension discipline | Accepted |
-| ADR-0015 | Session management upgrade: folder tree + three-path title lock + suggest fallback semantics | Accepted |
-| ADR-0016 | Reader view: backend seam removal + original-file allowlist + the boundary of exposing body text | Accepted |
-| ADR-0017 | Merging the "Page" view + page-number alignment + the Ollama context window | Accepted |
-| ADR-0018 | Configuring the LLM from the web settings panel: user config overlay + live re-apply | Accepted |
-| ADR-0019 | Online paper search: two free sources, interleaved pagination, a defended downloader | Accepted (point 8 superseded by ADR-0020) |
-| ADR-0020 | "Find papers" becomes a page of its own: three sources, declared capabilities, an honest paging contract | Accepted |
-| ADR-0021 | Notes are ordinary documents: a `source_ref` marker, no schema change, force-ingest past content dedup | Accepted |
-| ADR-0022 | In-app updates: the client never sees a URL, checksums ship with the package, failed checks stay silent | Accepted |
-| ADR-0023 | A fourth source, DOAJ: key-free Chinese open-access journals, the licensing line, and no WAF bypassing | Accepted |
-| ADR-0024 | Resumable downloads, adoptable jobs: the "observation window" and slot self-healing (amends ADR-0022 points 3 and 7) | Accepted |
-| ADR-0025 | Relicensed to AGPL-3.0: the distributed build bundles AGPL PyMuPDF (change the license, not the dependency) | Accepted |
-| ADR-0026 | Synthesized question banks plus per-item verification: evaluate your own corpus, not just the sample one | Accepted |
-| ADR-0027 | Photos into notes: vision as its own config section, recognition as a draft, images anchored to the note key | Accepted |
-| ADR-0028 | Formulas are typeset locally: KaTeX is vendored into the build | Accepted |
+| ADR-0001 | 三套 profile 配置（api / local / offline） | Accepted |
+| ADR-0002 | 密钥只走环境变量，不进 YAML | Accepted |
+| ADR-0003 | Provider Protocol + OpenAI 兼容协议统一三端 | Accepted |
+| ADR-0004 | SQLite schema_version 最小迁移 | Accepted（M4.5 修订，见条目） |
+| ADR-0005 | （规划期编号空缺，见阅读约定） | — |
+| ADR-0006 | openai SDK 版本锁定与 TLS 逃生口 | Accepted |
+| ADR-0007 | 文本清洗哲学：原文保真，不转标点 | Accepted（初版 Superseded） |
+| ADR-0008 | 中文分词：双实现 + 自动降级 | Accepted |
+| ADR-0009 | 自实现 BM25，不引 FTS5 / Elasticsearch | Accepted |
+| ADR-0010 | numpy 精确向量检索，不引 FAISS / hnswlib | Accepted |
+| ADR-0011 | RRF 融合，不做分数加权 | Accepted |
+| ADR-0012 | 结构化分块器：标题边界 + 语义切分优先级 | Accepted |
+| ADR-0013 | free 自由问答旁路：与 kb/评测解耦，mode 不落库 | Accepted |
+| ADR-0014 | local profile 落地：免密钥占位 + 本地重排/裁判暂关 + 维度迁移纪律 | Accepted |
+| ADR-0015 | 会话管理升级：文件夹树 + 标题三路径锁 + suggest 降级语义 | Accepted |
+| ADR-0016 | 阅读视图：去接缝在后端 + 原文件白名单 + 正文开口的边界 | Accepted |
+| ADR-0017 | 合并「页面」视图 + 页码对齐 + Ollama 上下文窗口 | Accepted |
+| ADR-0018 | 设置面板配置模型：用户配置覆盖层 + 免重启热生效 | Accepted |
+| ADR-0019 | 在线找论文：双免费源 + 交错分页 + 有防线的下载器 | Accepted（第 8 点被 ADR-0020 部分取代） |
+| ADR-0020 | 「找论文」独立成页：三源 + 能力声明 + 诚实的翻页契约 | Accepted |
+| ADR-0021 | 笔记 = 带标记的普通文档：复用 source_ref、不加 schema 列、force 绕过内容去重 | Accepted |
+| ADR-0022 | 应用内更新：客户端碰不到 URL + 与包同批的校验和 + 检查失败静默 | Accepted |
+| ADR-0023 | 第四个来源 DOAJ：免密钥中文开放获取期刊 + 各来源的授权边界 + 不做 WAF 绕过 | Accepted |
+| ADR-0024 | 更新下载可续传、任务可接续：「观察窗」+ 槽位自愈（修订 ADR-0022 第 3、7 点） | Accepted |
+| ADR-0025 | 许可证改为 AGPL-3.0：发布物捆了 AGPL 的 PyMuPDF（不换依赖，换许可证） | Accepted |
+| ADR-0026 | 自动题库 + 逐题校验：从你自己的语料出题，评测不再绑死一份语料 | Accepted |
+| ADR-0027 | 拍照转笔记：视觉模型独立成段、识别只是草稿、原图锚在笔记 key | Accepted |
+| ADR-0028 | 公式在本地排版：把 KaTeX 内置进发布物 | Accepted |
 
 ---
 
-## ADR-0001 Three profile configurations (api / local / offline)
+## ADR-0001 三套 profile 配置（api / local / offline）
 
-- Status: Accepted | M0 (2026-09)
+- 状态：Accepted ｜ M0（2026-09）
 
-**Problem**: One codebase has to run in three shapes — cloud API (real models), local
-inference (Ollama + CPU embeddings), and zero-key offline (demo / test / CI). If
-endpoints and model names were scattered through the code, switching shapes would mean
-editing code, and secret management would have no single entry point.
+**问题**：同一套代码要跑三种形态——云端 API（真实模型）、本地推理
+（Ollama + CPU 嵌入）、零密钥离线（演示 / 测试 / CI）。若把端点、模型名
+散落在代码里，切换形态要改代码，密钥管理也没有单一入口。
 
-**Decision**: Three small files, `config/profiles/{api,local,offline}.yaml`, plus
-`config.example.yaml` as a fully commented field reference. `--profile` selects one at
-runtime; a profile declares only its overrides, which are recursively merged with the
-default configuration via `_deep_merge`. All model names, endpoints, and batch
-parameters live in YAML, with **zero hardcoding in code** (when `deepseek-chat` was
-announced for deprecation, swapping it took one line of configuration). Every config
-model uses pydantic v2 `frozen=True`: construction is validation, and the type is the
-documentation.
+**决策**：`config/profiles/{api,local,offline}.yaml` 三套小文件 +
+`config.example.yaml` 全字段注释手册；运行时 `--profile` 切换，profile 只写
+覆盖字段，与默认配置 `_deep_merge` 递归合并。所有模型名、端点、批次参数
+一律进 YAML，**代码零硬编码**（`deepseek-chat` 预告弃用时一行配置即可换）。
+配置模型全部用 pydantic v2 `frozen=True`，构造即校验，类型即文档。
 
-**Consequences**: Switching between the three shapes is one flag. The cost is a larger
-configuration surface, backstopped by `config.example.yaml` as the field reference.
-Evaluation also gets "same question set, multiple configurations" for free (see the
-three evaluation stages in evaluation.md — stages A and B deliberately run different
-configurations, both enabled by this mechanism).
+**后果**：三形态切换 = 一个 flag；代价是配置面变大，由 `config.example.yaml`
+充当字段手册兜底。评测也因此天然支持"同题库、多口径"（见 evaluation.md
+三阶段口径——A/B 阶段刻意用不同配置跑，皆出自本机制）。
 
-**Code**: `src/mikasa/config/settings.py`; `config/profiles/*.yaml`.
+**代码**：`src/mikasa/config/settings.py`；`config/profiles/*.yaml`。
 
-## ADR-0002 Secrets via environment variables only, never in YAML
+## ADR-0002 密钥只走环境变量，不进 YAML
 
-- Status: Accepted | M0 (2026-09)
+- 状态：Accepted ｜ M0（2026-09）
 
-**Problem**: Writing literal secrets into the YAML configuration is equivalent to
-committing them alongside the code; and the three profiles still need to share a single
-secret-injection mechanism.
+**问题**：YAML 配置里写字面密钥，等于把密钥和代码一起提交；三 profile
+又要共享同一份密钥注入方式。
 
-**Decision**: Configuration strings support `${ENV_VAR}` and `${ENV_VAR:-default}`
-placeholder expansion (`settings.py::expand_env_vars`, applied recursively over
-dict/list/str). Secret fields carry only `api_key_env` (the name of the expected
-environment variable); the actual value comes from `.env` (loaded by python-dotenv) or
-the system environment. Model names may ship with defaults in YAML; secrets never do.
+**决策**：配置字符串支持 `${ENV_VAR}` 与 `${ENV_VAR:-默认值}` 占位符展开
+（`settings.py::expand_env_vars`，递归作用于 dict/list/str）。密钥字段只留
+`api_key_env`（期望的环境变量名），实际值由 `.env`（python-dotenv 加载）
+或系统环境变量提供。模型名可以默认值进 YAML，密钥永不。
 
-**Consequences**: `.env` and `.env.example` are separate, so the repository can be
-published safely; `doctor` can report only which variable name is missing, without ever
-touching the value.
+**后果**：`.env` 与 `.env.example` 分离，仓库可安全公开；doctor 体检能
+"只报缺哪个变量名"而不接触值。
 
-**Code**: `src/mikasa/config/settings.py`; `.env.example` at the repository root.
+**代码**：`src/mikasa/config/settings.py`；根目录 `.env.example`。
 
-## ADR-0003 Provider Protocol + OpenAI-compatible protocol unifying all three backends
+## ADR-0003 Provider Protocol + OpenAI 兼容协议统一三端
 
-- Status: Accepted | M0-M1 (2026-09)
+- 状态：Accepted ｜ M0-M1（2026-09）
 
-**Problem**: The generation side has three classes — cloud API, local Ollama, offline
-mock — and the same is true of the embedding and reranking sides. Writing a dedicated
-call path for each would make providers proliferate, and it would fork
-evaluation/offline from the real pipeline ("the mock passes but the real thing fails"
-is the worst kind of fork).
+**问题**：生成端有"云端 API、本地 Ollama、离线 mock"三类，嵌入端与重排端
+同理；若为每端写专用调用代码，provider 会开成花，且评测/离线与真实链路
+会分叉（"mock 能跑、真实跑挂"是最糟的分叉）。
 
-**Decision**:
-1. Define one `Protocol` per capability (`LLMProvider` / `EmbeddingProvider` /
-   `RerankerProvider`); external code depends only on the protocol and never sees the
-   implementation;
-2. **api and local share a single implementation**: DeepSeek, SiliconFlow, and Ollama
-   are all compatible with the OpenAI Chat Completions protocol (Ollama exposes a
-   `/v1`-compatible endpoint), so one HTTP client covers all of them — local and api
-   differ only in base_url and model;
-3. The mock (`MockLLM`) is a complete implementation of the protocol: deterministic
-   output, zero keys, exercising the entire retrieval stack and citation protocol —
-   quality is guaranteed by real models, protocol correctness is guaranteed by the mock
-   in CI every day;
-4. `complete()` returns a `Completion` (text + token usage) — usage belongs in the
-   protocol rather than in a side-channel callback, because both evaluation reports and
-   Q&A cost accounting depend on it.
+**决策**：
+1. 每类能力定义一个 `Protocol`（`LLMProvider` / `EmbeddingProvider` /
+   `RerankerProvider`），外部代码只依赖协议，不感知实现；
+2. **api 与 local 共用同一个实现**：DeepSeek、SiliconFlow、Ollama 全兼容
+   OpenAI Chat Completions 协议（Ollama 提供 `/v1` 兼容端点），一套 HTTP
+   客户端打穿，local 与 api 只差 base_url + model；
+3. mock（`MockLLM`）是协议的完整实现：确定性输出、零密钥，跑通检索栈
+   与引用协议的整条链路——质量由真实模型保证，协议正确性由 mock 在 CI
+   每天保证；
+4. `complete()` 返回 `Completion`（文本 + token 用量）——用量字段进协议
+   而非旁路回调，因为评测报告与问答成本核算都依赖它。
 
-**Consequences**: The three backends behave isomorphically and differ only in
-configuration; evaluation stage B uses the mock to regression-test the citation protocol
-offline in CI, and only stage C brings in real models. The cost: the mock has no
-semantics (it only demonstrates the protocol), hence the honest limitation that "an
-offline run is a protocol self-check, not a measure of real quality" (evaluation.md §5).
+**后果**：三端行为同构只差配置；评测阶段 B 用 mock 在 CI 离线回归引用协议，
+阶段 C 才上真实模型。代价：mock 无语义（它只演示协议），因此有"offline
+场次是协议层自检而非真实质量"的诚实限制（evaluation.md §5）。
 
-**Code**: `src/mikasa/providers/{llm,embedding,reranker}.py`, `providers/__init__.py` (factory).
+**代码**：`src/mikasa/providers/{llm,embedding,reranker}.py`、`providers/__init__.py`（工厂）。
 
-## ADR-0004 Minimal SQLite schema_version migration
+## ADR-0004 SQLite schema_version 最小迁移
 
-- Status: Accepted | M1 (2026-09)
+- 状态：Accepted ｜ M1（2026-09）
 
-**Problem**: `mikasa.db` gains tables and columns as features evolve; after an upgrade,
-an old database may silently break on missing columns or produce wrong results.
-Bringing in a mature migration framework (alembic et al.) is overkill for a
-single-person project.
+**问题**：`mikasa.db` 随功能演进要加表加列；用户升级后旧库可能因缺列
+静默坏掉或跑出错误结果。引入成熟迁移框架（alembic 等）对单人项目过重。
 
-**Decision**: A `schema_version` table records the current version; on startup a version
-mismatch **fails loudly** ("delete the old database and re-run ingest", or use the CLI
-migration command), and never silently plays compatible with `CREATE TABLE IF NOT
-EXISTS`. The version constant is currently 1 — one shot, without pretending there were
-multiple migrations.
+**决策**：`schema_version` 表记录当前版本；启动时版本不匹配**直接报错**
+（"请删除旧库重跑 ingest"或走 CLI 迁移命令），绝不静默 "CREATE TABLE IF
+NOT EXISTS" 假装兼容。版本常量当前为 1——一次成型，不假装有过多次迁移。
 
-**Consequences**: The upgrade path is explicit and user-visible; database-structure
-consistency is backstopped by a hard check, and no "half-migrated" state exists. The
-cost: during early iteration, version bumps require a rebuild (ingest is idempotent, so
-the rebuild cost is bounded — see "ingestion pipeline" in architecture.md).
+**后果**：升级路径是显式的、人会看见的；库结构一致性由硬检查兜底，
+不存在"半迁移"状态。代价：早期迭代期版本升级要重建（ingest 幂等，
+重建成本可控——见 architecture.md"入库链路"）。
 
-**Code**: `src/mikasa/storage/db.py`; the `schema_version` validation logic.
+**代码**：`src/mikasa/storage/db.py`；`schema_version` 校验逻辑。
 
 ---
 
-**Revised decision (M4.5, 2026-09-09)**: The session-management upgrade (title column /
-folder table) was the first real migration — for the first time the cost of rebuilding
-exceeded the cost of migrating (27 sessions / 88 messages of real user data), so the
-decision was revised into a **dual-track** design, with the original spirit intact:
-- **Older database → automatic step-by-step migration** (no more error-and-delete):
-  `_MIGRATIONS = {target_version: migration_function}` runs along the chain — each step
-  is internally idempotent (ALTER guarded by `PRAGMA table_info`, backfill resumed on the
-  `title IS NULL` condition so a crash mid-way can be re-run from where it stopped), and
-  each step commits independently once with a `logger.info` trace; the in-database
-  version stays at the "last successful step", so there is no half-migrated window where
-  the version row runs ahead;
-- **Newer database → hard error, kept as-is**: an old binary never reads or writes a
-  newer database (preventing new column semantics from being misread by old code, such
-  as the v2 title_manual lock); a version gap (missing migration path) likewise
-  hard-errors and stops in place, leaving data intact;
-- **New constraints**: the final-state schema SQL, the historical version snapshot
-  (`_SCHEMA_V1_SQL`, immutable), and the migration functions must land in the same PR;
-  the final-state `_SCHEMA_SQL` runs **only on a brand-new database**, while an existing
-  database goes through migration functions alone (the final-state SQL is all IF NOT
-  EXISTS, making it a no-op on an old database and never adding columns to old tables —
-  adding columns is ALTER's job);
-- **Status**: the M4.5 entry remains Accepted (the original "delete and rebuild"
-  paragraph is superseded by this section).
-
-**Code**: `src/mikasa/storage/db.py` (the three branches in init_db + `_upgrade` +
-`_migrate_v1_to_v2`); migration tests in `tests/unit/storage/test_db_migration.py`.
-
-## ADR-0006 openai SDK version pinning and a TLS escape hatch
-
-- Status: Accepted | M1 (2026-09)
-
-**Problem**: Since 3.0 the openai SDK has swapped its underlying transport (httpx →
-bundled httpx2): the API surface is unchanged but the behavior and the dependency surface
-change completely. Some environments (corporate proxies, older TLS stacks) may fail to
-connect.
-
-**Decision**: Pin `openai>=3.3,<4` (the new transport is the main path), with a comment
-in pyproject stating the escape hatch: if TLS problems appear, fall back to `openai<3`.
-This is a **configuration-level** fallback; the code uses only the stable Chat
-Completions API and is decoupled from the SDK's major version. One related conclusion:
-the httpx2 bundled with 3.x and the classic `httpx` are **two coexisting packages**;
-starlette's `TestClient` needs the classic httpx transport, so dev dependencies
-explicitly declare `httpx>=0.27,<1` — the two package names coexist without conflict, so
-do not remove it.
-
-**Consequences**: The dependency strategy is "pin a known-good range + leave an escape
-hatch for each range + use only cross-version-stable APIs in code". See ADR-0008 (jieba)
-for the same strategy — the project uniformly distrusts the idea that pinning a single
-version solves the problem.
-
-**Code**: the version-pinning section of `pyproject.toml` (with comments).
-
-## ADR-0007 Text-cleaning philosophy: faithful to the original, no punctuation conversion
-
-- Status: Accepted (original version Superseded) | M1 (2026-09)
-
-**Problem**: Chinese documents in a Windows environment come with three classic
-pitfalls — legacy encodings such as GBK, leftover PDF headers and footers, and fused
-duplicate lines (line-by-line text extracted from PDFs). Whether and how aggressively to
-clean before ingestion directly determines downstream display quality.
-
-**Original decision (superseded)**: Do **full-width → half-width normalization** (mapping
-`０-９`, `Ａ-Ｚ`), on the assumption that "fewer punctuation marks on the retrieval side
-is better". It was overturned in review before it landed:
-
-**Revised decision (current)**: Cleaning performs only semantics-preserving format
-normalization — trimming and collapsing whitespace, filtering control characters,
-removing empty lines; **no full-width/half-width punctuation conversion at all**. The
-rationale comes from evidence in downstream dependencies:
-1. Citation tracing display and chunk sentence splitting both depend on the original
-   typesetting (breaking at `。"` changes sentence boundaries);
-2. Retrieval-side tokenizers (jieba / bigram) ignore punctuation anyway, so conversion
-   yields zero recall benefit;
-3. Conversion only serves "looking tidy", while what it damages is display fidelity and
-   reproducibility.
-Encoding detection is also consolidated here (legacy encodings such as GBK are converted
-to UTF-8 at this point), while header/footer and duplicate-line problems are solved at
-the loader layer (those are "line" semantics, not "character" semantics).
-
-**Consequences**: There is exactly one cleaning site in the repository; Chinese
-punctuation (""，。…) is stored exactly as it appears in the source. Lesson on file:
-"cleaning aggressiveness must be justified layer by layer by its downstream consumers
-(display, sentence splitting, tokenization), not by an intuition about tidiness" — a
-favorite over-cleaning counterexample in technical review.
-
-**Code**: `src/mikasa/utils/text.py`.
-
-## ADR-0008 Chinese tokenization: two implementations + automatic fallback
-
-- Status: Accepted | M1 (2026-09)
-
-**Problem**: The project needs Chinese tokenization. jieba is the de facto standard, but
-new setuptools releases since 2026 remove `pkg_resources`, so `import jieba` hard-fails
-in a fresh environment (jieba#1043; the officially endorsed stopgap is pinning
-`setuptools<82`). Depending on jieba directly means the assumption "if it installs, it
-runs" can shatter on a user's machine at any time; pinning versions alone would stake the
-project's fate on a single stopgap.
-
-**Decision**: Three layers of defense instead of a single point of dependency —
-1. `Tokenizer` is defined as a **function protocol** (`Callable[[str], list[str]]`);
-   callers never see the implementation;
-2. Two implementations: jieba (quality first) and a pure-Python character bigram (zero
-   dependencies, deterministic); if the jieba import fails (ImportError — a real failure;
-   a silenced deprecation UserWarning is not masked) it automatically falls back to
-   bigram, with the probe result cached;
-3. On versions, the official stopgap is still applied — `jieba==0.42.1 + setuptools<82` —
-   but as a **performance optimization rather than a survival dependency**: if the
-   stopgap breaks, the worst case is falling back to bigram, which is not fatal;
-4. The impact of tokenization quality is quantified: the gap between bigram and jieba on
-   retrieval metrics is measured and disclosed in the evaluation (evaluation.md).
-
-**Consequences**: `doctor` can report plainly that "jieba is unavailable, degraded to
-bigram" (see limitations-and-failures.md), rather than users quietly receiving degraded
-quality without knowing it.
-
-**Code**: `src/mikasa/index/tokenizer.py`; the jieba check in `cli doctor`.
-
-## ADR-0009 Hand-written BM25, no FTS5 / Elasticsearch
-
-- Status: Accepted | M1 (2026-09)
-
-**Problem**: Selecting the sparse retrieval path. SQLite FTS5 is ready-made and
-Elasticsearch is the industry standard, but neither fits: FTS5's default Chinese
-tokenization is essentially unusable (attaching your own tokenizer amounts to a
-half-implementation), while ES is a sledgehammer for a personal knowledge base (JVM +
-operations).
-
-**Decision**: Hand-write Okapi BM25 (~100 lines):
-1. **Educational and technical-review value**: IDF, term-frequency saturation, and length
-   normalization (k1/b) are information-retrieval classics, with formulas that are
-   visible and tunable and that support ablations in the evaluation (this is what decides
-   the trade-off — the project is a showcase project, and algorithmic transparency is an
-   asset, not a liability);
-2. **Scale fit**: a personal library holds a few thousand chunks, and full linear scoring
-   measures under 10ms, so the complexity payoff of an inverted index is zero;
-3. **Performance engineering**: the full text is **tokenized ahead of time and persisted**
-   at ingest (`chunks.tokens`, JSON), so a query tokenizes only the query. Build is
-   O(total terms) and query is O(number of documents × query terms); documents are
-   indexed in fixed ascending chunk_id order and results come back as [row number,
-   score]. The smoothed IDF formula is `ln(1 + (N-df+0.5)/(df+0.5))` to avoid negative
-   scores.
-
-**Consequences**: Gains a fully explainable IR module and a clean ablation surface; the
-cost is giving up FTS5's mature edge features (synonyms and the like), which a personal
-library does not need.
-
-**Code**: `src/mikasa/index/bm25.py`.
-
-## ADR-0010 Exact numpy vector search, no FAISS / hnswlib
-
-- Status: Accepted | M1 (2026-09)
-
-**Problem**: The dense vector path needs a search engine. FAISS / hnswlib are the
-standard answer, but this project is constrained to "zero-compile installation on
-Windows" — neither ships a prebuilt wheel on Windows (faiss-cpu is conda-only; hnswlib
-is source-only), so pulling them in means asking users to install a compiler.
-
-**Decision**: Exact (brute-force) search with numpy: row-normalized matrices plus matrix
-multiplication — the dot product is the cosine.
-1. **Scale argument**: a personal library is under 100k chunks, and numpy matrix
-   multiplication measures under 500ms; ANN's speedup payoff does not hold at this scale;
-2. **A bonus of exact search**: no approximation error, so recall in the evaluation is
-   *true* recall and the experimental conclusions are clean (an approximate index would
-   fold index error into the ablation conclusions);
-3. Memory budget: n × dim × 4 bytes — 10k chunks × 512 dimensions ≈ 20MB, no pressure
-   for a personal library;
-4. The interface is defined as a `VectorStore` Protocol (runtime_checkable), preserving
-   an extension point for swapping in an ANN backend later.
-
-**Consequences**: Trading away the "sophistication" of a library choice for zero-compile
-installation and an exact, reproducible evaluation surface. Structurally identical to
-ADR-0009: **implement it yourself after a scale argument, rather than reaching for a
-library by default**.
-
-**Code**: `src/mikasa/index/vector_store.py`.
-
-## ADR-0011 RRF fusion, no score weighting
-
-- Status: Accepted | M1 (2026-09)
-
-**Problem**: How should the results of the two paths (BM25 + dense) be merged? Linear
-weighting is the most intuitive approach, but BM25 scores and cosine similarities have
-entirely different units and distributions, so the weights would have to be tuned per
-corpus and would be brittle; normalization in turn introduces its own calibration
-problems.
-
-**Decision**: RRF (Reciprocal Rank Fusion): `score = Σ 1/(k + rank)`, with k=60 (the
-classic value).
-1. It depends on ranks only and requires **no cross-path calibration** whatsoever;
-2. It is a stable and effective fusion baseline in Kaggle and search competitions, with
-   a track record;
-3. It can be computed by hand and walked through in a demo (a plus for a showcase
-   project).
-Known properties are disclosed as they are: a document must be ranked in both paths to
-earn scores from both, and a document unique to one path but ranked very high can still
-win — the evaluation shows evidence that fusion beats a single path, rather than only the
-good news.
-
-**Consequences**: The fusion implementation is 20 lines; RRF's effect is evidenced by
-stage A metrics.
-
-**Code**: `src/mikasa/index/hybrid.py`, `pipeline/retriever.py`.
-
-## ADR-0012 Structured chunker: heading boundaries + semantic split priority
-
-- Status: Accepted | M1 (2026-09)
-
-**Problem**: The first gate on RAG retrieval quality is chunking. Fixed-length splitting
-(a hard cut at 400 characters, say) is the simplest to implement, but it cuts sentences
-and paragraphs in half, damaging both word meaning and citation granularity — retrieval
-quality and the tracing experience suffer together.
-
-**Decision** (full strategy in "chunking strategy" in architecture.md; the trade-offs are
-recorded here):
-1. **Structure first**: a heading change is a natural chunk boundary (the corpus consists
-   of original notes with Markdown structure, and headings are the strongest semantic
-   separator);
-2. **Within a block, split long text by "paragraph → sentence-final punctuation → comma →
-   hard cut" priority**, avoiding broken word meaning — better a slightly shorter chunk
-   than a cut meaning;
-3. **Overlap window**: adjacent chunks share up to `overlap` characters at the tail,
-   mitigating recall loss from "an answer sliced in half"; overlap continues only under
-   the same heading and never crosses headings;
-4. **Heading prefixing**: at ingest the heading path is prepended to the chunk (for
-   retrieval), while body and heading are carried separately (so display and generation do
-   not duplicate the heading) — which makes an ablation possible;
-5. **Length invariant (chunk ≤ size)** as a hard constraint: paragraphs are joined with
-   `\n\n` and the window budget counts separators; the overlap tail is **truncated rather
-   than over-issued** to fit remaining capacity — this is where a real out-of-bounds bug
-   occurred, now guarded by a test (`test_overlap_respects_size`).
-
-**Consequences**: The chunker becomes a core component that is unit-testable and
-ablatable; every knob of the chunking strategy (size/overlap/title_prefix) lives in
-configuration and feeds the evaluation.
-
-**Code**: `src/mikasa/ingest/chunker.py`, `ingest/service.py`.
-
-## ADR-0013 free Q&A bypass: decoupled from kb/eval, mode not persisted
-
-- Status: Accepted | M3.5 (2026-09-09, feature release driven by user-reported friction)
-
-**Problem**: The system only did strict RAG — any question outside the knowledge base was
-refused with a uniform refusal template (an M2 acceptance feature that must not change).
-But once the user connected a real LLM API (DeepSeek), knowledge outside the library that
-came up while writing practice questions had no outlet, and the learning experience was
-locked shut.
-
-**Decision**: Split Q&A into two modes, with the default kb keeping its behavior unchanged
-word for word:
-1. **The bypass point is in the AskService layer** (the `mode="free"` branch), not in the
-   Generator: the Generator's `build_answer` depends on resolving citations from hits (no
-   hits, no citations), and adding a "no-citation mode" to the Generator would stuff RAG
-   semantics into a component that should not know about them. free talks to the LLM
-   directly and assembles `Answer(citations=[], refused=False, ...)` by hand — the bypass
-   is deliberate design, and the three defense layers (L1 hard validation / L2 support /
-   L3 refusal discipline) constrain only kb;
-2. **mode is not persisted**: `qa_messages` has no mode column, avoiding a schema
-   migration (the `schema_version=1` hard check from ADR-0004 stays untouched). Replay and
-   rendering discriminate using existing columns: kb's `latency_ms` always contains a
-   `retrieve` key, free has only `generate` — the history endpoint decides [n] chip
-   rendering from key presence (a `[1]` in a free turn's body text is model output, not an
-   out-of-bounds red flag); (M4.5 note: the session-management upgrade broke
-   `schema_version=1` for the first time and moved to v2, adding title/folder_id columns,
-   and the mode-not-persisted discrimination design survived its first migration unshaken
-   — the `qa_messages` structure is unchanged, see ADR-0015);
-3. **The guard keys off `settings.llm.backend`, not the profile string**: profiles are
-   decoupled from backends (YAML can override), and the mock has no semantics → free
-   always raises ConfigError;
-4. **free is decoupled from evaluation**: `eval/` hardcodes Retriever + Generator and does
-   not go through AskService, so protocol metrics are naturally unpolluted by free mode;
-   multi-turn free injects the most recent ≤5 turns of **raw messages** (no kb-style
-   summary compression, preserving referential continuity), and the FREE system prompt
-   suppresses [n]/refusal-template contamination from earlier turns; for turns without
-   citations (free turns) the kb summary switches to the honest wording "已作答（未引用知识库）"
-   ("answered without knowledge-base citations"), no longer falsely claiming that citations
-   were given.
-
-**Contract**: CLI `--mode` (typer Literal choices) → ConfigError at the service layer (red
-text, exit 1); the Web request body's `mode` is validated by a pydantic Literal (invalid
-values → 422) → AskService guard (free+mock → 400 error envelope); in SSE streaming the
-guard throws **before the generator's first yield** → the try in `_to_frames` produces
-**exactly one error frame, zero meta/done**; the frontend greys the button out when
-`/api/health.profile == "offline"` (a progressive-enhancement signal; the backend guard
-remains the final authority).
-
-**Consequences**: Three entry points (CLI / Web non-streaming / Web streaming) each need
-mode pass-through and guard tests; the UI's "switch at any time within a session"
-semantics means every question carries the switch state in effect at the time, and
-messages can be replayed and classified.
-
-**Code**: `pipeline/{ask,prompts}.py`, `cli/__init__.py`, `web/routers/qa.py`, `web/static/`.
-
-## ADR-0014 Landing the local profile: keyless placeholder / local reranking and judge disabled / embedding-dimension discipline
-
-- Status: Accepted | M4 (2026-09-09)
-
-**Problem**: M1 already stubbed out all the local-profile provider code (shared
-OpenAICompatLLM, LocalFastEmbed, factory dispatch, the `[local]` extra), but three hard
-blockers kept `--profile local` from actually running: (1) the Ollama-compatible endpoint
-needs no key, while `_get_client` raises ConfigError for any keyless configuration;
-(2) the local reranker / judge depend on fastembed cross-encoders and a two-vendor judge
-setup, and enabling them directly would drag "fully local" back into a calibration
-quagmire; (3) api and local have different embedding dimensions (bge-m3 at 1024-d vs
-bge-small-zh-v1.5 at 512-d), so switching profiles without rebuilding the index would
-silently degrade or even crash the dense path. This entry records five landing points:
-
-**① Keyless placeholder key — the pass-through point is the provider layer, not the settings layer**
-Ollama's `/v1` does not validate `Authorization` (it only requires a non-empty value), yet
-the openai SDK enforces a non-empty api_key at construction time. The local profile sets
-`api_key_env: ""` → `api_key` is always None, so the provider layer injects the module
-constant placeholder `_LOCAL_API_KEY = "ollama"`. The pass-through point is deliberately
-not in the settings layer: if the config layer permitted "no key", the api profile would
-also be silently let through whenever a key is missing (the worst failure mode). Putting
-it in the provider layer, branching on `config.backend`, leaves api's fail-early semantics
-(ConfigError: "please put your key in .env") untouched word for word. A future judge going
-through the same OpenAICompatLLM inherits the pass-through automatically.
-
-**② Local reranking (reranker backend) stays none**
-LocalReranker's code and the `[local]` dependencies are both present, but M4 does not
-enable it: RRF fusion retrieval is already evidenced by the evaluation (recall@10 = 1.000),
-while the local reranker's benefit has not been validated on real data — enabling an
-unproven component would only fork the metrics (two configurations answering the same
-questions would no longer be comparable). **A fact added during M4 implementation:
-fastembed 0.8.0 has removed every reranking API** (no top-level TextCrossEncoder /
-TextReranker, and the rerank submodule does not even exist) — LocalReranker is a starting
-point kept in the shape of an earlier API, so switching to `local` is not a one-line
-configuration change: it requires a version/implementation choice first (fall back to
-0.7.x or switch to a standalone reranking package; see the class docstring in reranker.py
-and limitations-and-failures.md §4), and the trade-off flips with the evidence.
-
-**③ Local judge stays disabled**
-Stage C's semantic judge relies on "two-vendor hedging" to prevent self-preference (Qwen
-judging DeepSeek, and vice versa). Locally there is only one Ollama model, so there is
-nothing to hedge with; self-scoring by the same model has no quality calibration, and
-mixing it into the acceptance baseline would contaminate how the metrics are interpreted.
-Local evaluation therefore runs only retrieval-layer and protocol-layer metrics
-(recall/MRR/nDCG, out-of-bounds rate, refusal rate); these layers do not involve the LLM,
-and the metrics are isomorphic to api/offline. Evaluate what a system can be evaluated on
-first — disclosed honestly.
-
-**④ Embedding-dimension migration discipline (switching profiles requires a reindex, three layers of defense)**
-`chunk_id` is the primary key of the embeddings table (exactly one vector per chunk) →
-single database, **single-model semantics**. api (bge-m3, 1024-d) and local
-(bge-small-zh-v1.5, 512-d) vectors cannot coexist in the same table or be queried
-together. The discipline: switching the embedding model requires `mikasa ingest --reindex`
-(ingest is idempotent, so the rebuild cost is bounded), with three layers of defense:
-1. **doctor's three-way index consistency check** (`_check_index_consistency`): snapshot
-   `meta.json` model/dimensions × in-database vector row counts (grouped by model, total
-   chunk count, the set of dimensions) × current configuration; any mismatch prints a red
-   line with reindex guidance — both "the whole database is on the wrong model" (snapshot
-   is bge-m3 while the config is bge-small) and "partial migration" (two models left in the
-   database) are caught, the latter via GROUP BY row counts rather than taking the latest
-   row (`LIMIT 1` would mask a majority of stale vectors);
-2. **Retrieval-side dimension defense**: `ExactVectorStore.search` raises an explicit
-   `StorageError` on a dimension mismatch (pointing at reindex) instead of numpy's bare
-   ValueError — the CLI only catches StorageError/ConfigError, so a bare error would leak
-   out as a traceback;
-3. **Evaluation fingerprint against misconfiguration** (pre-existing; `corpus_digest` mixes
-   in chunk_id): after a reindex the golden-set fingerprint necessarily mismatches, forcing
-   a re-run of `tools/build_golden.py`; there is no silent misconfiguration where "an old
-   golden set tests a new index".
-The runtime BM25 fallback warning (in the manager) stays as it is: the fallback semantics
-for a single-point incident remain, with up-front interception handled by doctor.
-
-**⑤ doctor evolves toward backend gating**
-Health checks move from "generic items" to backend gating: the local profile gains three
-lines for "Ollama service reachable / model pulled / fastembed present", with failure
-messages carrying an actionable next step (`ollama pull` / `pip install -e ".[local]"` /
-the Windows `OLLAMA_BASE_URL` escape hatch). Probe functions are module-level
-(monkeypatchable; unit tests do not actually connect). **doctor never triggers a model
-download** (constructing TextEmbedding pulls ~100MB; downloading belongs to the runtime of
-the first ingest or question). doctor is still a hard gate: any failing item is summarized
-in a red line and exits 1 — the "warning" semantics are carried by the failure text, not
-by "not exiting".
-
-**Code**: `src/mikasa/providers/llm.py` (_LOCAL_API_KEY), `cli/__init__.py` (probe functions
-+ doctor gating), `storage/repo.py` (embedding_models_in_db), `index/vector_store.py`
-(dimension defense).
-
-## ADR-0015 Session management upgrade: folder tree + three-path title lock + suggest fallback semantics
-
-- Status: Accepted | M4.5 (2026-09-09, management release driven by observed user friction)
-- Related: ADR-0004 (first real migration, see its revision), ADR-0013 (mode not persisted,
-  which survived its first migration unshaken)
-
-**Problem**: The sidebar session list offered only hardcoded "session #id" titles and a
-single stream; once sessions multiplied they could not be found or grouped. The user asked
-for the shape of a compiler's left-hand file tree — multi-level nested folders, batch
-management of sessions by folder, titles auto-distilled from the core of the conversation,
-and rename/delete.
-
-**Decision** (trade-offs, item by item):
-
-1. **Title strategy = three-path lock (title_manual column)**. There are three write paths
-   for automatic distillation, and the lock semantics are unified in the repo layer's WHERE
-   conditions (the comments are the contract):
-   - `auto_title_if_untitled` (the _record hook after the first Q&A round): writes only to
-     sessions with `title_manual=0 AND title IS NULL` — **only the first round**, with no
-     drift across rounds (a title should not change face every round);
-   - `apply_suggested_title` (the suggest entry point): may upgrade a session that was
-     **already auto-named** (a truncation fallback lands first, and LLM distillation
-     overwrites it), but the `title_manual=0` guard is unchanged;
-   - `set_session_title` (user rename): non-empty → persist and lock `title_manual=1` —
-     **a manual title is never overwritten automatically** (LLM distillation only returns a
-     suggestion, not a write; applied=false semantics); explicit clearing (null/empty) →
-     unlock back to untitled, and the next Q&A round names it again automatically (closing
-     the loop: clearing a title ≠ running bare forever after).
-   - `list_sessions` deliberately omits title_manual from its SELECT (to prevent misuse);
-     lock state is exposed only through `get_session` and suggest's applied flag.
-2. **Title material and fallback = truncation fallback + one LLM pass**. The material is
-   uniformly the first question + first answer from the database (`first_user_message` is
-   the single source of truth; the CLI/Web/streaming entry points share the _record hook →
-   the CLI benefits with zero wiring). offline/mock has no LLM semantics → **the truncation
-   fallback is a legitimate fallback, not an error** (first question folded to 20
-   characters, millisecond-scale), and suggest reports applied=true; api/local go through
-   the LLM (system prompt: ≤16 Chinese characters, no quotes/numbering/line breaks;
-   temperature from configuration, max_tokens=24), and **any failure or empty output →
-   truncation fallback** (traced in the logger; a failed distillation never takes down the
-   Q&A stream). The CLI never calls the LLM.
-3. **Folders = a multi-level nested tree, but stored flat and assembled in the frontend**.
-   `qa_folders` is a single self-referencing table with parent_id (NULL = root); the list
-   is flat in ascending id order, and `buildTree` nests by parent_id in the frontend (the
-   foreign key guarantees parent id < child id, so the order is natural). Trade-off: the
-   backend does not serialize recursively — tree operations (move/delete) go straight by
-   id, session-to-folder membership stores a single folder_id column, and no closure table
-   is needed. Cycle prevention (new parent ∈ self ∪ descendants) is one `parent_id in
-   folder_descendant_ids(...)` (WITH RECURSIVE), and the frontend's move menu greys out
-   targets with the same predicate (subtreeIds).
-4. **Two kinds of delete semantics**: deleting a session = cascading message cleanup (the
-   existing `qa_messages` ON DELETE CASCADE removes the contents along with the container —
-   a session and its messages are a composition); deleting a folder = **only empty folders**
-   (409 with child-folder/session counts, requiring the user to move things out first) — a
-   folder is a container, and a container never cascades onto its contents (the `qa_folders`
-   foreign keys are NO ACTION; should the application-layer 409 be bypassed, the constraint
-   backstops it, and user sessions are never silently cascade-deleted).
-5. **PATCH overwrite semantics = model_fields_set determines field presence**: an explicit
-   null is a legitimate override value (title null = clear and unlock, folder_id null = move
-   back to root), and an absent field means that attribute is untouched — a single-field
-   rename does not damage the other attribute (renaming does not reset folder membership,
-   and so on).
-6. **Web menu interaction, no drag-and-drop** (user decision: move via menu): a ⋯ menu with
-   a "move to…" submenu (path list with the root pinned at the top, self + descendants
-   greyed out, current location greyed out, ← back to the main menu); inline rename and
-   new-folder input (Enter to submit, Esc to cancel, click-outside to cancel); deletion
-   always behind a confirm() second confirmation.
-7. **The first-round auto-distillation loop closes in the Web layer**: no active session at
-   send time = first question → POST /title/suggest after the done frame (input not
-   disabled, failures silent) → refresh the sidebar. The discriminator is
-   "activeSession===null at send time" rather than the meta frame — meta is sent every round
-   (follow-ups included), and a follow-up should not re-run distillation (the material is
-   first question + first answer, so re-running only burns an LLM call for nothing).
-8. **Expansion state is not persisted** (a refresh returns everything to collapsed); titles
-   do not update with rounds; session search/archive/pinning are not done — see the feature
-   backlog in known-issues.md; nothing is pre-built before its value has been proven.
-
-**Consequences**: The first real schema migration (v1→v2) brought the ADR-0004 revision with
-it (automatic step-by-step migration + idempotent re-entry); the live database of 27
-sessions / 88 messages upgraded smoothly, and the rehearsal is on record (one 1→2 step in
-the migration log, title backfill = each session's first question truncated, counts
-unchanged, zero migrations on the second start). The cost: CLI chat does not display titles
-(the list endpoint enhancement does not affect it), and after qa_sessions gains columns any
-"SELECT *" consumer automatically gets extra keys (a loose superset that breaks no existing
-assertion).
-
-**Code**: `storage/{db,repo}.py`, `utils/text.py` (fold_title),
-`pipeline/{ask,prompts}.py`, `web/{schemas.py,routers/sessions.py}`,
-`web/static/js/{tree,qa-tree,qa}.js`; tests `tests/unit/storage/
-test_db_migration.py`, `test_repo_sessions.py`, `tests/unit/web/
-test_sessions_api.py`; smoke `tools/smoke_tree.mjs`.
+**修订决策（M4.5，2026-09-09）**：会话管理升级（标题列/文件夹表）是
+首次真实迁移——重建的代价第一次超过迁移本身（27 会话/88 消息是用户
+实据），决策随之修订为**双轨**，原始精神不变：
+- **低版本库 → 自动逐级迁移**（不再报错删库）：`_MIGRATIONS = {目标版本:
+  迁移函数}` 沿链执行——每级内部幂等（ALTER 用 `PRAGMA table_info` 守卫、
+  回填按 `title IS NULL` 条件续跑，半途崩溃后重跑可从已完成处续走）、
+  每级独立提交一次 + `logger.info` 留痕；库内版本停留在"最后成功级"，
+  不存在版本行先行的半迁移窗口；
+- **高版本库 → 硬报错原样保留**：旧程序绝不读写新库（防止新列语义被
+  旧代码误解，如 v2 的 title_manual 锁）；版本断层（缺迁移路径）同样
+  硬报错并停在原地，数据不损坏；
+- **新增约束**：schema 终态 SQL、历史版本快照（`_SCHEMA_V1_SQL`，
+  immutable）、迁移函数三者同 PR 落地；`_SCHEMA_SQL` 终态**只在全新库**
+  执行，历史库只走迁移函数（终态 SQL 全 IF NOT EXISTS，在旧库上是
+  空操作、绝不给旧表补列——补列是 ALTER 的活）。
+- **状态**：M4.5 条目仍 Accepted（初版"删库重来"段被本节取代）。
+
+**代码**：`src/mikasa/storage/db.py`（init_db 三分支 + `_upgrade` +
+`_migrate_v1_to_v2`）；迁移测试见 `tests/unit/storage/test_db_migration.py`。
+
+## ADR-0006 openai SDK 版本锁定与 TLS 逃生口
+
+- 状态：Accepted ｜ M1（2026-09）
+
+**问题**：openai SDK 3.0 起更换底层传输层（httpx → 内置 httpx2），API 层
+不变但行为与依赖面全变；个别环境（公司代理 / 老旧 TLS 栈）可能连不上。
+
+**决策**：锁 `openai>=3.3,<4`（新传输层为主路径），pyproject 注释写明：
+若遇 TLS 问题可退回 `openai<3` 的逃生口——这是**配置级**的退回，
+代码只用 Chat Completions 稳定 API，与 SDK 大版本解耦。
+另一条连带结论：3.x 内置的 httpx2 与经典 `httpx` **是两个共存包**，
+starlette `TestClient` 需要经典 httpx 传输层，因此 dev 依赖显式声明
+`httpx>=0.27,<1`——两个包名共存无冲突，别删。
+
+**后果**：依赖策略 = "锁定已知良好的区间 + 每个区间留下退路 + 代码只用
+跨版本稳定 API"。同类策略见 ADR-0008（jieba）——该项目统一不信任
+"锁死单版本"能解决问题。
+
+**代码**：`pyproject.toml` 版本锁定说明段（含注释）。
+
+## ADR-0007 文本清洗哲学：原文保真，不转标点
+
+- 状态：Accepted（初版 Superseded）｜ M1（2026-09）
+
+**问题**：Windows 环境的中文文档自带三坑——GBK 等历史编码、PDF 页眉页脚
+残留、粘连重复行（PDF 抽取的逐行文本）。入库前"洗不洗、洗多重"直接决定
+下游展示质量。
+
+**初版决策（已 Superseded）**：做**全角→半角归一**（`０-９`、`Ａ-Ｚ` 映射），
+理由是想当然的"检索侧标点越少越好"。落地前即被评审推翻：
+
+**修订决策（现行）**：清洗只做"不改变语义"的格式收敛——首尾与折叠空白、
+控制字符过滤、空行清理；**不做任何全半角标点转换**。理由来自下游依赖
+的实证：
+1. 引用溯源展示与分块断句都依赖原文排版（`。"` 断开后句子边界即变）；
+2. 检索侧分词器（jieba / bigram）天然忽略标点，转换对召回零收益；
+3. 转换只服务"看起来整齐"，破坏的是展示真实性与可复现性。
+另把编码探测收敛在此（GBK 等历史编码在此转 UTF-8），页眉页脚与重复行
+问题在 loader 层解决（那是"行"的语义，不是"字符"的语义）。
+
+**后果**：全仓库只有一处清洗；中文标点（""，。…）随原文保存。教训存档：
+"清洗力度要由下游消费者（展示、断句、分词）逐层论证，不能凭整洁直觉"——
+评审常问的过度清洗反例。
+
+**代码**：`src/mikasa/utils/text.py`。
+
+## ADR-0008 中文分词：双实现 + 自动降级
+
+- 状态：Accepted ｜ M1（2026-09）
+
+**问题**：项目要中文分词。jieba 是事实标准，但 2026 年起新版 setuptools
+移除 `pkg_resources`，`import jieba` 在新环境必崩（jieba#1043；官方认可的
+临时方案是锁 `setuptools<82`）。若直接依赖 jieba，"装得上就能跑"的假设
+在用户机器上随时会碎；若只锁版本，则是把项目命运押在单一临时方案上。
+
+**决策**：三层防御而非单点依赖——
+1. `Tokenizer` 定义为**函数协议**（`Callable[[str], list[str]]`），调用方
+   不感知实现；
+2. 双实现：jieba（质量优先）与纯 Python 字符 bigram（零依赖、确定性）；
+   jieba 导入失败（ImportError，真实故障；弃用 UserWarning 被静音不屏蔽）
+   → 自动降级 bigram，探针结果缓存；
+3. 版本上仍按官方方案锁 `jieba==0.42.1 + setuptools<82`，但作为**性能
+   优化而非生存依赖**——方案失效最坏退回 bigram，不致命；
+4. 分词质量影响被量化：bigram 与 jieba 对检索指标的差距在评测中实测
+   并披露（evaluation.md）。
+
+**后果**：doctor 能明确报告"jieba 不可用，已降级 bigram"（见
+limitations-and-failures.md），而不是用户悄悄拿到降级质量还不知情。
+
+**代码**：`src/mikasa/index/tokenizer.py`；`cli doctor` jieba 检查。
+
+## ADR-0009 自实现 BM25，不引 FTS5 / Elasticsearch
+
+- 状态：Accepted ｜ M1（2026-09）
+
+**问题**：稀疏检索路选型。SQLite FTS5 现成、Elasticsearch 是工业标配，
+但两者各有不适：FTS5 的默认中文分词基本不可用（需自挂 tokenizer，等于
+半自实现）；ES 对个人知识库是大炮打蚊子（JVM + 运维）。
+
+**决策**：手写 Okapi BM25（约 100 行）：
+1. **教学与面试价值**：IDF、词频饱和、长度归一化（k1/b）是信息检索
+   经典内容，公式可见可调，评测里可跑 ablations（这决定取舍——项目是
+   展示型项目，算法透明是资产不是债务）；
+2. **规模匹配**：个人库数千 chunk，全量线性打分实测 <10ms，倒排表的
+   复杂度收益为零；
+3. **性能工程**：入库时对全文**预分词落盘**（`chunks.tokens`，JSON），
+   查询时只分词 query，构建 O(总词条数)、查询 O(文档数 × query 词条数)；
+   文档按 chunk_id 升序固定顺序索引，返回 [行号, 分数]。
+平滑 IDF 公式取 `ln(1 + (N-df+0.5)/(df+0.5))` 避免负分。
+
+**后果**：换来一个完全可讲的 IR 模块与干净的消融实验面；代价是放弃
+FTS5 的成熟边界（同义词等，个人库用不上）。
+
+**代码**：`src/mikasa/index/bm25.py`。
+
+## ADR-0010 numpy 精确向量检索，不引 FAISS / hnswlib
+
+- 状态：Accepted ｜ M1（2026-09）
+
+**问题**：稠密向量路需要检索引擎。FAISS / hnswlib 是标准答案，但本项目
+约束"Windows 零编译安装"——二者在 Windows 上均无预编译 wheel
+（faiss-cpu 仅 conda；hnswlib 仅源码），引它们 = 要求用户装编译器。
+
+**决策**：numpy 精确（暴力）检索：行归一化矩阵 + 矩阵乘，dot 即余弦。
+1. **规模论证**：个人库 <10 万 chunk，numpy 矩阵乘实测 <500ms——ANN 的
+   加速收益在此规模下不成立；
+2. **精确检索的额外红利**：无近似误差，评测里的 recall 是"真"recall，
+   实验结论干净（近似索引会让消融结论混入索引误差）；
+3. 内存账：n × dim × 4 字节，1 万 chunk × 512 维 ≈ 20MB，个人库无压力；
+4. 接口定义为 `VectorStore` Protocol（runtime_checkable），保留日后切
+   ANN 后端的扩展点。
+
+**后果**：换掉了"库选型高级感"，换来零编译安装、精确可复现的评测面。
+与 ADR-0009 同构：**在规模论证之后自实现，而非默认引库**。
+
+**代码**：`src/mikasa/index/vector_store.py`。
+
+## ADR-0011 RRF 融合，不做分数加权
+
+- 状态：Accepted ｜ M1（2026-09）
+
+**问题**：双路（BM25 + 稠密）结果如何合并？线性加权是最直觉方案，但
+BM25 分与余弦分量纲、分布完全不同，权重需逐库调且脆；归一化又引入
+自己的口径问题。
+
+**决策**：RRF（Reciprocal Rank Fusion）：`score = Σ 1/(k + rank)`，
+k=60（经典值）。
+1. 只依赖排名，**无需任何跨路标定**；
+2. 是 kaggle / 搜索竞赛中稳定有效的融合基线，效果有据可查；
+3. 可手算，答辩可推演（对展示型项目是加分属性）。
+已知性质照实披露：文档必须在两路都有排名才吃两路分数，单路独有但极靠前
+的文档仍可能胜出——评测里能看到融合 > 单路的证据，而非只挑好话说。
+
+**后果**：融合实现 20 行；评测的 RRF 效果由阶段 A 指标实证。
+
+**代码**：`src/mikasa/index/hybrid.py`、`pipeline/retriever.py`。
+
+## ADR-0012 结构化分块器：标题边界 + 语义切分优先级
+
+- 状态：Accepted ｜ M1（2026-09）
+
+**问题**：RAG 检索质量的第一道关口是分块。定长切块（如 400 字符硬切）
+实现最简，但会拦腰截断句子与段落，破坏词义与引用粒度——检索质量与
+溯源体验同时受损。
+
+**决策**（详细策略见 architecture.md"分块策略"，此处记取舍）：
+1. **结构优先**：标题变化 = 天然块边界（语料是带 Markdown 结构的原创
+   笔记，标题是语义最强的分隔信号）；
+2. **块内按"段落 → 句末标点 → 逗号 → 硬切"优先级切长文本**，避免中断
+   词义——宁可块略短，不切词义；
+3. **重叠窗口**：相邻块共享 ≤overlap 字符尾部，缓解"答案被拦腰截断"
+   造成的召回漏失；重叠只在同标题下续接，不跨标题；
+4. **标题前置**：入库阶段把标题路径拼入块首（检索用），正文与标题分开
+   携带（展示与生成不重复标题）——可做消融实验；
+5. **长度不变量（块 ≤ size）**作为硬约束：段落以 `\n\n` 连接，窗口预算
+   计入分隔符；重叠尾巴按剩余容量**截短而非超发**——该处出过真实越界
+   bug，测试守护（`test_overlap_respects_size`）。
+
+**后果**：分块器成为可单测、可消融的核心组件；分块策略的每个旋钮
+（size/overlap/title_prefix）都在配置里，进评测口径。
+
+**代码**：`src/mikasa/ingest/chunker.py`、`ingest/service.py`。
+
+## ADR-0013 free 自由问答旁路：与 kb/评测解耦，mode 不落库
+
+- 状态：Accepted ｜ M3.5（2026-09-09，用户使用痛点驱动的功能版）
+
+**问题**：系统只做严格 RAG——知识库外的问题一律以统一拒答句式拒绝
+（这是 M2 验收特性，不能动）。但用户接入了真实 LLM API（DeepSeek），
+"写题时由知识点引申出的库外知识"没有任何出口，学习体验被锁死。
+
+**决策**：问答拆双模式，默认 kb 维持现状一字不改：
+1. **旁路点在 AskService 服务层**（`mode="free"` 分支），而非 Generator：
+   Generator 的 `build_answer` 依赖 hits 的引用解析（无 hits 无引用），
+   给 Generator 加"无引用模式"会把 RAG 语义塞进不该懂它的组件。free
+   直连 LLM、手工组装 `Answer(citations=[], refused=False, ...)`——旁路
+   是刻意设计，三层防线（L1 硬校验/L2 支持度/L3 拒答纪律）只约束 kb；
+2. **mode 不落库**：qa_messages 无 mode 列，规避 schema 迁移（ADR-0004
+   的 schema_version=1 硬校验不动）。回放/渲染的判别信号用既有列：
+   kb 的 `latency_ms` 恒含 `retrieve` 键，free 只有 `generate`——历史接口
+   据键存在性决定 [n] chip 渲染（free 轮正文里的 `[1]` 是模型正文不是
+   越界红标）；（M4.5 注：会话管理升级首破 schema_version=1、升到 v2
+   加了 title/folder_id 列，mode 不落库的判别信号设计经受住首次迁移
+   未被动摇——`qa_messages` 结构一字未改，见 ADR-0015）；
+3. **守卫口径看 `settings.llm.backend` 而非 profile 字符串**：profile 与
+   后端解耦（YAML 可覆盖），mock 无语义 → free 一律 ConfigError；
+4. **free 与评测解耦**：`eval/` 硬编码 Retriever + Generator、不经
+   AskService，协议指标天然不受自由模式污染；free 多轮历史注入最近
+   ≤5 轮**原始消息**（不做 kb 的摘要压缩，保留指代连续性），FREE
+   系统提示压制历史轮里的 [n]/拒答句式污染；kb 摘要对无引用轮
+   （free 轮）改用诚实话术"已作答（未引用知识库）"，不再谎称"给出引用"。
+
+**契约**：CLI `--mode`（typer Literal choices）→ service 层 ConfigError
+（红字 exit 1）；Web 请求体 `mode` 由 pydantic Literal 校验（非法值 422）
+→ AskService 守卫（free+mock → 400 错误壳）；SSE 流式里守卫在生成器
+**首个 yield 前**抛出 → `_to_frames` 的 try 兜底产出**恰一帧 error、
+零 meta/done**；前端 `/api/health.profile == "offline"` 置灰按钮
+（渐进增强信号，最终权威是后端守卫）。
+
+**后果**：入口三处（CLI/Web 非流式/Web 流式）各需透传 mode 与守卫测试；
+界面"会话内随时切"的语义是每条提问携带当时的开关态，消息可回放分类。
+
+**代码**：`pipeline/{ask,prompts}.py`、`cli/__init__.py`、`web/routers/qa.py`、`web/static/`。
+
+## ADR-0014 local profile 落地：免密钥放行 / 本地重排与裁判暂关 / 维度迁移纪律
+
+- 状态：Accepted ｜ M4（2026-09-09）
+
+**问题**：M1 就把 local profile 的 provider 代码全部预留（OpenAICompatLLM
+共用、LocalFastEmbed、工厂分派、`[local]` extra），但有三处硬卡点让
+`--profile local` 无法真正跑起来：①Ollama 兼容端点不需要密钥，而
+`_get_client` 对无密钥一律 ConfigError；②本地 reranker / judge 依赖
+fastembed 交叉编码器与双厂商裁判，直接启用会把"全本地"拖回需要校准
+的泥潭；③api 与 local 的 embedding 维度不同（bge-m3 1024 维 vs
+bge-small-zh-v1.5 512 维），切 profile 不重建索引会让 dense 路静默
+降级甚至崩溃。本条记录五个落定点：
+
+**① 免密钥占位 key——放行点选在 provider 层，不是 settings 层**
+Ollama `/v1` 不校验 `Authorization`（只要求非空），openai SDK 构造期却
+强制 api_key 非空。local 档 `api_key_env: ""` → `api_key` 恒 None，于是
+provider 层注入模块常量占位 `_LOCAL_API_KEY = "ollama"`。放行点刻意不
+放 settings 层：若配置层把"无密钥"放行，api 档忘填密钥也会被静默放行
+（最糟的失败模式）；放在 provider 层按 `config.backend` 分路，api 的
+早失败语义（ConfigError："请在 .env 填入密钥"）一字不动。judge 未来走
+同一 OpenAICompatLLM，自动继承放行。
+
+**② 本地重排（reranker backend）保持 none**
+LocalReranker 代码与 `[local]` 依赖都在，但 M4 不启用：RRF 融合召回已
+在评测实证（recall@10=1.000），本地重排收益未做真实验收——启用一个
+未经实证的环节只会让口径分叉（同题两档答案不可比）。**M4 实装追加事
+实：fastembed 0.8.0 已移除全部重排 API**（顶层无 TextCrossEncoder /
+TextReranker，连 rerank 子模块都不存在）——LocalReranker 是按早期
+API 形态保留的起点，切 `local` 不是改一行配置就能开，启用前必须先做
+版本/实现选型（回落 0.7.x 或换独立重排包，见 reranker.py 类 docstring
+与 limitations-and-failures.md §四），取舍随实证数据翻转。
+
+**③ 本地裁判（judge）保持 disabled**
+评估阶段 C 的语义裁判靠"双厂商对冲"防自偏好（Qwen 判 DeepSeek、反之
+亦然）。本地只有同一个 Ollama 模型，无从对冲；同模型自评判分未经质量
+校准，混进验收基线会污染指标解释。local 评测因此只跑检索层与协议层
+指标（recall/MRR/nDCG、越界率、拒答率），这些层不走 LLM，口径与
+api/offline 同构。评价一个系统先评价它能评价的部分——诚实披露。
+
+**④ embedding 维度迁移纪律（切 profile 必 reindex，三层防护）**
+embeddings 表 `chunk_id` 为主键（每个 chunk 恰一条向量）→ 单库
+**单模型语义**。api（bge-m3，1024 维）与 local（bge-small-zh-v1.5，
+512 维）的向量在同一张表内不可共存、不可混查。纪律=切 embedding 模型
+必须 `mikasa ingest --reindex`（ingest 幂等，重建成本可控），三层防护：
+1. **doctor 索引三方一致性**（`_check_index_consistency`）：快照
+   `meta.json` 模型/维度 × 库内向量行数（按模型分组、chunk 总数、
+   维度集合）× 当前配置，任一不符即红行带 reindex 指引——"整库错模型"
+   （快照是 bge-m3 而配置是 bge-small）与"部分迁移"（库内两种模型
+   残留）都被捕获，后者靠 GROUP BY 行数而非取最新一条（`LIMIT 1` 会
+   掩盖多数旧向量）；
+2. **检索侧维度防御**：`ExactVectorStore.search` 对维度不符抛显式
+   `StorageError`（提示 reindex），替代 numpy 裸 ValueError——cli 只捕
+   StorageError/ConfigError，裸错会漏成 traceback；
+3. **评测指纹防错配**（既有，corpus_digest 混入 chunk_id）：reindex 后
+   黄金集指纹必然失配，强制重跑 `tools/build_golden.py`，不存在"用旧
+   黄金集测新索引"的静默错配。
+运行时 BM25 兜底降级 warning（manager）保留不动：单点事故的兜底语义
+在，前置拦截靠 doctor。
+
+**⑤ doctor 口径演进**
+体检从"通用项"走向 backend 门控：local 档新增"Ollama 服务连通 /
+模型已拉取 / fastembed 在位"三行，失败文案带可执行下一步（`ollama
+pull` / `pip install -e ".[local]"` / Windows `OLLAMA_BASE_URL` 逃生口
+指引）；探测函数模块级（可 monkeypatch，单测不真连服务）；**doctor
+从不触发模型下载**（TextEmbedding 构造即拉 ~100MB，下载归首次
+ingest/提问的运行时）。doctor 仍是硬门禁：任一项失败汇总红行后
+exit 1，"告警"语义由失败文案承载，不由"不退出"承载。
+
+**代码**：`src/mikasa/providers/llm.py`（_LOCAL_API_KEY）、
+`cli/__init__.py`（探测函数 + doctor 门控）、`storage/repo.py`
+（embedding_models_in_db）、`index/vector_store.py`（维度防御）。
+
+## ADR-0015 会话管理升级：文件夹树 + 标题三路径锁 + suggest 降级语义
+
+- 状态：Accepted ｜ M4.5（2026-09-09，用户交互痛点驱动的管理版）
+- 关联：ADR-0004（首次真实迁移，见其修订段）、ADR-0013（mode 不落库
+  经受住首次迁移未被动摇）
+
+**问题**：侧栏会话列表只有"会话 #id"硬编码标题 + 一条流，会话一多
+找不到、没法归类；用户点名要编译器左侧文件树的形态——多层嵌套
+文件夹、会话归夹批量管理、标题自动提炼对话核心、可重命名/删除。
+
+**决策**（逐条取舍）：
+
+1. **标题策略 = 三路径锁（title_manual 列）**。自动提炼有三条写入路径，
+   锁语义统一在 repo 层 WHERE 条件里（注释即契约）：
+   - `auto_title_if_untitled`（首轮问答后 _record 钩子）：只写
+     `title_manual=0 AND title IS NULL` 的会话——**只补第一轮**，不随
+     轮次漂移（标题不该每轮变脸）；
+   - `apply_suggested_title`（suggest 入口）：允许升级**已自动命名**的
+     会话（截断兜底先落库、LLM 提炼后覆盖），但 `title_manual=0`
+     守卫不变；
+   - `set_session_title`（用户改名）：非空 → 落库并锁 `title_manual=1`
+     ——**手动命名永不被自动覆盖**（LLM 提炼也只回建议不落库，
+     applied=false 语义）；显式清除（null/空）→ 解锁回未命名，下轮
+     问答自动重新补名（闭环：清除标题 ≠ 从此裸奔）。
+   - `list_sessions` SELECT 有意不含 title_manual（防误用），锁状态
+     只经 `get_session` 与 suggest 的 applied 暴露。
+2. **标题素材与降级 = 截断兜底 + LLM 一次**。素材统一取库内首问 + 首答
+   （`first_user_message` 为唯一事实源，CLI/Web/流式三入口共用 _record
+   钩子 → CLI 零接线受益）。offline/mock 无 LLM 语义 → **截断兜底是
+   合法回退不是错误**（首问 fold_title 20 字，毫秒级），suggest 报
+   applied=true；api/local 走 LLM（system 提示 ≤16 汉字、无引号/编号/
+   换行，temperature 走配置、max_tokens=24），**任何失败/空输出 →
+   截断兜底**（logger 留痕，提炼失败绝不拖挂问答流）。CLI 永不 LLM。
+3. **文件夹 = 多层嵌套树，但存储平铺、前端组树**。qa_folders 单表
+   自引用 parent_id（NULL=根），列表 id 升序平铺，`buildTree` 在
+   前端按 parent_id 组嵌套（外键保证父 id < 子 id，天然有序）。取舍：
+   后端不递归序列化——树操作（移动/删除）都按 id 直达，会话归属
+   文件夹只存 folder_id 一列，不需要闭包表。防环（新父 ∈ 自身∪后代）
+   一条 `parent_id in folder_descendant_ids(...)`（WITH RECURSIVE）完成，
+   前端移动菜单用同判据灰显目标（subtreeIds）。
+4. **删除语义两分**：会话删 = 消息级联清（qa_messages 既有 ON DELETE
+   CASCADE，容器内内容跟着删——会话与消息是组成关系）；文件夹删 =
+   **只删空夹**（409 带子夹/会话计数文案，需先移出）——文件夹是容器，
+   容器绝不级联连坐内容（qa_folders 外键 NO ACTION，应用层 409 万一
+   被绕过由约束兜底，绝无静默级联删用户会话）。
+5. **PATCH 覆盖语义 = model_fields_set 判定字段出现**：显式 null 是合法
+   覆盖值（title null=清除解锁、folder_id null=移回根），字段缺省 =
+   该属性不动——单字段改名不误伤另一属性（改名不重置文件夹归属等）。
+6. **Web 菜单交互，不做拖拽**（用户拍板：菜单移动）：⋯ 菜单 + "移动
+   到…"子菜单（路径表根级置顶、自身+后代灰显、当前位置灰显、← 返回
+   主菜单）；行内改名/新建输入（Enter 提交、Esc 取消、点外取消）；
+   删除一律 confirm() 二次确认。
+7. **首轮自动提炼闭环在 Web 层**：发送时无活动会话 = 首问 → done 帧后
+   POST /title/suggest（不 disable 输入、失败静默）→ 再刷侧栏。判别用
+   "发送时 activeSession===null"而非 meta 帧——meta 每轮都发（续问也
+   有），续问不该重跑提炼（材料是首问+首答，重跑只白烧 LLM 一次）。
+8. **展开态不持久化**（刷新回全折叠）、标题不随轮次更新、会话搜索/
+   归档/固定不做——见 known-issues.md 功能 backlog，价值未实证不预埋。
+
+**后果**：首次真实 schema 迁移（v1→v2）连带 ADR-0004 修订（自动逐级
+迁移 + 幂等重入）；27 会话/88 消息实库平滑升级并有演练记录（迁移
+日志 1→2 一次、标题回填=各自首问截断、计数不变、二次启动零迁移）。
+代价：CLI 聊天不显示标题（列表接口增强不影响），qa_sessions 增列后
+任何"SELECT *"消费方自动多键（宽松超集，不破坏既有断言）。
+
+**代码**：`storage/{db,repo}.py`、`utils/text.py`（fold_title）、
+`pipeline/{ask,prompts}.py`、`web/{schemas.py,routers/sessions.py}`、
+`web/static/js/{tree,qa-tree,qa}.js`；测试 `tests/unit/storage/
+test_db_migration.py`、`test_repo_sessions.py`、`tests/unit/web/
+test_sessions_api.py`；冒烟 `tools/smoke_tree.mjs`。
 
 ---
 
-## ADR-0016 Reader view: seam removal on the backend + original-file allowlist + the boundary of exposing body text
+## ADR-0016 阅读视图：去接缝在后端 + 原文件白名单 + 正文开口的边界
 
-- Status: Accepted | Paper reader phase b (2026-09-10, user explicitly asked to see the source text behind citations)
-- Related: ADR-0012 (the structured chunker's overlap rules — this ADR is their
-  **inverse operation**), ADR-0014 (single-model semantics for a given profile, in the same
-  data-misconfiguration territory as the "original-file resolution" here)
+- 状态：Accepted ｜ 论文阅读器 b 期（2026-09-10，用户点名"引用要看得到原文"）
+- 关联：ADR-0012（结构化分块器的 overlap 规则——本 ADR 是它的**逆运算**）、
+  ADR-0014（切片 profile 的单模型语义，与本文的"原文件解析"同属数据可错配区）
 
-**Problem**: The `[n]` superscript could previously jump only to the citation card inside
-the message, with no way to see where the citation sits in the original document, and
-imported documents could not be opened at all. Building "reader view + citation jump" first
-requires answering two questions: **what to render** and **how to locate a citation**.
+**问题**：`[n]` 角标此前只能跳到消息内的引用卡，看不到引文在原文里的位置；
+导入的文档也点不开。要做"阅读视图 + 引用跳转"，先要回答两件事：
+**渲染什么**、**引用怎么定位**。
 
-**Decision** (trade-offs, item by item):
+**决策**（逐条取舍）：
 
-1. **Text view = concatenate chunks by seq, with seam removal on the backend**
-   (`ingest/stitch.py`). The database **does not store the parsed full text** —
-   `Para`/`LoadedDocument` live only inside ingest (ingest/types.py) — and chunks are the
-   only data natively aligned with `citation.chunk_id` and available for 23/23 documents.
-   Why the inverse operation must share its source with the chunker:
-   - Overlap is produced only when adjacent chunks have the **same** `heading_path`
-     (chunker.py:110-114 clears the tail at a heading change) → the guard "never trim across
-     a heading" costs **nothing** on real data (measured: across 941 adjacent chunk pairs in
-     the library, "cross-heading with overlap" = **0 cases**);
-   - An overlap tail is **truncated** to fit remaining capacity (the `take = min(...)` at
-     chunker.py:94), and once truncated it is no longer a suffix of the previous chunk →
-     besides a suffix rule, a **near-tail rule** is needed (a match must start within the
-     last `seam_window` characters of the previous chunk). Measured on PDF-like corpora: the
-     suffix rule covers 68.8%, the near-tail rule adds another 14.3%, for 83.1% total;
-   - **Validation is not "it looks reasonable"**: the stitched character count matches the
-     `documents.char_count` recorded by the loader at ingest to within 0.2%–2% for every
-     document — doc 71 (866 chunks, 281441 characters) stitches to 248767 characters while
-     the loader originally counted 248274, a difference of only 493 characters (which should
-     be the `【表格】` ("table") marker the loader prepends to table chunks). Library-wide,
-     309499 → 275034 characters (11.1% trimmed).
-   Stitching **necessarily loses** Markdown `# heading` lines, code fences, blockquote
-   markers, and PDF headers/footers (they never entered a chunk anyway) — subheadings are
-   filled in from `heading_path`, and the original-file view is the outlet for the complete
-   text: **no fake reconstruction**.
+1. **文本视图 = 按 seq 拼 chunks，去接缝放后端**（`ingest/stitch.py`）。
+   库内**没有存解析后全文**——`Para`/`LoadedDocument` 只在 ingest 内存活
+   一次（ingest/types.py），chunks 是唯一与 `citation.chunk_id` 原生对齐、
+   且 23/23 篇都可用的数据。逆运算为什么必须与 chunker 同源：
+   - 重叠只在相邻块 `heading_path` **相同**时产生（chunker.py:110-114 在
+     标题变化处清空 tail）→ 守卫"跨标题必不裁"在真实数据上**零代价**
+     （实测全库 941 对相邻块里"跨标题且存在重叠"= **0 例**）；
+   - 重叠尾巴会被按剩余容量**截短**（chunker.py:94 的 `take = min(...)`），
+     截短后它就不再是上块的后缀 → 除后缀规则外还需一条**近尾规则**
+     （匹配起点须落在前块最后 `seam_window` 字内）。实测 PDF 类语料：
+     后缀规则覆盖 68.8%，近尾规则再补 14.3%，合计 83.1%；
+   - **验证不是"看起来合理"**：拼后字数与 loader 入库时统计的
+     `documents.char_count` 逐篇吻合到 0.2%~2%——doc 71（866 块、281441 字）
+     拼后 248767 字，而 loader 当初统计 248274 字，仅差 493 字（应即
+     loader 加在表格块首的 `【表格】` 标记）。全库 309499 → 275034 字
+     （裁掉 11.1%）。
+   拼接**必然丢**md 的 `# 标题` 行、代码围栏、blockquote 标记与 PDF 页眉
+   页脚（它们本就没进 chunk）——小标题靠 `heading_path` 补位，原文件视图
+   是完整原文的出口，**不做假还原**。
 
-2. **Original-file view = the browser's built-in viewer, embedded** (`<iframe src="/api/documents/
-   {id}/file#page=N">`), with zero new dependencies (no pdf.js in the frontend; without
-   Range support a PDF cannot seek). Two hard constraints verified on the spot:
-   - Starlette's `FileResponse` **defaults to `content_disposition_type="attachment"`**
-     (measured on 1.6.0 locally) — without explicitly passing `"inline"`, Chrome downloads
-     the file instead of rendering it inline, and the entire PDF view breaks;
-   - Range is supported by `FileResponse` itself (206/416/multipart/`accept-ranges`,
-     verified in the source), so a 28MB PDF can load progressively and seek.
+2. **原文件视图 = 浏览器自带阅读器内嵌**（`<iframe src="/api/documents/
+   {id}/file#page=N">`），零新依赖（前端无 pdf.js，PDF 无 Range 则无法拖动
+   进度条）。两个已核实的硬约束：
+   - Starlette 的 `FileResponse` **默认 `content_disposition_type="attachment"`**
+     （本机 1.6.0 实测）——不显式传 `"inline"`，Chrome 会直接下载而不内嵌
+     渲染，整个 PDF 视图失效；
+   - Range 由 `FileResponse` 自身支持（206/416/多段/`accept-ranges`，源码
+     已核），28MB 的 PDF 可渐进加载与拖动。
 
-3. **`/file` path resolution is allowlist-based, because `file_path` is not trustworthy**.
-   Measured: **21 of 23 rows point at a discarded old project path**
-   (`D:\Code\MyProject1\data\uploads\…`). Two hops, each with a containment check
-   (`resolve().is_relative_to(uploads_dir)`): (1) by name (must use `PureWindowsPath` — the
-   dirty data is in backslash form, and POSIX `Path` would treat the whole string as a
-   single filename); (2) fall back to `stem == title` and verify identity with `sha256_file`
-   against the ingest hash. **No fuzzy matching**: serving the wrong file is worse than a
-   404. Media types go through an explicit allowlist that **excludes `text/html` and
-   `image/svg+xml`** — the service runs same-origin on 127.0.0.1, and those two parsed as
-   documents by the browser are the only route to stored XSS.
+3. **`/file` 的路径解析是白名单式的，因为 `file_path` 不可信**。实测 23 行
+   里 **21 行指向已废弃的旧项目路径**（`D:\Code\MyProject1\data\uploads\…`）。
+   两跳、每跳都做容器校验（`resolve().is_relative_to(uploads_dir)`）：
+   ① 按名称（必须用 `PureWindowsPath`——脏数据是反斜杠形式，POSIX 的
+   `Path` 会把整串当成单个文件名）；② 回退按 `stem == title` 并用
+   `sha256_file` 与入库哈希验身。**不做模糊匹配**：发错文件比 404 更糟。
+   媒体类型走显式白名单且**禁 `text/html` 与 `image/svg+xml`**——服务跑在
+   127.0.0.1 同源下，这两类被浏览器当文档解析就是存储型 XSS 的唯一入口。
 
-4. **Exposing body text is a deliberate exception to redaction, with the boundary hardcoded
-   in code**. The Q&A pipeline already echoed body excerpts through `Citation.snippet`; the
-   new `/content` and `/file` exist so that citations can be verified and documents read
-   through. The boundary: `file_path`/`file_sha256` **never enter a response body**
-   (`_public_document` unchanged, asserted in tests); both endpoints read the database by
-   doc_id only and accept no path parameters. Widening this opening in the future starts by
-   changing this rule.
+4. **正文开口是有意的脱敏例外，边界写死在代码里**。问答链路本就通过
+   `Citation.snippet` 回显过正文片段，新增 `/content` 与 `/file` 是为了让
+   引用可核查、文档可通读。边界：`file_path`/`file_sha256` **永不进响应体**
+   （`_public_document` 不变，测试断言）；两个端点只按 doc_id 读库、不接收
+   任何路径参数。将来要扩这个口子，先改这一条。
 
-5. **Panel shape = a right-hand drawer created dynamically in JS, shared by two pages**. The
-   three HTML files each hardcode their nav, so a new page would mean editing three files and
-   losing the contextual continuity between "tree ↔ source text"; and the wording in §5.A was
-   originally "the **sidebar** can open a selected document". Having `reader.js` create the
-   DOM means zero markup duplication across the two pages. Two interaction pitfalls already
-   hit are written into the comments: (1) the click-outside whitelist **must include the
-   opening source** (`.cite`/`.cite-card`/`.doc-item`), otherwise the chip's handler runs
-   first, bubbles to document, is judged "outside", and closes the panel the instant it opens;
-   (2) Esc also closes the settings panel (its listener is registered earlier and
-   unconditionally), and **"Esc dismisses all overlays" is accepted** rather than
-   intercepting by priority. The knowledge-base page's `onOpen` callback is **deliberately
-   independent of `onSelect`**: the latter is reused by `notifyActive` and runs on every
-   repaint, so putting it there would make "dragging a document into a folder pop the panel
-   open".
+5. **面板形态 = JS 动态创建的右侧抽屉，两页共用**。三份 html 各自硬编码
+   nav，新增页面要改 3 个文件并失去"树 ↔ 原文"的上下文连续性；而 §5.A 的
+   原话本就是"**侧栏**可选文档打开"。DOM 由 `reader.js` 创建使两页零标记
+   复制。两条已踩的交互坑写进注释：① 点外部关闭的白名单**必须包含开启源**
+   （`.cite`/`.cite-card`/`.doc-item`），否则 chip 的处理先跑、冒泡到
+   document 时被判"点外"，开了立刻关；② Esc 会同时关掉设置面板（其监听
+   注册更早且无条件），**接受"Esc 收掉所有浮层"**而不做优先级拦截。
+   知识库页的 `onOpen` 回调**刻意独立于 `onSelect`**：后者被 `notifyActive`
+   复用、每次刷新重绘都会跑，并进去会导致"拖文档进文件夹就自动弹面板"。
 
-5b. **One renderer, two presentations** (added after user-reported feedback on 2026-09-10).
-   The first version was overlay-only: clicking a document row on the knowledge-base page
-   opened the right-hand drawer, but the right column itself was still a few metadata fields,
-   and the user reported it as "ugly — just a few lines of text sitting there". The fix makes
-   `initReader(host)` distinguish by the host argument: no argument = overlay (clicking a
-   superscript on the Q&A page, without interrupting the Q&A context); with an argument =
-   embedded in the right column (selecting on the knowledge-base page reads immediately, body
-   text fills the space, metadata is compressed into a single status line at the bottom, and
-   the upload card yields). Rendering, positioning, and dual-view switching are all reused from
-   the same code, with zero markup duplication across the two pages. Two accompanying fixes
-   for things "a shape change is bound to hit": (1) **moving a document into a folder must move
-   the status line with it** — the old detail card got this for free from `onSelect`
-   re-rendering, but the embedded status line is built only when it opens, so `updateLocation()`
-   was added and is pushed by `onSelect`; (2) the `onOpen` callback now passes `location`
-   (position is computed from the tree; the reader should not look up the folder tree itself).
+5b. **一套渲染，两种呈现**（2026-09-10 用户实测反馈后补）。初版只有浮层：
+   知识库页点文档行弹右侧抽屉，右栏本身仍是几张元数据字段——用户反馈
+   "太丑了，只是几个文字在上面"。改为 `initReader(host)` 用 host 参数区分：
+   不传 = 浮层（问答页点角标，不打断问答上下文）；传 = 内嵌进右栏
+   （知识库页选中即读，正文占满、元数据压成底部一行状态栏，上传卡让位）。
+   渲染、定位、双视图切换全部复用同一份代码，两页零标记复制。
+   配套修的两个"改形态必然踩到"的点：① **拖文档进文件夹后状态栏的位置
+   要自动跟进**——旧详情卡靠 `onSelect` 重渲染天然有，内嵌状态栏只在
+   打开时构建，故补 `updateLocation()` 由 `onSelect` 推送；② `onOpen`
+   回调补传 `location`（位置由树算，阅读器不该自己查文件夹树）。
 
-**Rejected options**: (1) adding a `/documents/{id}` reader page — would require editing three
-navs plus `_PAGES`, and loses the sidebar context; (2) storing the parsed full text at ingest
-(schema v4 + a full re-ingest) — the highest cost, and the reconstruction accuracy of stitching
-chunks is already proven sufficient by `char_count` reconciliation; (3) pdf.js in the frontend
-— pulls in a new dependency and conflicts with the "no build chain" orientation, while the
-browser's built-in viewer already suffices.
+**被否方案**：① 新增 `/documents/{id}` 阅读页——要改三份 nav + `_PAGES`，
+且丢掉侧栏上下文；② 入库时另存解析全文（schema v4 + 全库重灌）——成本
+最高，且拼 chunk 的还原精度已被 `char_count` 对账证明够用；③ 前端
+pdf.js——引新依赖且与"无构建链"取向冲突，浏览器自带阅读器已满足。
 
-**Code**: `ingest/stitch.py` (new), `web/routers/documents.py` (three endpoints +
-`_resolve_upload_file`), `web/static/js/{reader,reader-view}.js` (new), `common.js` (chip and
-citation card gain `data-chunk-id`), `kb-tree.js` (`onOpen`), `documents.js`/`qa.js` (wiring);
-tests `tests/unit/ingest/test_stitch.py`, `tests/unit/web/test_documents_api.py`; smoke
-`tools/smoke_reader.mjs`, E2E `tools/chrome_reader.py`.
+**代码**：`ingest/stitch.py`（新）、`web/routers/documents.py`（三端点 +
+`_resolve_upload_file`）、`web/static/js/{reader,reader-view}.js`（新）、
+`common.js`（chip/引用卡加 `data-chunk-id`）、`kb-tree.js`（`onOpen`）、
+`documents.js`/`qa.js`（接线）；测试 `tests/unit/ingest/test_stitch.py`、
+`tests/unit/web/test_documents_api.py`；冒烟 `tools/smoke_reader.mjs`、
+E2E `tools/chrome_reader.py`。
 
 ---
 
-## ADR-0017 Merging the "Page" view + page-number alignment + the Ollama context window
+## ADR-0017 合并「页面」视图 + 页码对齐 + Ollama 上下文窗口
 
-- Status: Accepted | Paper reader phase b, continued (2026-09-11, driven by user-reported issues)
-- Related: ADR-0016 (the foundation of the reader view), ADR-0012 (the chunker)
+- 状态：Accepted ｜ 论文阅读器 b 期续（2026-09-11，用户实测反馈驱动）
+- 关联：ADR-0016（阅读视图的地基）、ADR-0012（分块器）
 
-**Problem**: The text view had "messy characters, broken tables, no images"; the user asked
-to **merge "original file" and "highlight annotations" into a single view**. The previously
-planned solution was "restore table column structure at ingest + extract images into storage".
+**问题**：文本视图"字很乱、表格乱、图片没有"；用户要求把"原文件"与"高亮标注"
+**合并成一个视图**。此前计划的解法是"入库时恢复表格列结构 + 提取图片进库"。
 
-**Decision**:
+**决策**：
 
-1. **The merged view = rendered page images + coordinate highlights**, not a parser change.
-   Each PDF page is rendered to PNG on demand (`GET /api/documents/{id}/page/{n}.png`;
-   PyMuPDF renders a page in milliseconds, nothing hits disk, and the deterministic result is
-   served from a private cache), and citation chunks are then drawn as an overlay highlight by
-   coordinate (`GET /api/documents/{id}/locate/{chunk_id}` returns rectangles **normalized to
-   0–1** and grouped by line). Tables, images, and formulas are **automatically correct** —
-   they were in the page render all along. The entire chain of "extract table columns + image
-   asset directory + schema change + full re-ingest" therefore becomes unnecessary (schema
-   impact drops to zero). The cost: text in a page image cannot be selected or found with
-   Ctrl+F — hence the "↗ 原文件" (open original file) link in the header, falling back to
-   Chrome's built-in viewer.
-2. **Location uses token-sequence matching, not `page.search_for`**. Chunk text was cleaned at
-   ingest and is not character-identical to the PDF source — `search_for` matched only **55%**
-   in practice. Normalizing both sides with NFKC and stripping punctuation before comparing
-   tokens matches **98%** (pure functions in `ingest/pagelocate.py`). When location fails, empty
-   rects are returned and the frontend shows the page without a highlight — graceful
-   degradation.
-3. **Page-number alignment: the same class of bug exists in two places, and both needed
-   fixing**. `enumerate(cleaned, start=1)` numbers by list position, and "one page per element"
-   is a hard invariant. But `_drop_page_furniture` and `_cut_reference_tail` each filtered out
-   empty pages with `if kept:` / `[t for t in rest if t.strip()]` — with enough blank pages,
-   subsequent page numbers shifted systematically (measured +3 to +5 positions for doc 71; the
-   two combined truncated 301 pages to 189, with the front section misaligned). The fix: both
-   **always append, keeping an empty string as a placeholder** (the downstream
-   `if not page_text.strip(): continue` skips them as usual). Each is locked down by its own
-   regression test.
-4. **Ollama's runtime context window is only 2048 while the model itself is 40960** (measured
-   2026-09-11: a 6000+ token prompt was truncated to 2050, and truncated **from the beginning**
-   — the citation/refusal rules in the system prompt may never have reached the model; a
-   passphrase test returned empty replies before the fix and matched `紫罗兰七号` (Violet No. 7)
-   exactly after). Mikasa.bat now sets `OLLAMA_CONTEXT_LENGTH=16384` (a comfortable margin for
-   qwen3:8b). This was also most of the root cause behind "retrieval hands over too little
-   content" — injecting 10 chunks ≈3500 characters already overflowed the window. In step, local
-   `fusion_top_k` went 10→14 and api `top_n` 5→8 (changing top_n shifts the evaluation baseline,
-   so watch out when comparing across baselines).
-5. **Citation cards gain an explicit "↗ open original file" button**: the `[n]` superscript is a
-   clickable hidden interaction that new users never discover — every citation card now carries
-   an explicit button (opening the original in a new tab) that does not depend on discovering
-   the superscript first.
-6. **Font-size adjustment lives only in the reading area**: the `--reader-font` variable hangs on
-   the reader root node (overlay or embedded alike) rather than `documentElement`, and
-   `mikasa.ui.readerFont` persists it locally; the A-/A+ controls sit in the reader header
-   (`documents.html` has no settings panel, and putting them in the settings panel would leave
-   the knowledge-base page out of reach).
+1. **合并视图 = 页面渲染图 + 坐标高亮**，而不是改解析器。把 PDF 每一页按需
+   渲染成 PNG（`GET /api/documents/{id}/page/{n}.png`，PyMuPDF 单页毫秒级、
+   不落盘、确定性结果给私有缓存），再把引用块按坐标画成覆盖层高亮
+   （`GET /api/documents/{id}/locate/{chunk_id}` 返回**归一化到 0~1**、按行
+   分组的矩形）。表格/图片/公式**自动正确**——它们本来就在页面渲染里。
+   于是"提取表格列 + 图片资产目录 + schema 变更 + 全库重灌"整条链都不需要
+   （schema 影响面归零）。代价：页面图不能选中文字/不能 Ctrl+F——头部留
+   「↗ 原文件」链接（Chrome 内置阅读器）兜底。
+2. **定位用词元序列匹配，不用 `page.search_for`**。chunk 文本入库时被清洗过，
+   与 PDF 原文非逐字一致——`search_for` 实测只有 **55%** 命中。把两边都做
+   NFKC 归一 + 去标点后按词元比对，实测 **98%**（`ingest/pagelocate.py` 纯
+   函数）。定位不到返回空 rects，前端只显示页面不高亮——优雅降级。
+3. **页码对齐：同一类 bug 有两处，都要修**。`enumerate(cleaned, start=1)`
+   按列表位次编号，"一页一元素"是硬不变量。`_drop_page_furniture` 与
+   `_cut_reference_tail` 却各自用 `if kept:` / `[t for t in rest if t.strip()]`
+   把空页滤掉——空白页一多，后续页码系统性前移（doc 71 实测 +3~+5 位，
+   两处叠加把 301 页截到 189 且前部错位）。修法：两处都**始终追加、保留空串
+   占位**（下游 `if not page_text.strip(): continue` 会照常跳过）。回归测试
+   各自锁定。
+4. **Ollama 运行时上下文窗口只有 2048，模型本身是 40960**（2026-09-11 实抓：
+   6000+ token 的提示词被截到 2050，且从**开头**丢——系统提示词的引用/拒答
+   规则可能从未进过模型；暗号测试修前空回复、修后 `紫罗兰七号` 全对）。
+   Mikasa.bat 加 `OLLAMA_CONTEXT_LENGTH=16384`（qwen3:8b 的舒适余量）。
+   这也是"检索给的内容太少"的一大半根因——注入 10 块 ≈3500 字符早就超窗。
+   配套把 local `fusion_top_k` 10→14、api `top_n` 5→8（改 top_n 会平移评测
+   基线，跨基线比较要留意）。
+5. **引用卡加显式「↗ 打开原文件」按钮**：`[n]` 角标是可点的隐藏交互，新用户
+   发现不了——每张引用卡带一个明示按钮（新标签开原件），不依赖先发现角标。
+6. **字号调节只在阅读区**：`--reader-font` 变量挂在阅读器根节点（浮层或内嵌
+   皆可）而非 `documentElement`，`mikasa.ui.readerFont` 本地持久化；控件
+   A-/A+ 放阅读器头部（`documents.html` 没有设置面板，放设置面板知识库页
+   够不着）。
 
-**Rejected options**: restoring table columns at ingest (changing the join in
-`_reflow_by_geometry` to add ` | `; the column-gap data is available before the join) plus
-extracting images into storage (a `data_dir/assets` directory + a `【图:...】` marker or a
-`document_assets` table) — the merged view makes both unnecessary, and the cost would far
-outweigh the benefit (three join changes + asset lifecycle cleanup in three places + orphan
-sweeping on reindex + rewriting three existing regression assertions).
+**被否方案**：入库恢复表格列（改 `_reflow_by_geometry` 的 join 加 ` | `，
+列隙数据本在 join 前可得）+ 图片提取进库（`data_dir/assets` 目录 +
+`【图:...】` 标记或 `document_assets` 表）——合并视图让两者都不再必要；
+代价远大于收益（三处 join 改动 + 资产生命周期三处清理 + reindex 孤儿清扫
++ 3 个既有回归断言重写）。
 
-**Code**: `ingest/pagelocate.py` (new), `ingest/loaders.py` (the two page-number fixes),
-`web/routers/documents.py` (/page/{n}.png, /locate/{chunk_id}), `web/static/js/reader.js` (page
-view + font size + explicit button), `common.js`/`qa.js` (citation-card button), `Mikasa.bat`
-(OLLAMA_CONTEXT_LENGTH), `config/profiles/{local,api}.yaml` (fusion_top_k/top_n); tests
-`tests/unit/ingest/test_pagelocate.py`, `test_loaders.py` (the two page-number regressions),
-`tests/unit/web/test_documents_api.py`; E2E `tools/chrome_reader.py` (PDF page-view assertions).
+**代码**：`ingest/pagelocate.py`（新）、`ingest/loaders.py`（两处页码修复）、
+`web/routers/documents.py`（/page/{n}.png、/locate/{chunk_id}）、
+`web/static/js/reader.js`（页面视图 + 字号 + 显式按钮）、`common.js`/`qa.js`
+（引用卡按钮）、`Mikasa.bat`（OLLAMA_CONTEXT_LENGTH）、
+`config/profiles/{local,api}.yaml`（fusion_top_k/top_n）；测试
+`tests/unit/ingest/test_pagelocate.py`、`test_loaders.py`（两处页码回归）、
+`tests/unit/web/test_documents_api.py`；E2E `tools/chrome_reader.py`（PDF
+页面视图断言）。
 
-## ADR-0018 Configuring the LLM from the web settings panel
+## ADR-0018 设置面板配置模型：用户配置覆盖层 + 免重启热生效
 
-- Status: Accepted | Post-M5 hardening (2026-09-15, user request)
-- Related: ADR-0001 (profiles), ADR-0002 (secrets via environment variables only),
-  ADR-0014 (embedding-dimension discipline), ADR-0017 (the Ollama context window)
+- 状态：Accepted ｜ M5 后完善（2026-09-15，用户提出）
+- 关联：ADR-0001（三档 profile）、ADR-0002（密钥只经环境变量）、
+  ADR-0014（嵌入维度纪律）、ADR-0017（Ollama 上下文窗口）
 
-**Problem**: the onboarding panel promised "you can also change this in the settings panel",
-but the panel only ever had appearance settings — pointing the app at a different model or
-provider meant hand-editing `.env`, and in the packaged build even that file sits in the
-read-only unpack directory. The user asked for a CC Switch–style panel: pick a provider, paste
-a key, test the connection, done.
+**背景**：首启引导写着"设置面板里能改"，但设置面板一直只有外观项——想让
+应用换模型/换供应商只能手改 `.env`，而打包版连 `.env` 都在只读解包目录里。
+用户要求做成 CC Switch 那种形态：选来源、贴密钥、测连通，保存即生效。
 
-**Decision**:
+**决策**：
 
-1. **Persistence is a user-writable overlay, not a rewritten profile.** The panel writes
-   `user_data_root()/config.yaml` (source mode: `data/config.yaml`; packaged:
-   `%LOCALAPPDATA%\Mikasa\config.yaml` — the packaged `resource_root()` is read-only). It is
-   deep-merged **only when the base config is a profile file**; an explicit `--config` or a
-   `config/config.yaml` keeps its full-replacement semantics (tools and the migration drill
-   rely on that). The overlay's `profile:` key is ignored outright: the profile decides the
-   embedding/retrieval set, and letting the panel flip it would pair a profile's embedding
-   config with another profile's index (ADR-0014).
-2. **The panel only writes the `llm:` section.** Embedding changes alter vector dimensions and
-   require a full re-index, so they stay a CLI decision; reranker and judge still follow the
-   profile. The panel writes only the fields it owns (not temperature/max_tokens/timeout), so
-   future profile tuning is not frozen by an old snapshot.
-3. **Keys go to `user_data_root()/.env`** (python-dotenv `set_key`, `quote_mode="always"`,
-   created with a UTF-8 header when missing), never into the overlay. Reads resolve the key
-   through `api_key_env` at request time, exactly as ADR-0002 prescribes. `GET
-   /api/settings/model` returns `has_api_key` and never the key; the connection probe passes a
-   throwaway `MIKASA_SETTINGS_TEST_KEY` environment variable that is removed in a `finally`.
-   Clearing a key removes the line and pops it from the process environment — and only the one
-   variable the request names (the api profile shares `SILICONFLOW_API_KEY` between embedding,
-   reranker and judge; clearing it by accident would silently break retrieval).
-4. **Saving re-applies live.** Write files → set the process environment for that one key
-   (`load_dotenv` does not override existing variables) → `load_settings()` again → swap
-   `services.settings` **before** calling `rebuild_ask()` (it rebuilds from `self.settings`) →
-   swap `app.state.settings`, which `/api/health` reads. An `_APPLY_LOCK` serialises saves;
-   in-flight questions keep their old objects and finish normally; the new `AskService` starts
-   with a cold index cache (acceptable for a rare, explicit action).
-5. **Every existing `.env` in the chain is loaded.** The old loader stopped at the first file
-   that existed. With the panel writing keys into the data-dir `.env`, that would have masked
-   the other keys in the repo-root `.env` (in the api profile that silently breaks embeddings,
-   reranker and judge). Files now load in chain order; for duplicate keys the first file wins,
-   which is the same precedence as before.
-6. **The connection probe never touches live state**: a one-off client with `max_retries=0`
-   (3 retries would turn a 20 s timeout into a 60 s wait), `max_tokens=8`, always HTTP 200 with
-   `{ok, latency_ms, error?}` — "unreachable" is a probe result, not a server error, and the UI
-   renders it as one pill.
+1. **持久化落在"用户可写的覆盖层"，不重写 profile**：面板写
+   `user_data_root()/config.yaml`（源码模式 `data/config.yaml`；打包
+   `%LOCALAPPDATA%\Mikasa\config.yaml`——打包后 `resource_root()` 只读）。
+   它**只在基底是 profile 文件时**深合并；显式 `--config` 与
+   `config/config.yaml` 保持"完整替换"语义（迁移演练与 E2E 工具都依赖它）。
+   覆盖层里的 `profile:` 键一律忽略：档位决定 embedding/检索整套，允许面板
+   改档会让新档的 embedding 与旧档的索引对不上（ADR-0014）。
+2. **面板只写 `llm:` 段**：改嵌入模型会变向量维度、必须全量重索引，仍归 CLI
+   决策；reranker/judge 也随档位。且只写面板自己拥有的字段（temperature/
+   max_tokens/timeout 不写），避免把档位调优过的数字用旧快照固化。
+3. **密钥写 `user_data_root()/.env`**（python-dotenv `set_key`，
+   `quote_mode="always"`，缺文件时先建 UTF-8 头注释），覆盖层里永不出现密钥；
+   读取仍按 ADR-0002 经 `api_key_env` 在请求时刻解析。`GET /api/settings/model`
+   只回 `has_api_key`、永不回值；测试连接把密钥临时放进
+   `MIKASA_SETTINGS_TEST_KEY` 环境变量并在 `finally` 摘除。清除密钥 = 删行 +
+   从进程环境弹出，**且只动本次提交那一个变量**（api 档的
+   `SILICONFLOW_API_KEY` 被 embedding/reranker/judge 共用，误清会静默打挂检索）。
+4. **保存即热生效**：写文件 → 直接写进程环境（`load_dotenv` 不覆盖已存在变量）
+   → 重新 `load_settings()` → **先**换 `services.settings` 再 `rebuild_ask()`
+   （它用 `self.settings` 重建）→ 换 `app.state.settings`（`/api/health` 的取数口）。
+   `_APPLY_LOCK` 串行化保存；在途问答持旧对象照常完成；新 AskService 索引缓存
+   冷启动（低频显式动作，可接受）。
+5. **`.env` 查找链改为全部加载**：旧实现"命中第一个存在的文件就停"。面板把
+   密钥写进数据目录 `.env` 后，仓库根 `.env` 里的其它密钥会被静默屏蔽
+   （api 档下 embedding/reranker/judge 全挂）。现在按链序全部加载，同名键
+   先加载者胜——与旧语义（链序在前者优先）一致。
+6. **测试连接不碰任何生效状态**：一次性客户端 `max_retries=0`
+   （否则 20s 超时会拖成 3×20s）、`max_tokens=8`，恒回 200 +
+   `{ok, latency_ms, error?}`——"连不上"是探测结果而非服务端错误，前端一个
+   pill 直接渲染。
 
-**Rejected options**: dumping the full effective settings into the overlay as a snapshot — it
-would freeze `${VAR}` expansion into literals, mask every future profile-default change
-behind a stale copy, and one wrong `profile:` key would trigger a full re-index. Writing into
-the bundle's `resource_root()` — impossible in the packaged build (read-only). Letting the
-panel switch profiles — same re-index hazard as above.
+**被否方案**：把完整生效配置快照进覆盖层——会把 `${VAR}` 展开固化成字面量、
+把将来的 profile 默认值调整永久压在旧快照下，且写错 `profile:` 一个键就触发
+全量重索引；写随包 `resource_root()`——打包版只读，写不进去；面板切档位——
+同上重索引风险。
 
-**Limitations**: the overlay applies to every profile, including `offline` (a deliberate user
-action; the "zero calls" promise of that profile ends the moment a model is configured). When
-the configuration comes from `--config`/`config.yaml`, the panel is read-only (the endpoint
-answers 400 with the file path). Judge and reranker are not configurable from the panel yet.
+**局限**：覆盖层对全部档位生效（含 offline；用户显式换模型即自担该档
+"零调用"承诺失效）。配置来自 `--config`/`config.yaml` 时面板只读（端点回
+400 并给出文件路径）。judge/reranker 暂不在面板内开放。
 
-**Code**: `config/settings.py` (overlay load/merge, `user_config_path`, `user_env_path`,
-`write_llm_overlay`, `write_api_key`, `clear_api_key`, chain-wide `.env` loading),
-`providers/ollama.py` (moved out of the CLI), `providers/llm.py` (`max_retries`),
-`web/routers/settings.py` (new), `web/schemas.py`, `web/static/js/model-settings.js` (new),
-`static/index.html`, `css/style.css`, `static/js/settings.js`, `static/js/onboard.js`; tests
-`tests/unit/config/test_user_config.py`, `tests/unit/web/test_settings_api.py`,
-`tests/conftest.py` (global `MIKASA_DATA_DIR` isolation); E2E `tools/chrome_model_settings.py`.
+**代码**：`config/settings.py`（覆盖层加载合并、`user_config_path`、
+`user_env_path`、`write_llm_overlay`、`write_api_key`、`clear_api_key`、
+`.env` 全链加载）、`providers/ollama.py`（自 CLI 迁出）、`providers/llm.py`
+（`max_retries`）、`web/routers/settings.py`（新）、`web/schemas.py`、
+`web/static/js/model-settings.js`（新）、`static/index.html`、
+`css/style.css`、`static/js/settings.js`、`static/js/onboard.js`；测试
+`tests/unit/config/test_user_config.py`、`tests/unit/web/test_settings_api.py`、
+`tests/conftest.py`（全局 `MIKASA_DATA_DIR` 隔离）；E2E
+`tools/chrome_model_settings.py`。
 
-## ADR-0019 Online paper search: two free sources, interleaved pagination, a defended downloader
+## ADR-0019 在线找论文：双免费源 + 交错分页 + 有防线的下载器
 
-- Status: Accepted | M7 (2026-09-15/16, user request: "search related papers in the knowledge base, like CNKI")
-  — **superseded in part by ADR-0020** (M8, 2026-09-16): point 8's "the panel lives on the knowledge
-  base page" no longer holds; the feature is a page of its own (`/papers`) with three sources. Points 1-7
-  and 9-10 (sources, interleaved paging, degradation, the defended downloader, the import tail, the key
-  discipline) still stand.
-- Related: ADR-0002 (secrets live in the environment), ADR-0016 (reader view, original-file allowlist),
-  ADR-0018 (the settings panel's key discipline this panel copies), ADR-0020 (its successor)
+- 状态：Accepted ｜ M7（2026-09-15/16，用户提出"在知识库里能搜到别的论文，像知网那样"）
+  —— **第 8 点已被 ADR-0020 部分取代**（M8，2026-09-16）："面板落在知识库页"不再成立，
+  该功能成了独立一页（`/papers`）并扩到三源。其余各点（来源/交错分页/降级/防线下载器/
+  导入尾链/密钥纪律）仍然有效。
+- 关联：ADR-0002（密钥只经环境变量）、ADR-0016（阅读视图与原文件白名单）、
+  ADR-0018（本面板沿用的密钥纪律）、ADR-0020（后继）
 
-**Problem**: the user wanted CNKI-style literature search inside the knowledge base — find papers
-beyond the ones already uploaded, pull them in, and ask questions about them right away. The
-honest constraint, established by a feasibility probe on 2026-09-11: CNKI/Wanfang/VIP hold their
-full text behind paywalls with no public API and active anti-scraping; scraping them is a legal
-problem, not an engineering one. **The target is a CNKI-like experience, not CNKI's data** — and
-the UI says so.
+**背景**：用户想在知识库里做知网式检索——搜到自己没上传的论文，导进来立刻能提问。
+2026-09-11 的勘验结论是硬约束：知网/万方/维普的全文在付费墙后，无公开 API、有反爬，
+硬爬是法律问题而非工程问题。**目标是"知网式体验"，不是"知网的数据"**——界面与文档
+如实这么写。
 
-**Decision**:
+**决策**：
 
-1. **Two sources with public APIs, both free: arXiv (Atom XML) and OpenAlex (works JSON).**
-   arXiv carries CS/physics preprints, all open access; its API needs https (the http port was
-   blocked on this machine in testing) and sits behind a ~1 request/3 s politeness limit, honoured
-   by a module-level throttle that sleeps only *after* a successful call. OpenAlex covers
-   DOI-carrying core journals including Chinese ones (a Chinese query like "水库坝" returns
-   thousands of hits) but has required a free API key since 2026-02 (100k credits/day; a list
-   query costs 10) and stores abstracts as inverted indices, reconstructed without punctuation or
-   case. Both return wildly different field shapes, normalised into one `PaperResult`.
-2. **Interleaved pagination instead of score merging.** The two sources' relevance scores are not
-   commensurable, so a merged ordering would be a fiction. Global positions are assigned by
-   parity — even to arXiv, odd to OpenAlex — so every page shows both sources and Chinese results
-   (OpenAlex) can never be permanently buried under English ones (arXiv). `has_more` replaces
-   `total`: arXiv's relevance count drifts and OpenAlex's `meta.count` is an approximation, so
-   "did we fill the page" is the only honest paging signal.
-3. **Per-source degradation.** One source raising puts a Chinese message into an `errors` map and
-   the response still returns 200 with the other source's results; only both failing together is
-   worth a 502. The frontend renders the map as a "部分来源暂时不可用" line above the results.
-4. **Import never trusts the client.** The request carries `{source, id}` — not a title, not a PDF
-   URL. The server re-fetches the metadata from the source API and derives the PDF URL from its
-   own record; ids are regex-validated twice (schema parse + before entering a URL), which closes
-   the SSRF line at the entry point rather than at the socket. A paper with no open-access full
-   text is a 409 carrying a landing-page (DOI) hint, not a failure.
-5. **A defended downloader** (`papers/download.py`): https only to hosts that resolve to public
-   addresses; http only to loopback (the E2E fake-source escape hatch — loopback cannot reach the
-   intranet, so the SSRF guarantee is unchanged); every redirect hop re-validated, max 3;
-   `Content-Type: application/pdf` plus a `%PDF-` magic-byte sniff; a 50 MB hard cap; half-written
-   files deleted on every failure path. Accepted residual: validation and the actual connection do
-   two independent DNS lookups, so a theoretical DNS-rebinding window remains; closing it means
-   writing our own connection layer, which is not worth it for a local personal app.
-6. **Import reuses the upload tail.** The ingest tail of the upload endpoint was extracted into
-   `documents.ingest_web_file`, so an import returns a **byte-identical** 201/200/409 response —
-   the tree refresh, the toasts and the duplicate handling are the same code path, not a copy.
-   The filename is `title[:80] (source id).pdf`: ingest's same-name-replacement semantics would
-   let two identically titled papers clobber each other, and the id suffix keeps them apart, while
-   genuinely identical bytes still dedupe by sha256 (200, "已跳过重复导入"). The title is
-   truncated *before* the suffix is appended, because `sanitize_filename` keeps the head and cuts
-   the tail.
-7. **The OpenAlex key lives in the panel, with ADR-0018's three-state semantics** (`null` =
-   leave alone, `""` = clear, value = write) and its discipline: written to the data-dir `.env`
-   plus the process environment for hot effect, `GET` answering a boolean and never the value.
-   The key row is collapsed by default — the key is optional (anonymous access has a small trial
-   quota) and should not compete with the search box for attention.
-8. **The panel lives on the knowledge base page** (`js/papers.js`), because that is where imported
-   documents land and where the corpus tree gives immediate feedback. The settings panel only
-   exists on the QA page, so the key row is the panel's own. Result rows render title/authors/
-   year/source with an expandable abstract; the import button is disabled up front for papers
-   without open access, so the 409 is a safety net rather than the UX.
-   *(M8 note: reversed by ADR-0020 — the panel was too cramped to carry filters and a detail pane,
-   so it became the `/papers` page. The "already in the library" feedback it traded away is restored
-   by `documents.source_ref`.)*
+1. **两个有公开 API 的免费源：arXiv（Atom XML）+ OpenAlex（works JSON）**。arXiv
+   覆盖 CS/物理预印本、全部开放获取，但必须 https（实测 http 80 端口被墙）、官方
+   限速约 1 请求/3 秒——模块级节流只对**成功**请求补睡。OpenAlex 覆盖带 DOI 的
+   国内理工核心期刊（"水库坝"这种中文词直接命中几万条），但 2026-02 起必须免费
+   API key（每日 10 万积分，列表查询一次 10 分），且摘要存倒排索引、重建后无标点
+   无大小写。两者字段形状完全不同，归一成一份 `PaperResult`。
+2. **交错分页取代按分数合并**：两源的相关性分数不可比，合并排序是编出来的。全局
+   位置按奇偶分配——偶数给 arXiv、奇数给 OpenAlex——保证每页两源都出镜，中文结果
+   （OpenAlex 路）不会永远沉在英文结果（arXiv 路）后面。`has_more` 取代 `total`：
+   arXiv 的相关性计数会漂、OpenAlex 的 `meta.count` 是近似值，"这把取满了没有"
+   才是诚实的翻页信号。
+3. **逐源降级**：单源抛错只把中文消息塞进 `errors` 字典，响应照常 200 并带上另一源
+   的结果；两源全灭才值得 502。前端把该字典渲染成结果上方的"部分来源暂时不可用"。
+4. **导入端点不信客户端**：请求体只带 `{source, id}`——不带标题、不带 PDF 链接。
+   服务端按 id 反查来源 API 取元数据、从自己的记录里推 PDF 地址；id 双重正则校验
+   （schema 解析 + 拼接 URL 前），SSRF 防线在入口就闭合而不是在 socket 上。没有
+   开放获取全文 = 409 + 落地页（DOI）跳转提示，而不是失败。
+5. **有防线的下载器**（`papers/download.py`）：https 只放行解析到公网地址的主机；
+   http 只放行回环（E2E 假源逃生门——回环打不到内网，SSRF 保证不削弱）；重定向
+   逐跳复验、上限 3 跳；`Content-Type: application/pdf` + `%PDF-` 魔数嗅探；50 MB
+   硬上限；每条失败路径都删半成品。已接受残差：校验与实际连接是两次独立 DNS，
+   理论上的 DNS-rebinding 窗口仍在——闭合它要自建连接层，对本地个人应用不值。
+6. **导入复用上传尾链**：把上传端点的入库尾段抽成 `documents.ingest_web_file`，
+   导入因此返回**逐字节同形**的 201/200/409——树刷新、toast、去重是同一条代码路径
+   而不是副本。文件名 `标题[:80] (来源 id).pdf`：ingest 是"同名替换"语义，两篇同名
+   论文会互相踩掉，id 后缀保它们互不相干；真·同内容仍走 sha256 去重（200，
+   "已跳过重复导入"）。标题先截断再拼后缀——`sanitize_filename` 保头截尾。
+7. **OpenAlex 密钥放在面板里**，沿用 ADR-0018 的三段语义（`null`=不动、`""`=清除、
+   非空=写入）与纪律：写数据目录 `.env` + 同步进程环境（热生效），GET 只回布尔、
+   永不回值。密钥行默认折叠——密钥是可选项（匿名有少量试用额度），不该跟搜索框
+   抢注意力。
+8. **面板落在知识库页**（`js/papers.js`）：导入的文档落在这里，左侧语料树能立刻
+   给出反馈。设置面板只在问答页，所以密钥行由面板自带。结果行渲染标题/作者/年份/
+   来源 + 可展开摘要；无开放获取的那条**提前禁用**导入按钮，让 409 退化成安全网
+   而不是交互本身。
+   *（M8 注：被 ADR-0020 反转——面板挤不下筛选器与详情面板，改成了 `/papers` 独立页；
+   它让出的"导入后立刻看得见"反馈由 `documents.source_ref` 的"已在库中"标记补回。）*
 
-**Rejected options**: scraping CNKI/Wanfang/VIP (paywall + anti-bot + no API = legal problem, and
-the docs say so); Semantic Scholar as a third source (it works, but rate-limits at 429 — not worth
-a third parser right now); CORE/ChinaXiv as Chinese OA supplements (kept in the backlog);
-accepting a PDF URL from the client (that is the SSRF hole the design closes); a separate "papers"
-page (the knowledge base is where documents live — import must land where the user already is);
-merging both sources by score (see 2); letting the client send the title for the filename (the
-server would be writing a name the user could have forged).
+**被否方案**：爬知网/万方/维普（付费墙 + 反爬 + 无 API = 法律问题，文档里也这么写）；
+把 Semantic Scholar 当第三源（能用，但 429 限流，暂时不值第三个解析器）；
+CORE/ChinaXiv 作中文 OA 补充（留在 backlog）；允许客户端直接给 PDF 链接（那正是本设计
+要关掉的 SSRF 口子）；单开一个"论文"页（文档住在知识库，导入必须落在用户已经在的地方）；
+两源按分数合并（见 2）；文件名用客户端传的标题（服务端会写下用户能伪造的名字）。
 
-**Limitations**: CSSCI/social-science Chinese coverage is ≈ 0, and CNKI-exclusive full text is not
-reachable — the UI and the docs say so plainly and offer a DOI jump instead. arXiv's 3 s throttle
-makes back-to-back searches feel slow (one search can be two upstream calls). No "jump to page N":
-the interleaved window advances by results received, so paging is forward-only. The abstract
-reconstructed from OpenAlex loses punctuation and case. Import = download: there is no in-app
-preview for a paper that has not been imported, and the 50 MB cap rejects oversized PDFs.
+**局限**：CSSCI/社科中文覆盖 ≈ 0，知网独家全文拿不到——界面与文档如实说明并给 DOI
+跳转。arXiv 的 3 秒节流让连续检索偏慢（一次检索可能是两次上游调用）。没有"跳到第 N 页"：
+交错窗口按已收到条数前进，只能向后翻。OpenAlex 重建的摘要没有标点与大小写。导入即下载：
+未导入的论文没有应用内预览，超 50 MB 的 PDF 一律拒收。
 
-**Code**: `papers/sources.py` (the `PaperResult` model and `PaperSource` protocol), `papers/arxiv.py`,
-`papers/openalex.py`, `papers/download.py`, `papers/service.py` (interleaving + degradation),
-`papers/errors.py`; `web/routers/papers.py` (new), `web/schemas.py`, `web/routers/documents.py`
-(`ingest_web_file` extraction), `web/static/js/papers.js` (new), `static/documents.html`,
-`static/js/documents.js`, `css/style.css`; tests `tests/unit/papers/` (sources, service, download)
-and `tests/unit/web/test_papers_api.py`; E2E `tools/chrome_papers.py`.
+**代码**：`papers/sources.py`（`PaperResult` 与 `PaperSource` 协议）、`papers/arxiv.py`、
+`papers/openalex.py`、`papers/download.py`、`papers/service.py`（交错 + 降级）、
+`papers/errors.py`；`web/routers/papers.py`（新）、`web/schemas.py`、
+`web/routers/documents.py`（`ingest_web_file` 抽取）、`web/static/js/papers.js`（新）、
+`static/documents.html`、`static/js/documents.js`、`css/style.css`；测试
+`tests/unit/papers/`（sources/service/download 三份）与 `tests/unit/web/test_papers_api.py`；
+E2E `tools/chrome_papers.py`。
 
-## ADR-0020 "Find papers" becomes a page of its own: three sources, declared capabilities, an honest paging contract
+## ADR-0020 「找论文」独立成页：三源 + 能力声明 + 诚实的翻页契约
 
-- Status: Accepted | M8 (2026-09-16, user request after using M7: "the search is too thin — make it its own page")
-- Related: ADR-0019 (superseded in part — its point 8 placed the panel on the library page),
-  ADR-0004 (schema migration discipline), ADR-0016 (the reader can only show ingested documents)
+- 状态：Accepted ｜ M8（2026-09-16，用户用了一天 M7 后提出："这个搜索太简陋了，单独放一页"）
+- 关联：ADR-0019（第 8 点被本篇取代）、ADR-0004（迁移纪律）、ADR-0016（阅读器只能看已入库文档）
 
-**Problem**: M7 shipped online paper search as a panel in the library page's right column, and the
-user's verdict after using it was that it was too cramped to be useful: one search box, one flat list,
-no filters. The ask was to promote it to a **page of its own** (alongside 问答 / 知识库 / 评测) and to
-make it richer in four directions: more metadata per result, filtering and sorting, more sources, and a
-reading/status experience (pick a result, read the full abstract, see what is already in the library).
+**背景**：M7 把在线找论文做成了知识库页右栏的一个面板。用户用过后的判断是"太挤了"：
+一个搜索框、一列结果、没有筛选。要求提成**独立一页**（与「问答/知识库/评测」并列），
+并在四个方向上做丰富：每条结果信息更全、筛选与排序、更多来源、阅读与状态体验
+（点一条看完整摘要，并且能看出哪些已经在库里）。
 
-**Decision**:
+**决策**：
 
-1. **A fourth page (`/papers`), not a bigger panel.** The three-column layout (filters 300px / results /
-   details 340-440px) needs horizontal room the library page does not have — its right column is the
-   upload + corpus area. The nav is hardcoded in four HTML files, so this cost one line each plus a
-   `_PAGES` entry; the panel was removed from the library page in the same change so the two cannot drift.
-2. **A third source: CORE, chosen by measurement.** CORE's v3 works API answered anonymously (no key),
-   tolerated a handful of quick requests, and its `downloadUrl` served a real PDF (`%PDF-1.5` verified).
-   Semantic Scholar was rejected for now (HTTP 429 on the anonymous pool, twice) and ChinaXiv was
-   rejected outright: its `/api/search` exists but the contract is unguessable — GET and two POST
-   encodings all answer "请求方法应为POST", and `/oai` refuses anonymous access. Scraping it would be the
-   only way in, and that is out (ADR-0019's reasoning about paywalled Chinese full text still stands).
-3. **Sources declare their capabilities; the UI disables what they cannot do.** `SourceCaps(year,
-   cited_sort, recent_sort, language, oa)` is part of the `PaperSource` protocol, and
-   `GET /api/papers/sources` hands the catalogue to the frontend, which greys out unsupported options and
-   says why. This exists because of a measured "false support": CORE's `yearFrom`/`yearTo` **parameters**
-   return HTTP 200 while being silently ignored (asked for 2020+, got 2012/2018/2010 papers) — its year
-   filter only works through query syntax (`... AND yearPublished>=2020`), which is what the source now
-   emits. Serving an option that quietly does nothing is worse than not offering it.
-4. **`notes` and `errors` are different things.** `errors` is failure (the source raised), `notes` is
-   degradation (the source answered but could not honour a filter: arXiv has no citation data, so "sort
-   by cited" falls back to relevance). Both surface in the UI, in different words. One subtlety worth
-   writing down: `oa: "always"` is **satisfied**, not degraded — a source that is entirely open access
-   already fulfils "only open access", so it produces no note, and the frontend renders the checkbox as
-   checked-and-disabled ("已自动满足"), deliberately distinct from "not supported".
-5. **Rotating interleave generalised from two sources to N.** Global position `p` belongs to source
-   `p % n` and is that source's result number `p // n`; the window math is `k ∈ [max(0,
-   ceil((offset-i)/n)), floor((offset+limit-1-i)/n)]`. Substituting `n=2` reproduces the old parity
-   arithmetic digit for digit (a unit test pins that equivalence). The merge fills by global position and
-   **leaves holes rather than packing**: the old `zip + extend` tail-packing made the second page repeat
-   results when a source ran out early (page 1 took `[a0, o0, o1, o2]`, the client advanced by the four
-   results it received, and `o2` came back on page 2).
-6. **The paging contract is by window, not by results received.** With holes in a page, "advance offset
-   by the number of results" is wrong; the client advances by `limit`. Both halves are regression-locked,
-   because either one alone still duplicates.
-7. **OpenAlex's window alignment needed its own fix.** OpenAlex has only `page`/`per-page`, and page
-   boundaries sit on multiples of `per-page` — there is no way to ask for an arbitrary offset. The old
-   `page = start // count + 1` was accidentally correct only while `start` was a multiple of `count`
-   (true for two sources splitting a 20-item page, false the moment N sources rotate). A first fix
-   (align to `count`, fetch by `per_page`) was still wrong — the two multiples differ. The shipped
-   approach fetches **page 1 with `per-page = start + count` and slices** `[start : start+count]`: one
-   request, no boundary arithmetic, and OpenAlex bills per query (10 credits) regardless of page size, so
-   the extra bytes are free. Windows deeper than the 200-record page cap come back short, so `has_more`
-   turns false and that source's paging stops honestly instead of pretending.
-8. **"Already in the library" needs a column, not a title suffix.** `documents` gained
-   `source_ref TEXT` (`"arxiv:2401.12345"`, `"core:72543"`), written by the import path and read by the
-   search endpoint in one `IS NOT NULL` sweep. Reverse-parsing the filename suffix `(arxiv 2401.12345)`
-   was rejected: users rename documents (`PATCH /api/documents/{id}` touches only `title`), a rename is
-   inherited across re-ingests so it never heals, titles are truncated at 80 characters before the suffix
-   is appended, and the only stable carrier (the uploads copy name) is reachable solely through
-   `file_path`, a known-dirty legacy field. The column follows the v3 `folder_id` precedent exactly —
-   including the two "keep" lists that preserve it across a re-index, whose omission is precisely how
-   `folder_id` was lost once.
-9. **The sha256 skip path backfills the source.** A user who dragged the PDF in by hand and later clicks
-   "import" on the same paper hits the content-hash skip; without a backfill that row keeps
-   `source_ref = NULL` forever and the search page never shows "already in the library" for a document
-   that is demonstrably in the library. The skip branch fills it in when (and only when) the existing row
-   has no source.
-10. **The source reference is public metadata.** It is exposed through `_public_document`, a deliberate
-    widening of the redaction boundary: `file_path` and `file_sha256` stay hidden (local filesystem
-    facts), while an arXiv id or DOI is already printed in every search result.
-11. **Public `http://` full texts are allowed again** (measured, user-approved on 2026-09-16). ADR-0019
-    had restricted http to loopback. That turned out to block the feature's own main use case: sampling
-    three queries showed **5/7 and 3/6 of the Chinese open-access links are plain `http://`** (domestic
-    journals and repositories frequently never moved to https), while the English sample had 0/15 —
-    "Chinese papers are findable but not importable". Since the URL always comes from a source API
-    record (never user input — ADR-0019's entry-point design) and the payload is a public paper fetched
-    without credentials, the transport-security argument for https-only is weak here. Every SSRF check
-    stays: public addresses only, plus a loopback exception for http (the E2E fake source, and local
-    services), with private/reserved/`169.254.0.0/16` ranges rejected exactly as before. Verification
-    after the change: a Chinese `http://` full text imported cleanly (138 chunks), a second host
-    answered 403 regardless of browser-like headers (upstream blocking, reported as a 502, out of our
-    hands). The residual risk is integrity — a network attacker could substitute a different PDF in
-    transit — and it is accepted for a local single-user tool.
+1. **第四页（`/papers`），不是更大的面板**：三栏布局（筛选 300px / 结果 / 详情 340-440px）
+   需要的横向空间，知识库页给不出来——它右栏是上传区与语料区。导航在四个 HTML 里硬编码，
+   加一项每处一行，外加 `_PAGES` 一条；**同一改动里删掉知识库页的面板**，不留两套会漂移的逻辑。
+2. **第三个来源 CORE，靠实测选出来的**：CORE v3 works API 匿名可用（免密钥）、连打几次能撑住、
+   `downloadUrl` 实测下到真 PDF（`%PDF-1.5`）。Semantic Scholar 暂缓（匿名池连试两次都 HTTP 429）；
+   ChinaXiv 直接否掉——它的 `/api/search` 存在但契约猜不出（GET 与两种 POST 编码一律回
+   "请求方法应为POST"，`/oai` 又拒绝匿名），要接只能 HTML 抓取，而那是不做的（ADR-0019 关于
+   中文付费全文的判断依然成立）。
+3. **来源声明自己的能力，界面禁用做不到的选项**：`SourceCaps(year, cited_sort, recent_sort,
+   language, oa)` 是 `PaperSource` 协议的一部分，`GET /api/papers/sources` 把目录交给前端，
+   前端据此置灰并说明原因。这条来自一次实测的**"假支持"**：CORE 的 `yearFrom`/`yearTo`
+   **参数**返回 200 却被静默忽略（要 2020+，给回 2012/2018/2010 的论文）——它的年份过滤
+   只能走查询语法（`... AND yearPublished>=2020`），现在的实现就是发这个。摆一个悄悄不生效的
+   选项，比不提供更坏。
+4. **`notes` 与 `errors` 是两回事**：errors = 失败（来源抛错），notes = 降级（来源答了但没法
+   满足某个筛选：arXiv 没有被引数据，"按被引排序"就回落相关度）。两者都以各自的措辞出现在界面上。
+   一个必须写清的细节：`oa: "always"` 是**已满足**而不是降级——天然全 OA 的来源本身就兑现了
+   "只看开放获取"，所以它不产生 note；前端把它渲染成"已勾选且禁用 + 已自动满足"，与"不支持"
+   的文案刻意分开。
+5. **交错分页从两源推广到 N 源**：全局位置 `p` 归来源 `p % n`、是该源的第 `p // n` 条，
+   窗口换算 `k ∈ [max(0, ceil((offset-i)/n)), floor((offset+limit-1-i)/n)]`。代回 `n=2`
+   与旧的奇偶算术逐位相同（有单测钉住等价性）。合并**按全局位置装填、缺位留洞、不补位**：
+   旧的 `zip + 尾巴补位` 会在某源提前耗尽时让第二页重复（首页拿到 `[a0, o0, o1, o2]`，
+   客户端按收到的 4 条推进 offset，`o2` 在第二页又出现一次）。
+6. **翻页契约按窗口推进，不按收到的条数**：页面上有空洞时，"按收到条数推进 offset"是错的；
+   客户端按 `limit` 推进。两半都有回归锁——只改一半仍然会重复。
+7. **OpenAlex 的窗口对齐得单独修**：它只有 `page`/`per-page`，页边界固定在 `per-page` 的
+   整数倍上，问不出任意 offset。旧实现 `page = start // count + 1` 只在 `start` 是 `count`
+   整数倍时侥幸正确（两源对半分 20 条时成立，N 源轮转一开始就不成立）。第一版修法
+   （按 count 对齐、按 per_page 取页）依然错——两个倍数不是一回事。最终实现：**第 1 页带
+   `per-page = start + count` 取回再切片** `[start : start+count]`：一次请求、不做边界算术，
+   而 OpenAlex 按"每次查询 10 credits"计费、与页大小无关，多取不花钱。超过单页上限（200）
+   的深窗口取不满 → `has_more` 自然为假，该源如实停翻而不是假装还有。
+8. **"已在库中"要一列，不要标题后缀**：`documents` 加 `source_ref TEXT`
+   （`"arxiv:2401.12345"` / `"core:72543"`），由导入链路写入、搜索端点一次 `IS NOT NULL`
+   全表捞回。反查文件名后缀 `(arxiv 2401.12345)` 被否：用户会改名
+   （`PATCH /api/documents/{id}` 只动 `title`）、改名会被重灌继承（永远不会自愈）、标题在 80 字
+   处被截断后才拼后缀、唯一稳定载体（uploads 副本名）只能经已知脏字段 `file_path` 取到。
+   加列完全照 v3 `folder_id` 的先例——**包括两处 reindex 保留清单**，遗漏它正是当年丢
+   `folder_id` 的原因。
+9. **sha256 跳过路径要回填来源**：用户手拖过这篇 PDF、之后又点导入同一篇，会命中内容哈希跳过；
+   不回填的话那一行永远 `source_ref = NULL`，搜索页对一篇明明在库里的文档永远显示"未在库中"。
+   跳过分支在（且仅在）原有行没有来源时补写。
+10. **来源标识是公开元数据**：它经 `_public_document` 暴露，这是对脱敏边界的一次有意放宽——
+    `file_path` 与 `file_sha256` 继续不外泄（本地文件系统事实），而 arXiv id / DOI 本来就
+    印在每条检索结果上。
+11. **公网 `http://` 全文重新放行**（实测后由用户拍板，2026-09-16）。ADR-0019 曾把 http 限死在
+    回环——这条恰好挡住了本功能最主要的用例：三条查询抽样显示**中文开放获取链接里 5/7 与 3/6
+    是明文 `http://`**（国内期刊与仓储普遍没上 https），而英文样本是 0/15，等于"中文论文搜得到、
+    导不进来"。链接始终来自来源 API 的记录（不是用户输入——ADR-0019 在入口就把这条关死了）、
+    下的是公开论文、不带任何凭据，所以"必须 https"在这里的传输安全论据很弱。**SSRF 防线一条没少**：
+    只放行公网地址，外加 http 的回环例外（E2E 假源与本地服务），私网/保留/链路本地地址照旧一律拒。
+    改动后实测：一条中文 `http://` 全文干净导入（138 块）；另一台主机无论怎么换浏览器式请求头
+    都回 403（上游在拦，如实报 502，非我们可控）。残余风险是完整性——明文传输理论上可被中途
+    替换成别的 PDF——对本地单用户工具，这个风险接受。
 
-**Rejected options**: keeping the panel and enlarging it (no horizontal room; the corpus tree is the
-library page's job); a fourth source for its own sake (S2/ChinaXiv fail on evidence, not taste); letting
-the client send an arbitrary PDF URL (ADR-0019 point 4 — the SSRF line closes at `{source, id}`); packing
-holes in the interleave (see 5); a separate `document_sources` table (a second FK surface for a
-one-to-one fact); per-source filter flags hardcoded in the frontend (capabilities belong to the source,
-and hardcoding them is how "options that do nothing" get shipped).
+**被否方案**：留着面板把它做大（没有横向空间；语料树是知识库页的活）；为了凑数硬加第四个来源
+（S2/ChinaXiv 是证据不足，不是口味问题）；允许客户端给任意 PDF 链接（ADR-0019 第 4 点——
+SSRF 防线收在 `{source, id}` 上）；交错里补位（见第 5 点）；单开 `document_sources` 表
+（一对一的事实多一套外键面）；把能力标记硬编码在前端（能力属于来源；硬编码正是"选项不生效"
+的产生方式）。
 
-**Limitations**: CORE has no citation sort (`sort=citationCount` answers HTTP 500) and rate-limits
-aggressively under bursts, so it carries its own 2-second throttle; a meaningful share of its
-`downloadUrl` values are `http://` repository addresses, which the downloader's security policy rejects
-(public https or loopback http only), so those records cannot be imported; `yearPublished` arrives dirty
-(observed `710300`, `202022`), so years are parsed as the first four digits and range-checked; arXiv has
-no citation data at all, so "sort by cited" is offered only when a selected source can honour it;
-OpenAlex's deep paging is capped at its 200-record page; and the reader still cannot preview a paper
-before it is imported (the detail pane renders the search response instead).
+**局限**：CORE 不支持按被引排序（`sort=citationCount` 回 HTTP 500）且连打会限流，自带 2 秒节流；
+它的 `downloadUrl` 有相当比例是仓储的 `http://` 地址，会被下载器的安全策略拒收（只放行公网
+https 或回环 http），这些记录导不进来；`yearPublished` 是脏的（实测见过 `710300`、`202022`），
+年份按前四位解析并做范围校验；arXiv 完全没有被引数据，所以"按被引排序"只在所选来源能兑现时
+才可用；OpenAlex 深翻页受 200 条单页上限约束；阅读器仍然无法预览未导入的论文（详情面板渲染
+的是检索响应）。
 
-**Code**: `papers/sources.py` (`SourceCaps` / `PaperFilters` / `PaperResult.cited_by`), `papers/core.py`
-(new), `papers/arxiv.py` and `papers/openalex.py` (filter translation, capability declarations, the
-window fix), `papers/service.py` (N-source rotation, hole-leaving merge, `attempted` / `notes`,
-`source_catalog`), `storage/db.py` + `models/document.py` + `storage/repo.py` + `ingest/service.py`
-(`source_ref`, v4 migration, the re-index keep lists), `web/routers/papers.py` (+ `GET
-/api/papers/sources`, `in_library`), `web/routers/documents.py` (`ingest_web_file(source_ref=...)`, the
-skip-path backfill), `web/app.py` (`/papers`); frontend `static/papers.html`, `static/js/papers-page.js`,
-`papers-api.js`, `papers-filters.js`, `papers-detail.js`, `css/style.css`, and the four nav bars; tests
-`tests/unit/papers/test_core.py`, `test_papers_service.py`, `test_sources.py`,
-`tests/unit/storage/test_db_migration.py`, `tests/unit/ingest/test_service.py`,
-`tests/unit/web/test_papers_api.py`; E2E `tools/chrome_papers.py` (three fake sources).
+**代码**：`papers/sources.py`（`SourceCaps`/`PaperFilters`/`PaperResult.cited_by`）、
+`papers/core.py`（新）、`papers/arxiv.py` 与 `papers/openalex.py`（筛选翻译、能力声明、窗口修复）、
+`papers/service.py`（N 源轮转、留洞合并、`attempted`/`notes`/`source_catalog`）、
+`storage/db.py` + `models/document.py` + `storage/repo.py` + `ingest/service.py`
+（`source_ref`、v4 迁移、reindex 保留清单）、`web/routers/papers.py`（含 `GET /api/papers/sources`
+与 `in_library`）、`web/routers/documents.py`（`ingest_web_file(source_ref=...)`、跳过路径回填）、
+`web/app.py`（`/papers`）；前端 `static/papers.html`、`static/js/{papers-page,papers-api,
+papers-filters,papers-detail}.js`、`css/style.css` 与四处导航；测试
+`tests/unit/papers/test_core.py`、`test_papers_service.py`、`test_sources.py`、
+`tests/unit/storage/test_db_migration.py`、`tests/unit/ingest/test_service.py`、
+`tests/unit/web/test_papers_api.py`；E2E `tools/chrome_papers.py`（三个假源）。
 
 ---
 
-## ADR-0021 Notes are ordinary documents: a `source_ref` marker, no schema change, and a force-ingest escape from content dedup
+## ADR-0021 笔记 = 带标记的普通文档：复用 `source_ref`、不加 schema 列、force 绕过内容去重
 
-- Status: Accepted | M6 phase 1 (2026-09-16, user picked "build a new feature" and confirmed two product
-  calls: notes must be **editable** — saving re-ingests automatically — and the editor must have a
-  **live Markdown preview**)
-- Related: ADR-0020 (whose `source_ref` semantics this entry broadens), ADR-0004 (schema migration
-  discipline — the path deliberately not taken), ADR-0012 (the chunker that notes reuse unchanged)
+- 状态：Accepted ｜ M6 第 ① 期（2026-09-16，用户选"开工新功能"后确认两条产品决策：笔记必须**可编辑**
+  ——保存即自动重新入库；编辑器必须带 **Markdown 实时预览**）
+- 关联：ADR-0020（本条目把它的 `source_ref` 语义拓宽）、ADR-0004（schema 迁移纪律——**刻意没走**的路）、
+  ADR-0012（笔记原样复用的分块器）
 
-**Problem**: the product's stated shape is "notes and AI Q&A, two wings", but the only way into the
-library was to bring a file from outside. Writing a note meant leaving the app, and whatever you learned
-while asking questions had nowhere to land. M6's phase 1 is the smallest step that closes the loop: write
-Markdown on the library page, save, and it is immediately retrievable and citable.
+**问题**：产品的既定形态是"笔记 + AI 问答双翼"，但进入知识库的唯一方式是从外面带一个文件进来。
+想写一条笔记就得离开这个应用，而问问题时学到的东西无处沉淀。M6 第 ① 期是闭合这个环的最小一步：
+在知识库页写 Markdown → 保存 → 立刻可被检索、可被引用。
 
-**Decision**:
+**决策**：
 
-1. **A note is an ordinary document with a marker, not a new kind of entity.** The marker is
-   `source_ref = "note:<key>"`. Everything else — the folder tree, drag-and-drop, rename, delete,
-   retrieval, citations, the reader — already works on documents and now works on notes for free. Why not
-   a new column or table: `_KeptProps` already carries `source_ref` through both re-index and same-name
-   replacement, so the marker survives a full rebuild without a single new line; `_public_document`
-   already exposes the field; and the find-papers page matches `arxiv:` / `core:` **exactly**, so a
-   `note:` value cannot be mistaken for a paper already in the library. The price is that the column's
-   meaning widens from "which online record this came from" to "this document's origin" — the four
-   comments that claimed otherwise are updated in the same change, because that is exactly the kind of
-   comment that otherwise becomes a quiet lie.
-2. **The note is a real `.md` file in `uploads/`**, named `<sanitized title> (note <key12>).md`. This
-   falls out of the ingest contract: the uploads copy's basename *is* the document's identity, so the
-   name is generated once, server-side, and **never changes** — renaming a note renames the display
-   title only, which is what `set_document_title` already promises for uploaded documents. The body is
-   stored byte-exact (binary write, LF-normalised) so an editor round-trip is lossless. The `<key>` is 48
-   random bits, checked against both existing paths and existing markers before use: a collision would
-   not raise, it would *replace someone else's row*.
-3. **Notes ingest with `force=True`, and that is not an optimisation.** `_ingest_one`'s byte-level
-   content dedup is right for a corpus (a backup copy of the same bytes should not pollute retrieval)
-   but silently wrong for notes: a second note with the same body would return success and never be
-   written, and editing one note to match another would make the response point at *the other row*.
-   `force` bypasses the dedup at both checks while still taking the same-name-replacement path, so
-   editing stays an in-place update. Identical chunk bodies across two notes are fine — `chunks` is only
-   unique on `(document_id, seq)`.
-4. **The title is handed to ingest, not patched afterwards.** `ingest_one(title=...)` with precedence
-   explicit title > inherited title > loader-derived title. Two independent reasons: the chunker builds
-   each chunk's index text as `《title》｜heading_path`, so fixing the title after ingest would leave the
-   old name inside the very representation BM25 and the vectors search — rename a note and you cannot
-   find it by its new name; and same-name replacement inherits the *previous* row's title, so without an
-   explicit override, editing the title would never take effect at all.
-5. **Editing is same-name replacement, so `documents.id` changes on every save.** In-place update means
-   delete the old row and insert a new one. The response is therefore built from a lookup **by uploads
-   path**, never from the id in the request, and the page re-selects the row by the id it gets back
-   (without that, the refresh sees "the selected row was deleted" and collapses the reading pane the user
-   was in the middle of). A save whose body hash and title are both unchanged short-circuits to 200 and
-   touches nothing, so "open the editor, press save" costs zero.
-6. **The whole save holds the ingest lock** (`services.ingest.exclusive()`), the same discipline DELETE
-   uses. Without it, a save racing a delete resurrects the deleted note as an **ordinary document with no
-   marker**: ingest happily rebuilds the copy from the web-tmp file and inserts a fresh row.
-7. **Read-back reads the uploads copy raw.** The editor must prefill with what the user actually typed,
-   so `GET /api/notes/{id}` returns the file's bytes decoded. `/content` is not an option: it is the
-   stitched-chunk reading text, and by construction it has already dropped `#` heading lines, code fences
-   and blockquote markers — prefilling from it would silently rewrite the user's note on the next save.
-8. **The endpoints refuse to touch anything that is not a note.** PUT and GET check the `note:` prefix
-   and answer 404 otherwise (404, not 403 — no existence oracle), so an uploaded file or an imported
-   paper can never be overwritten through the note API.
-9. **Alternatives rejected**: a dedicated `is_note` column (a v5 migration plus keep-list plus repo and
-   API plumbing, for a boolean already derivable from a field that survives rebuilds); a separate
-   `notes` table (would forfeit the folder tree, retrieval, citations, reader and delete paths, all of
-   which would then need re-implementing and re-testing); and reusing `PATCH /api/documents` with
-   `/content` for editing (see point 7).
+1. **笔记是"带标记的普通文档"，不是新实体。** 标记 = `source_ref = "note:<key>"`。除此之外的一切
+   ——文件夹树、拖拽、改名、删除、检索、引用、阅读视图——本来就在文档上工作，现在原样作用在笔记上。
+   为什么不加列 / 不加表：`_KeptProps` 已经把它列入 reindex 与同名替换的保留清单，标记因此**一行代码
+   不加**就能活过全量重建；`_public_document` 已经暴露该字段；而「找论文」页是**精确匹配** `arxiv:` /
+   `core:`，`note:` 前缀不可能被误认成"这篇论文已在库中"。代价是这一列的含义从"来自哪个在线记录"
+   拓宽为"文档来源标识"——四处在注释里断言过旧含义的地方在同一次改动里改掉了，否则那就是一条会慢慢
+   变成谎话的注释。
+2. **笔记是 `uploads/` 里一个真实的 `.md` 文件**，名字 `<净化标题> (note <key12>).md`。这是 ingest
+   契约推出来的：uploads 副本的主名**就是**文档身份，所以名字由服务端生成一次、**永不更换**——给笔记
+   改名只改显示标题，正是 `set_document_title` 对上传件早已承诺的语义。正文逐字节保存（二进制写 +
+   LF 归一），编辑器往返无损。`<key>` 是 48 位随机数，使用前会同时查既有路径与既有标记：撞了不会报错，
+   而是**顶掉别人的行**。
+3. **笔记用 `force=True` 入库，这不是优化。** `_ingest_one` 的字节级内容去重对语料是对的（同一份字节
+   的备份副本不该污染检索），对笔记是**静默错**：第二条同内容的笔记会返回成功却从未落库；把一条笔记
+   编辑成与另一条同内容，响应还会指向**别人那行**。force 在两处去重判断上都放行，同时仍走同名替换路径
+   → 编辑依旧是原地更新。两条笔记的块内容相同没问题——`chunks` 只对 `(document_id, seq)` 唯一。
+4. **标题交给 ingest，而不是入库后再补。** `ingest_one(title=...)`，优先级：显式标题 > 继承标题 >
+   loader 推导标题。两个彼此独立的理由：分块器把每块的索引文本构造成 `《标题》｜标题路径`，事后改标题
+   会把旧名字留在 BM25 与向量**真正检索的那份表示**里——改完名就搜不到新名字；而同名替换会继承**旧行**
+   的标题，没有显式覆盖的话，编辑时改标题根本不生效。
+5. **编辑 = 同名替换，因此每次保存 `documents.id` 都会变。** 原地更新就是"删旧行 + 插新行"。所以响应
+   一律**按 uploads 路径**查回来构造（绝不用请求里的 id），页面也用响应回传的新 id 重新选中——不这么做，
+   刷新会判定"选中行已被删除"，把用户正在读的阅读区一起收掉。正文哈希与标题都没变的保存会短路成 200、
+   一个字节都不动，于是"打开编辑器随手点保存"的代价是零。
+6. **整段保存持有 ingest 锁**（`services.ingest.exclusive()`），与 DELETE 同一套纪律。没有它，
+   "保存 vs 删除"会让被删掉的笔记以**没有标记的普通文档**复活：ingest 会照 web-tmp 文件重建副本并插一行。
+7. **回填读的是 uploads 副本原文。** 编辑器必须拿用户真正写下的内容回填，故 `GET /api/notes/{id}` 返回
+   文件字节解码后的正文。不能用 `/content`：那是拼接 chunk 的阅读正文，按构造已经丢掉了 `#` 标题行、
+   代码围栏与引用标记——拿它回填，下次保存就会静默重写用户的笔记。
+8. **端点拒绝触碰任何非笔记文档。** PUT 与 GET 都检查 `note:` 前缀，不符一律 404（不是 403：不存在性
+   不构成信息），因此上传件与导入的论文永远不可能被笔记 API 覆盖。
+9. **被否决的替代方案**：新增 `is_note` 列（v5 迁移 + 保留清单 + repo/API 全链改造，只为换一个"能从
+   活过重建的字段推导出来"的布尔值）；独立的 `notes` 表（会一并失去文件夹树、检索、引用、阅读与删除
+   这五条路，全都得重写重测）；以及用 `PATCH /api/documents` + `/content` 做编辑（见第 7 点）。
 
-**Consequences**: fenced code blocks **do not enter retrieval** — the Markdown loader skips them so that
-a `#` inside code is not read as a heading — which means a note consisting only of code is rejected with
-a 400 whose wording has to explain that; the uploads copy is the note's *only* authoritative copy (there
-is no "user's original" to fall back on), so `data/` must be backed up before any re-index; the parsed
-text still passes through `strip_repeated_lines` (≥3 identical lines) and Setext `---` handling, so the
-indexed representation can differ from the file (the file itself is untouched); two browser tabs editing
-one note is last-write-wins (no optimistic locking — SQLite's `datetime('now')` is second-granular and
-useless as a version); and every save rebuilds chunks, so citation chips in older answers point at
-deleted chunk ids — the same consequence re-uploading a file already has. The pre-existing
-same-name-replace file-lock hazard (an external program holding the uploads copy makes the rename step
-fail *after* the old row was deleted) applies to notes too and is documented rather than fixed here,
-because it lives on the ingest rollback path the corpus depends on.
+**后果**：**围栏代码块不进检索**——markdown loader 会整块跳过它（防代码里的 `#` 被读成标题），因此
+"整篇只有代码"的笔记会被 400 拒绝，文案必须解释这一点；uploads 副本是笔记**唯一**的权威副本（没有
+"用户手里的原件"可回退），所以任何 re-index 前都要备份 `data/`；解析后的文本仍会过
+`strip_repeated_lines`（≥3 次重复行）与 Setext `---` 判定，故**索引表示**可能与文件不同（文件本身不动）；
+两个标签页同时编辑同一条笔记是最后写入者胜（没做乐观锁——SQLite 的 `datetime('now')` 只有秒级精度，
+当版本号没有意义）；每次保存都会重建 chunk，所以旧回答里的引用 chip 指向的是已删除的 chunk id——这与
+重新上传一个文件本就有的后果相同。另一个**既有**风险（同名替换时 uploads 副本被外部程序占用 → 改名
+那步在旧行已删之后才失败）同样适用于笔记，本期只记录不修：它位于语料库依赖的 ingest 回滚路径上。
 
-**Code**: `web/routers/documents.py` (the `notes` section: `NOTE_REF_PREFIX`, `_note_stem`,
-`_note_name`, `_note_payload`, `_get_note`, `_write_note_tmp`, `create_note` / `update_note` /
-`get_note`; `ingest_web_file` grew `force` / `title` / `folder_id`), `web/schemas.py` (`NoteIn`,
-`NoteUpdateIn`, `NOTE_BODY_MAX`), `ingest/service.py` (`ingest_one(title=...)` and the precedence rule),
-`storage/db.py` + `storage/repo.py` (comment-level widening of `source_ref`); frontend
-`static/js/note-editor.js` (new), `static/js/tree.js` (`isNote`, `folderOptions`), `static/js/kb-tree.js`
-(`onEditNote`, `selectDocById`, the `笔记` meta label), `static/js/documents.js`, `static/documents.html`,
-`css/style.css`, `DESIGN.md` + `docs/zh-CN/DESIGN.md` (the `note-editor: 70` rung); tests
-`tests/unit/web/test_notes_api.py` (new), `tests/unit/ingest/test_service.py`; smoke
-`tools/smoke_tree.mjs`; E2E `tools/chrome_notes.py` (new).
+**代码**：`web/routers/documents.py`（notes 段：`NOTE_REF_PREFIX`、`_note_stem`、`_note_name`、
+`_note_payload`、`_get_note`、`_write_note_tmp`、`create_note` / `update_note` / `get_note`；
+`ingest_web_file` 新增 `force` / `title` / `folder_id`）、`web/schemas.py`（`NoteIn`、`NoteUpdateIn`、
+`NOTE_BODY_MAX`）、`ingest/service.py`（`ingest_one(title=...)` 与优先级规则）、`storage/db.py` +
+`storage/repo.py`（`source_ref` 语义拓宽的注释层）；前端 `static/js/note-editor.js`（新）、
+`static/js/tree.js`（`isNote`、`folderOptions`）、`static/js/kb-tree.js`（`onEditNote`、
+`selectDocById`、meta 显示「笔记」）、`static/js/documents.js`、`static/documents.html`、
+`css/style.css`、`DESIGN.md`（中文事实源）+ `DESIGN.en.md`（英文镜像）（`note-editor: 70` 层级）；测试
+`tests/unit/web/test_notes_api.py`（新）、`tests/unit/ingest/test_service.py`；冒烟
+`tools/smoke_tree.mjs`；E2E `tools/chrome_notes.py`（新）。
 
 ---
 
-## ADR-0022 In-app updates: the client never sees a URL, checksums ship with the package, failed checks stay silent
+## ADR-0022 应用内更新：客户端碰不到 URL + 与包同批的校验和 + 检查失败静默
 
-- Status: Accepted | v0.1.1 (2026-09-19, after the user reported "the desktop shortcut is always the old
-  version" and chose the one-click download-and-install flow)
-- Related: ADR-0019 / ADR-0020 (the download defence chain and the loopback escape-hatch convention,
-  reused here), ADR-0018 (the settings panel, where the "About" section lives), ADR-0002 (the update
-  chain carries no credentials at all)
+- 状态：Accepted ｜ v0.1.1（2026-09-19，用户报"桌面快捷方式一直是老版本"后拍板「一键下载并安装」）
+- 关联：ADR-0019 / ADR-0020（下载防线与"回环逃生门"惯例，本条目沿用）、ADR-0018（设置面板——「关于」
+  段的落点）、ADR-0002（密钥纪律——更新链路全程无凭据）
 
-**Problem**: an installed copy is reached through a desktop shortcut that points into the install
-directory, and that directory only changes when the installer runs. There was no update mechanism at
-all: after every change I rebuilt the development bundle, and the user's copy stayed old (a recurring
-frustration from 2026-09-11 onward, called out explicitly on 2026-09-19). The flow the user chose: on
-startup, if a newer release exists, show a dialog → one click downloads it → the installer runs.
+**问题**：安装版用户桌面上的快捷方式指向安装目录里的副本，而那个副本**只在跑安装包时才会变**。
+项目此前没有任何更新机制：改完代码我更新的是开发构建，用户那份永远是老版本（2026-09-11 起反复发生，
+2026-09-19 用户点名要求解决）。用户拍板的形态：打开应用时若有新版 → 弹窗告知 → 一键下载 → 自动安装。
 
-**Decision**:
+**决策**：
 
-1. **The check endpoint speaks for the client; the response contains no URL.** `GET /api/update/check`
-   asks GitHub's `/releases/latest` server-side; download URLs never appear in the response — the
-   frontend only ever says "download the latest". The client therefore cannot name any address, which
-   narrows the SSRF surface to "the one chain the server picked out itself". The download entry point
-   needs exactly one thing: a host allowlist (`github.com` / `*.githubusercontent.com`, https).
-2. **Loopback http is an escape hatch, and only that.** Same trade-off as `papers/download.py`: a
-   non-allowlisted host must be **http + loopback** (the E2E fake GitHub and fake asset host). Loopback
-   cannot reach the intranet, so the SSRF guarantee is untouched; it also blocks "the API response was
-   swapped for an arbitrary public host".
-3. **Every download is checked against a sha256, and the checksum ships with the package.** The
-   installer and the same release's `SHA256SUMS.txt` are fetched together and compared byte for byte
-   before the installer may start; **without a checksum file there is no automatic update** (the user
-   downloads manually instead). This defeats corrupted or in-flight-replaced downloads; a compromised
-   release account is not defeated (checksum and package share a source) — an accepted residual,
-   recorded in limitations. Any failure deletes the partial file: nothing that "looks installable" is
-   ever left behind.
-   (**Amended 2026-09-19, see ADR-0024**: a partial now exists only as a `.part` suffix and never
-   takes part in launching; and it is **kept** on transport failures — resume needs it. Only a
-   checksum mismatch, a size-cap breach or a security-policy rejection deletes it.)
-4. **Launching the installer is double-click semantics** (`os.startfile`) behind three gates: the file
-   exists, it sits inside the data directory's `updates/`, and its name matches
-   `Mikasa-Setup-*-win64.exe`. The wizard `taskkill`s the running Mikasa itself, so after "launch" this
-   process dies — the frontend expects no further response. E2E sets `MIKASA_UPDATE_SKIP_LAUNCH=1`,
-   which turns this step into a log line (it only makes the code do *less*, so the switch points in the
-   safe direction).
-5. **A failed check is always silent**: an offline user should not be nagged by a network error; the
-   error goes to the log and the status endpoint only. Only an explicit "Check for updates" click
-   surfaces a failure. Check results are cached for 10 minutes (GitHub's anonymous quota is 60/hour/IP);
-   the manual path passes `force=1`.
-6. **"Skip this version" lives in localStorage and only silences the silent check**: a manual check
-   clears the marker (asking means wanting to know now). The settings panel gained an "About" section:
-   current version, the startup-check toggle, and a manual check button.
-7. **The dialog cannot be closed while downloading** — otherwise the user sees "I clicked download, the
-   window vanished, nothing happened". Esc and backdrop clicks are ignored mid-download; on failure the
-   dialog explains itself and keeps "Open release page" within reach (manual download is the permanent
-   fallback).
-   (**Superseded 2026-09-19 by ADR-0024**: in practice that second half meant "switch pages and the
-   whole thing disappears, and coming back does not reattach" — exactly the "it broke" the user
-   reported. The dialog is now closable: closing it means "keep going in the background", and the
-   progress lands in a topbar capsule that every page shows.)
-8. **This code has to ship in v0.1.1**: the old build does not contain it and cannot know a new release
-   exists — this one still has to be installed by hand, and only then does "it tells me on startup"
-   hold.
+1. **检查端点代客户端说话，响应里不含任何 URL。** `GET /api/update/check` 由服务端去问 GitHub 的
+   `/releases/latest`；下载地址永不出现在响应里，前端只会说"下载最新版"。客户端因此无从指定任何
+   地址，SSRF 面被收窄到"服务端自己挑出来的那一条链"——下载入口只需一件事：主机白名单
+   （`github.com` / `*.githubusercontent.com`，https）。
+2. **回环 http 是逃生门，且只对它开。** 与 `papers/download.py` 同一取舍：非白名单主机必须是
+   **http + 回环**（E2E 的本地假 GitHub 与假资产主机）。回环打不到内网，SSRF 保证不因它松动；
+   顺带挡住"API 响应被换成任意公网主机"。
+3. **下载完必须核对 sha256，校验和与包同批发布。** 安装包与同一 release 里的 `SHA256SUMS.txt`
+   一起下，逐字节比对通过才允许启动安装器；**没有校验和文件就不自动更新**（宁可让用户手动下）。
+   挡的是下载损坏 / 中途被替换；发布账号本身被攻破挡不住（校验和与包同源）——已接受的残差，记入
+   limitations。任何失败都删掉半成品，绝不留一个"看起来能装"的文件。
+   （**2026-09-19 修订，见 ADR-0024**：半成品改为只以 `.part` 后缀形态存在、永不参与启动；
+   且**传输类**失败保留它（续传要用），只有校验和不符 / 体积超限 / 安全策略这三类才删。）
+4. **启动安装器 = 双击语义**（`os.startfile`），三道闸：文件在、文件在数据目录 `updates/` 下、
+   名字匹配 `Mikasa-Setup-*-win64.exe`。安装向导自己会先 `taskkill` 掉正在运行的 Mikasa，所以
+   "启动"之后本进程会死——前端在这之后不再期待任何响应。E2E 用 `MIKASA_UPDATE_SKIP_LAUNCH=1`
+   让这一步只记日志不启动（只**少做**一件事，是安全方向的开关）。
+5. **检查失败一律静默**：离线用户不该被网络错误打扰，错误只进日志与状态接口；只有用户主动点
+   「检查更新」才把失败说出来。检查结果 TTL 缓存 10 分钟（GitHub 匿名配额 60 次/小时/IP），
+   「立即检查」走 `force=1` 绕开。
+6. **「跳过此版本」存 localStorage，只在静默检查里生效**：手动检查会清掉该标记（主动问 = 现在就
+   想知道）。设置面板新增「关于」段：当前版本号 + 启动检查开关 + 手动检查按钮。
+7. **下载期间弹窗不可关闭**——否则用户看到的是"点了下载、窗口没了、什么都没发生"。下载中 Esc 与
+   点遮罩都不响应；失败时给出文案，并把「打开发布页」留在手边（手动下载是永远的兜底）。
+   （**2026-09-19 被 ADR-0024 取代**：这条的后半句在实现里变成了"切页就整个消失、回来也接不上"，
+   正是用户抱怨的那种"断了"。现在弹窗可关，关掉 = 转后台，进度落到顶栏跨页胶囊上。）
+8. **这段代码必须随 v0.1.1 一起发**：老版本里没有它，它不会自己知道有新版——这一次仍要手动装一次，
+   之后才谈得上"打开就提示"。
 
-**Consequences**: startup makes one read-only request to `api.github.com` (no credentials, no local
-data), and it can be turned off — in a local-first product this is a **disclosed network behaviour**,
-written into the usage guide; downloads from github.com are slow from mainland China (18 seconds
-measured for a small file), so a large installer can take minutes — the progress bar and the
-"fall back to the release page" path exist for that (**added 2026-09-19, see ADR-0024**: a dropped
-connection now resumes with `Range` and retries with backoff — "slow" remains, "one drop costs you
-minutes of re-downloading" does not); automatic install covers Windows only
-(`os.startfile`); `updates/` keeps only the most recent file (older residue is cleaned when the next
-download starts); and the release process gains one rule: **every release must ship
-`SHA256SUMS.txt`**, or existing users cannot use the automatic update at all.
+**后果**：应用启动会向 `api.github.com` 发一次只读请求（不带凭据、不带任何本地数据），可以关——
+本地优先的产品里这是一处**被明确披露的网络行为**，写进了使用说明；国内直连 github.com 的下载很慢
+（实测小文件 18 秒），大安装包可能要几分钟，进度条与"失败回退浏览器下载页"就是为它准备的
+（**2026-09-19 补充，见 ADR-0024**：现在断线会带 Range 接着下、并自动退避重试，"慢"仍在，
+"断一次就白等几分钟"没有了）；自动安装
+只覆盖 Windows（`os.startfile` 仅 Windows）；`updates/` 只保留最近一次下载的文件（旧残留在下一次
+下载开始时清理）；发布流程多了一条纪律：**每次发布必须带上 `SHA256SUMS.txt`**，否则老用户点不动
+自动更新。
 
-**Code**: `src/mikasa/update/` (`release.py` version compare / release parsing / asset picking,
-`install.py` allowlisted download + verification + launch + single-slot job manager, `checker.py` TTL
-cache, `errors.py`), `web/routers/update.py` (four endpoints), `web/services.py` (`updates` /
-`update_jobs`), `web/app.py` (router); frontend `static/js/update.js` (new), `static/js/qa.js`
-(startup wiring), `static/index.html` (settings "About" section), `css/style.css` (`.upd-*`,
-z-index 95), `DESIGN.md` + `docs/zh-CN/DESIGN.md` (the new rung and components); tests
-`tests/unit/update/test_release.py`, `tests/unit/update/test_install.py`,
-`tests/unit/web/test_update_api.py`; E2E `tools/chrome_update.py` (new: a fake GitHub, a throttled fake
-download, and no executable ever launched).
+**代码**：`src/mikasa/update/`（`release.py` 版本比较 / 发布解析 / 资产挑选，`install.py` 白名单下载
++ 校验 + 启动 + 单槽任务管理器，`checker.py` TTL 缓存，`errors.py`）、`web/routers/update.py`
+（四个端点）、`web/services.py`（`updates` / `update_jobs`）、`web/app.py`（挂路由）；前端
+`static/js/update.js`（新）、`static/js/qa.js`（启动接线）、`static/index.html`（设置面板「关于」段）、
+`css/style.css`（`.upd-*`，z-index 95）、`DESIGN.md`（中文事实源）+ `DESIGN.en.md`（英文镜像）
+（新层级与新组件）；
+测试 `tests/unit/update/test_release.py`、`tests/unit/update/test_install.py`、
+`tests/unit/web/test_update_api.py`；E2E `tools/chrome_update.py`（新：假 GitHub + 节流假下载 +
+全程不启动任何可执行文件）。
 
 ---
 
-## ADR-0023 A fourth source, DOAJ: key-free Chinese open-access journals, and where the licensing line sits
+## ADR-0023 第四个来源 DOAJ：免密钥的中文开放获取期刊 + 各来源的授权边界
 
-- Status: Accepted | the v0.1.3 cycle (2026-09-19; the user asked for "someone installs it and it just
-  works, without going off to register for anything")
-- Related: ADR-0019 / ADR-0020 (source protocol, capability declarations, interleaved paging — this
-  entry only appends a source to the registry, the protocol is untouched), ADR-0022 (the other half
-  of the same product demand: updating should also just work)
+- 状态：Accepted ｜ v0.1.3 周期（2026-09-19，用户要求"别人装上就能用，不用自己去注册"）
+- 关联：ADR-0019 / ADR-0020（来源协议、能力声明、交错分页——本条目只是往注册表末尾加一个来源，
+  协议零改动）、ADR-0022（同一件产品诉求的另一半：更新也要"打开就能用"）
 
-**Problem**: each of the three existing sources has a gate — OpenAlex has required a free key since
-2026 (anonymous access gets a small trial allowance and then answers 429), CORE's anonymous rate
-limit is tight, and arXiv only carries English preprints. For "install it and it works", Chinese
-journals were simply missing, and asking people to register for a key first is exactly the
-experience the user rejected.
+**问题**：三个已有来源各有门槛——OpenAlex 自 2026 年起要求免费 key（匿名只有小额试用额度，
+用光就 429）、CORE 匿名限流极紧、arXiv 只有英文预印本。对"别人装上就能用"来说，中文期刊这一块
+是空的，而**让别人先去注册一个 key** 恰恰是用户明确否决的体验。
 
-**Decision**:
+**决策**：
 
-1. **Integrate DOAJ**, the official directory of open-access journals: **no key**, an official REST
-   API, metadata declared CC0. Measured working for Chinese ("充填体" → 185 hits, matching Chinese
-   journals such as 工业水处理). Appended to the end of the registry — registry order is interleaving
-   order, and moving earlier entries would shift the global position mapping of existing sources.
-2. **Capabilities are declared from measurement, not from documentation**: the year range works
-   through query syntax (measured 185 → 115); sorting by citations/recency and language filtering
-   **timed out in testing**, so all three are declared unsupported — the UI greys them out with a
-   reason. Better to offer three fewer options than to pretend a filter works.
-3. **"Open access" and "one-click importable" are different things.** Every `link[]` we sampled was
-   a publisher landing page (0 of 25 ended in `.pdf`), so `pdf_url` is only set when a `.pdf` link
-   really appears. The UI therefore has three states rather than two: direct PDF (importable) /
-   open access but landing page only (import disabled, "open the original page") / not open access.
-4. **The licensing line is documented in code and docs** (the user asked directly): a source may be
-   integrated only if it explicitly permits programmatic access — DOAJ (metadata CC0), OpenAlex
-   (CC0), arXiv (official API terms, identifiable UA, polite rate limits), CORE (an open-access
-   aggregator whose API terms allow it). **Not** CNKI/Wanfang/NCPSSD and the like: their records are
-   commercially licensed or served through internal endpoints, and scraping them is a breach.
-5. **Bypassing bot detection is explicitly out of scope.** The most tempting candidate was the
-   National Center for Philosophy and Social Sciences Documentation (free Chinese journals, strong
-   social-science coverage); its search endpoint is anonymous JSON — but it sits behind a
-   **ChinaNetCenter WAF**: a real browser gets results while a plain HTTP client gets an empty shell
-   (same URL, same parameters: 265 hits in headless Chrome, `total: 0` from urllib). Getting past
-   that means solving the WAF's challenge cookie, which is working *against* the site's own bot
-   protection rather than a technical hurdle — so it is not done. (Its predecessor, NSSD, suspended
-   service on 2024-07-11 and folded into the current site.)
-6. **Upstream metadata is untrusted input; strip markup before display.** DOAJ passes paper HTML
-   straight through its abstract field (measured: the UI showed `1<sup>#</sup>`), hence
-   `utils/text.strip_markup` — it removes tags, restores entities and collapses whitespace, and
-   **does not render rich text** (rendering would import an XSS surface).
+1. **接 DOAJ**：开放获取期刊的官方目录，**免密钥**、官方 REST API、元数据声明为 CC0。
+   实测中文可用（"充填体"185 条，命中《工业水处理》等中文刊）。注册表追加在末尾——
+   顺序即交错顺序，动前面的顺序会改变既有来源的全局位置映射（service.py 的注释纪律）。
+2. **能力按实测声明，不按文档猜**：年份区间走查询语法（实测 185 → 115 条，有效）；
+   按被引/按时间排序与语言过滤**实测超时**，一律声明为不支持——界面置灰并写明原因，
+   宁可少给三个选项，也不假装能过滤。
+3. **"开放获取"与"能一键导入"是两件事**：DOAJ 的 `link[]` 实测全是出版商落地页
+   （抽样 25 条、0 条以 .pdf 结尾），所以 `pdf_url` 只在真出现 .pdf 时才给。界面因此有
+   三种说法而不是两种：有直链 PDF（可导入）/ 开放获取但只有落地页（禁用导入 +
+   "点「打开原页」去出版商页面"）/ 无开放获取全文。
+4. **授权边界写进代码与文档**（用户直接问过）：能接的必须是"明确许可程序化访问"的来源——
+   DOAJ（元数据 CC0）、OpenAlex（CC0）、arXiv（官方 API 条款 + 可识别 UA + 礼貌限速）、
+   CORE（开放获取聚合，API 条款允许）。**不接**知网/万方/国家哲学社会科学文献中心一类：
+   它们的题录是商业授权或内部接口，抓取即违约。
+5. **明确不做"绕过反机器人机制"这件事**：候选里最诱人的是国家哲学社会科学文献中心
+   （免费中文期刊、社科覆盖强），实测其检索接口是匿名可调的 JSON——但它挂在**网宿 WAF**
+   后面：真浏览器能拿到结果、非浏览器客户端拿到空壳（同一条 URL、同一组参数，无头 Chrome
+   打开有 265 篇命中，urllib 发就是 `total: 0`）。绕过去要解 WAF 挑战 cookie，那是
+   **对抗站点自己的反机器人机制**，不是"技术难点"——不做。附带：它的前身 NSSD 已于
+   2024-07-11 停服，资源并入现站。
+6. **上游元数据是不可信输入，先剥标记再展示**：DOAJ 把论文 HTML 原样塞进摘要字段
+   （实测界面直接显示 `1<sup>#</sup>`），于是有了 `utils/text.strip_markup`——只删标签、
+   还原实体、折叠空白，**不做富文本渲染**（渲染等于把 XSS 面引进界面）。
 
-**Consequences**: Chinese literature finally has a zero-configuration source, at the cost that its
-full texts mostly live on the publisher's page (point 3); the source count is now four, and the
-30-second page deadline plus parallel fetching (papers/service.py) keep "one more source" from
-meaning "one more wait"; the two hardcoded source lists in `schemas.py` are now pinned to the
-registry by a guard test (adding DOAJ tripped exactly that: ticking it in the UI produced a 422).
+**后果**：中文文献第一次有了"零配置"来源，代价是这一源的全文多数要跳去出版商页面（见第 3 点）；
+来源总数到四个，页级 30 秒截止与并发取源保证"多一个源"不等于"多等一段"；`schemas.py` 里两张
+硬编码的来源名单与注册表的漂移被一条守卫测试钉住（加 DOAJ 时实测踩中：前端勾上它就是一个 422）。
 
-**Code**: `papers/doaj.py` (new), `papers/service.py` (registry, parallel fetch, page deadline),
-`papers/http.py` (shared UA + network-level retry, which retries only network errors and 406),
-`utils/text.py` (`strip_markup`), `web/schemas.py` (both source lists), `web/routers/papers.py`
-(`_ID_VALIDATORS`), frontend `papers-page.js` / `papers-detail.js` (labels and the three full-text
-states); tests `tests/unit/papers/test_doaj.py` (new), `tests/unit/papers/test_papers_http.py` (new),
-`tests/unit/web/test_papers_api.py` (the guard test); E2E `tools/chrome_papers.py` (a fourth fake
-source).
+**代码**：`papers/doaj.py`（新）、`papers/service.py`（注册表末尾 + 并发取源 + 页级截止）、
+`papers/http.py`（统一 UA + 网络级重试，只重试网络错误与 406）、`utils/text.py`（`strip_markup`）、
+`web/schemas.py`（两张来源名单）、`web/routers/papers.py`（`_ID_VALIDATORS`）、前端
+`papers-page.js` / `papers-detail.js`（标签 + 三种全文状态的文案）；测试
+`tests/unit/papers/test_doaj.py`（新）、`tests/unit/papers/test_papers_http.py`（新）、
+`tests/unit/web/test_papers_api.py`（来源名单守卫）；E2E `tools/chrome_papers.py`（第四个假源）。
 
 ---
 
-## ADR-0024 Resumable downloads, adoptable jobs: the "observation window" and slot self-healing
+## ADR-0024 更新下载可续传、任务可接续：「观察窗」与槽位自愈
 
-- Status: Accepted | v0.1.4 cycle (2026-09-19, after the user reported "downloads are painfully slow,
-  switching to another feature breaks it, and clicking again says 'the download has already started'")
-- Related: ADR-0022 (**this amends its points 3 and 7**; every other defence stands), ADR-0019 /
-  ADR-0020 (the download defences and the "loopback escape hatch" convention)
+- 状态：Accepted ｜ v0.1.4 周期（2026-09-19，用户报"下载巨慢、切到别的功能就断了、再点报
+  『更新下载已经开始了』"后拍板）
+- 关联：ADR-0022（本条目**修订它的第 3、7 点**，其余防线原样保留）、ADR-0019 / ADR-0020
+  （下载防线与"回环逃生门"惯例）
 
-**Problem**: the user's v0.1.3 tried to upgrade and hit three different things — slow, "breaks when I
-switch pages", and "can never download again":
+**问题**：用户那份 v0.1.3 想升新版，点「下载并安装」后撞上三件事——慢、切页就"断"、再也点不动。
+查下来是三个不同的毛病：
 
-1. **The server was never interrupted.** The download runs inside a `BackgroundTasks` sync call (an
-   anyio worker thread), tied to neither the request nor the connection. Measured: the client read the
-   202 and hard-closed the connection, then made zero requests for 12 seconds — the download finished
-   anyway. What "broke" was the **UI**: the four feature pages are full page loads, so switching pages
-   tears down all JS (polling and dialog included), and coming back to the chat page had no "there is
-   still a job running" recovery path (the eval page has one; this code never got it).
-2. **"Can never download again" was a 409.** With a running job in the slot, `POST
-   /api/update/download` answered 409 and the frontend rendered it as "failed to start the download:
-   the download has already started". The slot recorded state but not **whether the worker thread was
-   still alive**, so a thread that vanished quietly left the slot stuck in `running` forever — with no
-   self-healing path.
-3. **Slow is real, and one drop costs everything.** Measured on this machine (through the system
-   proxy): ~300 KB/s single-stream, so the 83.7 MB installer takes 4–5 minutes, with a peer reset
-   caught in the middle. And a failed download deleted the partial file, had no `Range` resume and no
-   retry — **every drop restarted from zero**, which was the biggest waste of all.
+1. **服务端其实没断**：下载跑在 `BackgroundTasks` 的同步任务里（anyio 工作线程），与请求、
+   连接都无关。实测：客户端读完 202 立刻硬断连接、之后 12 秒零请求，下载照常跑完。
+   "断"的是**界面**——四个功能页是整页跳转，一切页 JS（含轮询与弹窗）就没了，而回到问答页
+   没有任何"还有任务在跑"的恢复逻辑（评测页有这一套，更新这块当时没写）。
+2. **"再也下不动"是 409**：槽里还有 running 任务时 `POST /api/update/download` 回 409，前端把它
+   渲染成「启动下载失败：更新下载已经开始了」。而槽只记状态、不记"工作线程还在不在"，线程一旦
+   悄悄消失就永远停在 running——没有任何自愈路径。
+3. **慢是真的慢，而且断一次就白等**：本机实测（经系统代理）单连接 ~300 KB/s，83.7MB 的安装包
+   ≈ 4–5 分钟，中途抓到对端 reset；而下载失败即删半成品、没有 Range 续传、没有重试——
+   **每次断线都从 0 重来**，这是最大的浪费。
 
-**Decisions**:
+**决策**：
 
-1. **Resume.** The download lands in `Mikasa-Setup-<version>-win64.exe.part` and later requests carry
-   `Range: bytes=N-` (206 appends / 200 rewrites the whole file / 416 is treated as "already
-   complete", left to the checksum to judge). Transport failures retry with backoff (3 attempts,
-   2s/5s), and **both retries and later sessions resume from `.part`**. The partial is a **suffix
-   only** — `Path.with_suffix` would eat the `.exe` and leave a name that "looks like the installer",
-   so `launch_installer` gained an explicit gate refusing it: that invariant should not depend on a
-   regex coincidence in `SETUP_ASSET_RE`.
-2. **The checksum line does not move by a single byte.** It is still compared byte-for-byte against
-   the same release's `SHA256SUMS.txt`, and the file is **renamed only after verification**
-   (`os.replace`), so a bad file never gets the final name. A `.part` may be last round's stub, or the
-   remote asset may have been re-uploaded — this module cannot tell, so the **only** arbiter is
-   sha256: a mismatch deletes the whole partial and downloads once more (closing the "poison prefix"
-   loop — otherwise every click hits the same wall), and a second mismatch fails honestly.
-   Completeness is judged on the **final file size** (partial + this attempt's writes), not on "how
-   many bytes we wrote this time" — without that, resume would be killed by our own completeness check.
-3. **Slot self-healing.** Besides the state, `UpdateManager` now records **worker liveness**
-   (`worker_started/finished`, paired by the task wrapper) and **when the state last changed**. A dead
-   worker past the grace window (10s, covering the gap where BackgroundTasks starts the thread after
-   the response) lets a new job **take over** the slot; `done` with the file still present is not
-   taken over (that would waste 80 MB — the frontend should go install instead). Every slot carries a
-   token and writes with a stale token are dropped — otherwise a superseded zombie thread would
-   revert the new job's state, or even append into the same `.part`.
-4. **The POST is idempotent.** The download endpoint no longer answers 409: a live job returns 202
-   with `adopted: true` (the frontend just follows), and whether to re-download is decided by the
-   takeover rules. The frontend plays along: "Download and install" asks for the status first and only
-   follows when it is running/verifying/done, never POSTing first.
-5. **"Observation window".** The download is a server-side background job and the UI is just a window
-   onto it — the dialog **can be closed** (closing means "carry on in the background") and the topbar
-   keeps a cross-page capsule (all four pages show progress; clicking it reopens the dialog). Switching
-   pages, reloading and closing the dialog no longer interrupt anything, and returning to the chat page
-   reattaches automatically (unless the user explicitly dismissed it — the capsule stays either way).
-   The capsule is a **separate element**: it must not live inside `.health-pill`, which `initTopbar`
-   rewrites with `innerHTML=""` every 20 seconds. The other three pages mount the capsule only and
-   **never call `/api/update/check`**: with "check on startup" turned off, no page should quietly go
-   online.
-6. **No unattended install.** When the download finishes with the dialog open (the user is watching),
-   the installer still launches automatically; otherwise the capsule just becomes "update ready ·
-   click to install". Rationale: the installer's first act is to `taskkill` Mikasa (ADR-0022 point 4),
-   and killing someone's app while they are elsewhere is rude.
-7. **One lie removed along the way.** The frontend used to have a 30-minute deadline that declared
-   "download timed out" — while the server was still downloading. Gone: terminal states come from the
-   server, stalling is reported via the backend's `stalled`, and retries are shown honestly as
-   "connection dropped, retrying (attempt N)".
+1. **断点续传**：先落 `Mikasa-Setup-<版本>-win64.exe.part`，之后带 `Range: bytes=N-` 接着下
+   （206 追加 / 200 整份重写 / 416 当"已下完"交给校验和判真伪）；传输类失败退避重试
+   （3 次尝试、退避 2s/5s），**重试与跨会话都从 `.part` 接着下**。半成品**只能是后缀**——
+   `Path.with_suffix` 会把 `.exe` 吃掉、留下"看着就像安装包"的名字，`launch_installer`
+   因此另加一条显式闸门拒绝它：这条不变量不该交给 `SETUP_ASSET_RE` 的巧合。
+2. **校验和那条线一个字节都不动**：仍与同批 `SHA256SUMS.txt` 逐字节比对，**先校验后改名**
+   （`os.replace`），坏文件永远拿不到最终名字。`.part` 里可能是上一轮的半截、也可能远端已经
+   重传过包——本模块无从判断，所以判真伪的**永远**是 sha256：不符就删掉整份重下一次
+   （"毒前缀"闭环：不删的话用户每点一次都撞同一堵墙），再不符就如实报错。
+   完整性判据改为**最终文件大小**（半成品 + 本次写入），不是"本次写了多少"——不改这条，
+   续传会被自己的完整性检查判死。
+3. **槽位自愈**：`UpdateManager` 除了状态，另记**工作线程存活**（`worker_started/finished`，
+   由任务外壳保证配对）与**状态最后变化时刻**。线程没了且过了宽限期（10s，覆盖
+   BackgroundTasks 在响应之后才起线程的空档）→ 新任务**接管**旧槽；`done` 且成品还在 →
+   不接管（否则白下 80MB，前端该去点安装）。每个槽带 token，过期 token 的写入一律丢弃
+   ——否则被接管的僵尸线程会把新任务的状态改回去，甚至往同一个 `.part` 里续写。
+4. **POST 幂等**：下载端点不再回 409。已有活任务 → 202 + `adopted: true`（前端只跟随状态）；
+   要不要重下由接管规则决定。前端也照这个来：点「下载并安装」先问状态，running/verifying/done
+   就只跟随，不先发 POST。
+5. **"观察窗"**：下载是服务端的后台任务，界面只是观察窗——弹窗**可以关**（关掉 = 转后台），
+   顶栏留一枚跨页胶囊（四个功能页都看得见进度，点它回到弹窗）；切页、刷新、关弹窗都不打断下载，
+   回到问答页自动接上（用户主动收起过就不再自动弹，胶囊一直在）。胶囊是**独立容器**，不能塞进
+   `.health-pill`（那个被 `initTopbar` 每 20 秒用 `innerHTML=""` 重绘）。其余三页只挂胶囊、
+   **不打 `/api/update/check`**：关掉"启动时检查"之后，任何页面都不该偷偷联网。
+6. **弹窗不在场就不自动装**：下载完成时弹窗还开着（用户在看）→ 照旧自动启动安装器；否则只把
+   胶囊换成「更新包已就绪 · 点此安装」。理由：安装器第一件事是 taskkill 掉 Mikasa
+   （ADR-0022 第 4 点），用户不在场时把他的应用杀掉是冒犯。
+7. **顺带修掉一句假话**：前端原来有个 30 分钟死线，到点写「下载超时」——可服务端还在下。
+   删掉：终态一律以服务端为准，停滞由后端的 `stalled` 说，重试如实显示成
+   「连接中断，正在重试（第 N 次）」。
 
-**Explicitly not doing**:
+**明确不做**：
 
-- **Multi-connection parallel downloads**: measured on the same link, 4 connections ≈442 KB/s versus
-  ~300 KB/s single-stream — only 1.4×, while the failure branches double (some CDN nodes answer
-  `501 Unsupported client range`). Resume plus retry is what pays on this link.
-- **Moving the download off `BackgroundTasks` into its own thread**: it demonstrably survives client
-  disconnects, and changing it would only cost test determinism (TestClient runs background tasks
-  synchronously).
-- **A cancel button**: a wedged download is covered by "single-chunk read timeout 60s → retry → error",
-  and slot self-healing keeps the button clickable.
+- **多连接并行下载**：同一链路实测 4 连接并行 ≈442 KB/s vs 单连接 ≈300 KB/s，只有 1.4×，
+  而失败分支要翻倍（有的 CDN 节点对 Range 直接回 `501 Unsupported client range`）。这条链路上
+  续传 + 重试才是主要收益。
+- **把下载从 BackgroundTasks 挪到独立线程**：实测客户端断开后它照样跑完，改它只会牺牲测试的
+  确定性（TestClient 里后台任务是同步执行的）。
+- **取消按钮**：卡死由"单块读超时 60s → 重试 → 仍失败就落 error"覆盖，槽位自愈保证再点得动。
 
-**Consequences**: a dropped connection no longer costs a re-download — the partial stays in
-`updates/<asset>.part` and the next attempt (even after a restart) resumes from it; the price is a
-~90 MB partial left on disk after a failure, until the next download cleans it up (recorded in
-limitations). Automatic install still covers Windows only. **This fix takes effect in the next
-release**: the build the user has contains the old code, so this upgrade still needs a manual install
-via the browser (browsers resume on their own).
+**后果**：断线不再白等——半成品留在 `updates/<资产名>.part`，下次（含跨重启）接着下；
+代价是失败时磁盘上留一个 ~90MB 的半成品，直到下一次下载开始才清理（已记入 limitations）。
+自动更新仍只覆盖 Windows。**这次修复要下一个版本才生效**：用户手里那份是旧代码，这一次仍得
+用浏览器手动装（浏览器自带续传）。
 
-**Code**: `update/install.py` (`_part_path` / `_open(range_start)` / the three response branches in
-`_download_once` / retry and poison-prefix handling / `JobTicket` plus `UpdateManager` liveness and
-takeover), `web/routers/update.py` (the `_run_job` wrapper and the idempotent POST); frontend
-`static/js/update.js` (one tick loop driving both capsule and dialog, a closable dialog,
-`initUpdateBadge`), `documents.js` / `papers-page.js` / `eval.js` (one line each), `css/style.css`
-(`.upd-pill`); tests `tests/unit/update/test_install.py`, `tests/unit/web/test_update_api.py`; E2E
-`tools/chrome_update.py` (the fake source gained `Range` plus a "cut once at 1 MiB" switch, and five
-new assertion groups: idempotency / resume / cross-page capsule / dismissed dialog / install only on
-click).
+**代码**：`update/install.py`（`_part_path` / `_open(range_start)` / `_download_once` 的三种响应
+分支 / 重试与毒前缀处理 / `JobTicket` 与 `UpdateManager` 的存活登记与接管）、
+`web/routers/update.py`（`_run_job` 外壳 + 幂等 POST）；前端 `static/js/update.js`（tick 单循环
+同时驱动胶囊与弹窗、可关弹窗、`initUpdateBadge`）、`documents.js` / `papers-page.js` / `eval.js`
+（各一行接线）、`css/style.css`（`.upd-pill`）；测试 `tests/unit/update/test_install.py`、
+`tests/unit/web/test_update_api.py`；E2E `tools/chrome_update.py`（假源加 Range 与"1MiB 处掐断
+一次"，新增幂等 / 续传 / 跨页胶囊 / 收起弹窗 / 点了才装五段断言）。
 
 ---
 
-## ADR-0025 Relicensed to AGPL-3.0: the distributed build bundles AGPL PyMuPDF
+## ADR-0025 许可证改为 AGPL-3.0：发布物捆了 AGPL 的 PyMuPDF
 
-- Status: Accepted | 2026-09-20 (after the user asked what to do about the MIT / AGPL-PyMuPDF clash)
-- Related: ADR-0022 / ADR-0024 (in-app updates and the release process — **publishing binaries** is the
-  act that triggers the obligation)
+- 状态：Accepted ｜ 2026-09-20（用户问"MIT 与 AGPL 的 PyMuPDF 冲突怎么办"后拍板）
+- 关联：ADR-0022 / ADR-0024（应用内更新与发布流程——**公开发布二进制**正是触发义务的那件事）
 
-**Problem**: the project has always been MIT, while a core dependency in `pyproject.toml` is
-**PyMuPDF** ("AGPL-3.0 or Artifex Commercial"). It handles PDF text extraction
-(`ingest/loaders.py`) and the reader's page rendering and text layer (`web/routers/documents.py`) — a
-core component, not an optional extra. Since v0.1.1 we have been **publishing built exe/zip files**,
-and that is when AGPL sections 5-6 kick in: distributing a binary that includes AGPL code means the
-whole distribution must be licensed under the AGPL with the corresponding source offered to
-recipients. The MIT claim simply does not cover that part — and **nothing in local development ever
-surfaces this**; the obligation only exists on the *distribute* side.
+**问题**：项目一直挂 MIT，而 `pyproject.toml` 的核心依赖里有 **PyMuPDF**（"AGPL-3.0 或 Artifex
+商业许可"二选一）。它负责 PDF 文本提取（`ingest/loaders.py`）与阅读器的原页渲染/文字层
+（`web/routers/documents.py`）——是核心件，不是可选件。从 v0.1.1 起我们开始**公开分发打包好的
+exe/zip**，那一刻 AGPL 第 5/6 条的义务就生效：分发含 AGPL 组件的二进制，整个发布物须按 AGPL
+授权并向接收者提供对应源码。MIT 的声明对这部分无效，而且**没人会在本地开发时发现**——
+它只在"分发"这个动作上成立。
 
-**Decision**: the project moves to **AGPL-3.0-or-later**.
+**决策**：项目整体改为 **AGPL-3.0-or-later**。
 
-1. `LICENSE` becomes the verbatim AGPL-3.0 text (from gnu.org, LF endings); `pyproject.toml` carries
-   `license = "AGPL-3.0-or-later"` plus the matching classifier; both READMEs state the license, the
-   section-13 network obligation, and where the third-party notices live.
-2. **No commercial license, and no replacing PyMuPDF**: the reader's "select text on the page and hit
-   the same box in the original" depends on its word-box coordinates, and table geometry
-   reconstruction and Chinese text-layer quality lean on it heavily. Swapping in `pypdf` (text) plus
-   `pypdfium2` (rendering) is a real migration measured in weeks whose main outcome would be lower
-   quality. **Fit the license to the dependency, not the dependency to the license.**
-3. Compliance reuses machinery that already exists rather than adding process:
-   `tools/make_third_party_notices.py` has always singled PyMuPDF out in `THIRD_PARTY_NOTICES.md`
-   (including the "copyleft components require the corresponding source" hint), and both
-   `tools/make_release.py` and `packaging/Mikasa.iss` already ship `LICENSE` and that notice with the
-   product. Section 13's source offer is satisfied by the public repository itself.
+1. `LICENSE` 换成 AGPL-3.0 全文（取自 gnu.org 的规范文本，逐字不改，LF 行尾）；
+   `pyproject.toml` 的 `license = "AGPL-3.0-or-later"` 与 classifier 同步；README 双版写明
+   许可证、§13 的网络服务义务与第三方声明的位置。
+2. **不买商业许可，也不换掉 PyMuPDF**：阅读器"页面上选字要对上原文框"依赖它的词框坐标，
+   PDF 表格几何重建与中文文本层质量也重度依赖它——换成 `pypdf`（文本）+ `pypdfium2`（渲染）
+   是实打实的迁移工程，且质量很可能下降（那是按周计的活，收益却是负的）。
+   **用许可证适配依赖，而不是为了许可证换掉依赖。**
+3. 合规沿用既有机制、不新增流程：`tools/make_third_party_notices.py` 生成的
+   `THIRD_PARTY_NOTICES.md` 早已把 PyMuPDF 单列（含"copyleft 组件要求提供对应源码"的提示），
+   `tools/make_release.py` 与 `packaging/Mikasa.iss` 都已把 `LICENSE` 与那份声明放进发布物；
+   §13 的"提供对应源码"由公开仓库天然满足。
 
-**Consequences**: Mikasa becomes a strong-copyleft project — free to use, study, modify and
-redistribute, but **modifications must be AGPL too**, and running it as a network service for others
-requires offering them the source. A few legally cautious companies will therefore avoid this code; for
-a public personal project that is an acceptable price, and it beats claiming MIT while bundling AGPL.
-**The already-published v0.1.1-v0.1.4 builds still carry the MIT notice** (that cannot be recalled);
-from the next release onward the repository and the artifacts agree.
+**后果**：Mikasa 成为强著佐权项目——允许自由使用/研究/修改/再分发，但**改过的版本也必须 AGPL**，
+且把它做成网络服务给别人用时要提供源码。少数法务严格的公司会因此不采用这份代码；对一个公开的
+个人项目，这是可接受的代价，也比"挂着 MIT 却捆着 AGPL"诚实。**已发布的 v0.1.1–v0.1.4 里带的
+仍是 MIT 声明**（改不回来），从下一个版本起仓库与发布物一致。
+
+**代码/文档**：`LICENSE`（新文本）、`pyproject.toml`、`README.md`（中文事实源）/ `README.en.md`（英文镜像）、
+`packaging/Mikasa.iss`（注释）、`THIRD_PARTY_NOTICES.md`（生成物，内容一直是对的）。
 
 ---
 
-## ADR-0026 Synthesized question banks and per-item verification: evaluation stops being tied to one corpus
+## ADR-0026 自动题库 + 逐题校验：评测不再绑死一份语料
 
-- Status: Accepted | 2026-09-19 (landed after the user asked to "evaluate my own material")
-- Related: ADR-0003 / ADR-0018 (pluggable providers — synthesis reuses the same LLM client and the model
-  configured through the settings panel)
+- 状态：Accepted ｜ 2026-09-19（用户要"评我自己的资料"后落地）
+- 关联：ADR-0003 / ADR-0018（可插拔 provider——出题复用同一个 LLM 客户端与设置面板接的模型）
 
-**Problem**: two things were stuck together.
+**问题**：两件事卡在一起。
 
-1. **A hand-written bank can only evaluate the corpus it was written for**: every answerable item in
-   `evals/questions.yaml` carries an anchor quoted verbatim from the sample corpus — point it at a
-   different corpus and the questions stop matching their gold answers. Yet "evaluate *my* material"
-   is the form the user actually wants. That path can only come from generation: nobody has written
-   gold answers for the user's own documents.
-2. **The whole-corpus fingerprint guarded far more than it protected**: the pre-run check compared the
-   entire (chunk_id, content hash) sequence, so adding any one document or renaming a title
-   invalidated the whole bank — while the real risk only concerns "did the few chunks the questions
-   cite change?".
+1. **人工题库只能评它写作时的那份语料**：`evals/questions.yaml` 的每道可答题都携带
+   从示例语料逐字摘录的锚句——换一份语料做知识库，题目与标准答案就全部对不上，
+   而"评我自己的资料"是用户最想要的评测形态。这条路只能靠自动生成：没人替用户
+   自己的文档写过标准答案。
+2. **全库指纹的守卫范围远大于风险范围**：原先评测前比对整库的 (chunk_id, 内容哈希)
+   序列，往库里加任意一篇文档、改个标题，整份题库就作废报错；而真正的风险只涉及
+   "题目引用的那几十个分块有没有变"。
 
-**Decision**:
+**决策**：
 
-1. **Synthesized banks** (`eval/synth.py`): sample chunks from the current corpus, have the model read
-   one and write a question "only this passage can answer", and **that chunk becomes the gold answer**
-   (gold = chunk id + content_sha256). Three sampling rules: **round-robin across documents**
-   (otherwise the bank piles up on the longest document and measures that document's retrieval
-   quality), **a chunk-length window** (very short chunks make thin questions and are nearly
-   impossible to *miss*), and a **fixed seed** (the same corpus regenerates the same bank, so two
-   retrieval changes can be compared head-to-head).
-2. **Both question kinds are mandatory**: alongside answerable items the bank must contain
-   **unanswerable** ones (several chunks, one question none of them answers) — the refusal discipline
-   is this system's core promise (see limitations) and cannot be measured without them. If either
-   kind comes up empty the whole synthesis fails and nothing is written to disk.
-3. **Mismatch protection becomes per-item verification** (`GoldenItem.gold_hashes` aligned
-   one-to-one with `gold_chunk_ids`): before a run, every item is checked — "is this chunk still
-   here, is its content unchanged?" — and items that fail are **skipped**, with the count stated in
-   the report header and each item listed with its reason. **Skip, not let through**: silently
-   scoring against a stale gold answer produces numbers that look fine and mean nothing, the worst
-   failure mode an evaluation tool has. **Keep a visible record, not silence**: quietly shrinking the
-   denominator makes scores look better. Only "every answerable item was skipped" is a hard error
-   (the corpus was rebuilt from scratch). `corpus_sha256` is demoted to metadata (the report shows
-   which corpus the bank was written for).
-4. **The honest boundary goes into the report**: synthesized questions are written by a model that
-   just read the passage, so they are **easier** than hand-written ones and score higher by
-   construction — they support **relative comparisons only** (two retrieval changes against the same
-   bank), never absolute comparison with the hand-written bank. The report header marks them with
-   `source: synthesized` and an explicit "自动生成 / machine-generated" label.
-5. **A real model is required**: synthesis is dozens of LLM calls, so the offline mock profile gets a
-   clear 400 up front (rather than letting the user discover a run full of junk questions); the bank
-   lands in the data directory at `eval/golden-auto.json` (user data, not shipped); one job slot plus
-   1-second progress polling — **separate from the evaluation slot**, because the two progress
-   meanings differ ("questions generated" vs "answering question N") and merging them into one state
-   machine would confuse the polling clients.
+1. **自动题库**（`eval/synth.py`）：从当前语料抽样分块，让模型读一段、出一道
+   "只有这段能回答"的题，**那个分块即标准答案**（gold = chunk id + content_sha256）。
+   采样三条纪律：**跨文档轮转**（否则题库堆在最长的那篇上，跑出来的其实是那一篇的
+   检索质量）、**块长区间**（太短的块写不出有信息量的题，且被检索到几乎没有难度）、
+   **固定 seed**（同一份语料可复现，便于横向比较两次改动）。
+2. **两类题缺一不可**：可答题之外必须出**不可答题**（给几个分块，要一个"它们都
+   答不上来"的问题）——拒答纪律是这套系统的核心承诺（见 limitations），没有不可答题
+   就完全测不出来。任一类凑不出来即整体失败，不落盘。
+3. **防错配改成逐题校验**（`GoldenItem.gold_hashes` 与 `gold_chunk_ids` 逐位对应）：
+   评测前逐题核对"这块还在、内容没变"，变了的题**跳过**，报告首部写明跳了几道、
+   正文逐条列出题号与原因。**跳过而不是放行**——静默用错位的标准答案算分会跑出
+   "看着正常、其实毫无意义"的数字，这是评测工具最怕的事；**留痕而不是静默**——
+   静默缩小分母会让分数看着变好。全部可答题被跳过才是硬错误（语料整体重灌）。
+   `corpus_sha256` 降级为元信息（报告里展示"这套题是为哪份语料写的"）。
+4. **诚实边界写进报告**：自动题是模型照着自己看过的原文出的，比人工题**简单**、
+   分数天然偏高——**只能横向比**（同一份题库下比较两次检索改动），不能跟人工题的
+   绝对分比。报告首部以 `source: synthesized` +「**自动生成**」显式标注。
+5. **要真实模型**：出题是几十次 LLM 调用，离线 mock 档直接 400 说清楚（不让用户在
+   "跑到一半全是废题"里摸索）；题库落数据目录 `eval/golden-auto.json`（用户数据，
+   不进仓库）；单槽任务 + 1s 进度轮询——**与评测槽分开**，两条进度的含义不同
+   （"已生成几道" vs "正在作答第几题"），合成一个状态机会把轮询端搞乱。
 
-**Explicitly not doing**:
+**明确不做**：
 
-- **No automatic regeneration**: a failed check points the user at rebuilding (CLI `tools/build_golden.py`,
-  or the web button), it never silently re-runs an LLM pass.
-- **No difficulty tiers**: model self-assessment is not trustworthy; synthesized items are pinned to medium.
-- **Not a replacement for the hand-written bank**: the built-in set remains the only ruler covering
-  easy/medium/hard and the three unanswerable categories — that takes a human picking corners and
-  cross-passage inference, which generation cannot do.
+- **不自动重生成题库**：校验失配时提示重建（CLI 跑 `tools/build_golden.py`、
+  Web 点「为我的资料生成题库」），不静默重跑一轮 LLM。
+- **不做难度分层**：模型自评不可信，自动题硬编 medium。
+- **不替代人工题库**：内置题仍是唯一覆盖 easy/medium/hard 与三类不可答的高难标尺
+  ——它需要人挑边角、跨段推理，自动题做不到。
 
-**Consequences**: any corpus (including the user's own library) can now be evaluated; the price is
-that synthesized absolute scores cannot be compared against the hand-written bank, and the tie between
-bank and corpus is looser — held together by "skip per item + record it in the report" rather than by
-rejecting the whole bank. Older banks without `gold_hashes` degrade to checking only that the chunk
-ids still exist.
+**后果**：任意语料（含用户自己的库）都能评测了；代价是自动题的绝对分不能跟人工题
+比，且题库与语料的绑定变松——靠"逐题跳过 + 报告留痕"兜住该拦的错配，而不是靠
+"整份拒绝"。已发布的旧题库（无 `gold_hashes`）退化成只校验分块 id 是否存在。
 
-**Code**: `eval/synth.py` (sampling / question writing / unanswerables / persistence),
-`eval/golden.py` (`gold_hashes` / `check_against_corpus` / `source` / `model`), `eval/runner.py`
-(per-item verification replaces the fingerprint comparison; `skipped_items` joins `EvalResult`),
-`eval/report.py` (skipped-items section + header label), `index/manager.py`
-(`Corpus.content_hashes()`), `web/routers/eval.py` (`GET /api/eval/goldens`,
-`POST /api/eval/synthesize` + status, `POST /api/eval/runs?golden=`), `web/services.py`
-(`SynthJobManager`, single slot), `static/eval.html` + `static/js/eval.js` (bank selection,
-synthesis panel, progress polling, a full bar on completion); tests `tests/unit/eval/test_synth.py`,
-`test_golden.py`, `test_runner.py`, `tests/unit/web/test_eval_api.py`; E2E `tools/chrome_eval.py`
-(a local fake OpenAI-compatible endpoint: synthesis → a full evaluation run → the report).
+**代码**：`eval/synth.py`（采样 / 出题 / 不可答题 / 落盘）、`eval/golden.py`
+（`gold_hashes` / `check_against_corpus` / `source` / `model`）、`eval/runner.py`
+（逐题校验替代指纹比较，`skipped_items` 进 `EvalResult`）、`eval/report.py`
+（跳过题小节 + 首部标注）、`index/manager.py`（`Corpus.content_hashes()`）、
+`web/routers/eval.py`（`GET /api/eval/goldens`、`POST /api/eval/synthesize` + status、
+`POST /api/eval/runs?golden=`）、`web/services.py`（`SynthJobManager` 单槽）、
+`static/eval.html` + `static/js/eval.js`（题库选择 / 出题面板 / 进度轮询 / 收尾封顶）；
+测试 `tests/unit/eval/test_synth.py`、`test_golden.py`、`test_runner.py`、
+`tests/unit/web/test_eval_api.py`；E2E `tools/chrome_eval.py`（本机假 OpenAI 兼容
+服务：自动出题 → 整场评测 → 报告，全流程）。
 
 ---
 
-## ADR-0027 Photos into notes: vision as its own config section, recognition as a draft, images anchored to the note key
+## ADR-0027 拍照转笔记：视觉模型独立成段、识别只是草稿、原图锚在笔记 key
 
-- Status: Accepted | 2026-09-20 (M6 ②, the user asked for "photos into note text")
-- Related: ADR-0021 (notes are ordinary documents with a marker), ADR-0018 (model setup in the
-  settings panel), ADR-0026 (the same honesty rule: generated content must say so)
+- 状态：Accepted ｜ 2026-09-20（M6 ②，用户点名"拍照/图片转笔记文本"）
+- 关联：ADR-0021（笔记 = 带标记的普通文档）、ADR-0018（设置面板模型接入）、
+  ADR-0026（同一套"自动生成的内容必须自报家门"的诚实纪律）
 
-**Problem**: whiteboard photos, textbook pages and handwritten outlines taken while revising just
-sit there as images — they cannot be searched or asked about, and retyping them defeats the point of
-a quick note. Four questions have to be answered before this joins the note pipeline:
+**问题**：复习时拍下的板书、书页、手写提纲，现在只能当图片躺着——既不能提问
+也不能检索，手打一遍又违背"随手记"的初衷。要把它接进笔记链路，四个问题得先答：
 
-1. **Where does vision live?** The local profile (Ollama qwen3) has no vision model and the offline
-   profile is a mock — and local is the profile the user actually runs day to day.
-2. **Can recognition go straight into the library?** No: OCR always has errors (handwriting
-   especially), and storing them would freeze those errors into the knowledge base.
-3. **Do we keep the image?** The user decided **yes** (to check against later), but an image is not
-   a document and must not drift into the corpus.
-4. **Where does it live?** Notes are "same-name replacement" (every save changes `documents.id`), so
-   anything keyed on the id is orphaned by the first edit.
+1. **视觉能力接在哪**：local 档（Ollama qwen3）没有视觉能力、offline 档是 Mock，
+   而用户日常跑的正是 local 档；
+2. **识别结果能不能直接入库**：不能——OCR 一定有错字（手写尤甚），直接落库
+   等于把错误固化进知识库；
+3. **原图留不留**：用户拍板**留**（要能事后对照），但图片不是文档，不能混进语料；
+4. **存哪儿**：笔记是"同名替换"（每次保存换 `documents.id`），挂在 id 上的东西
+   第一次编辑就成了孤儿。
 
-**Decision**:
+**决策**：
 
-1. **Vision gets its own config section** (`VisionConfig`: `backend: none | api | local`),
-   **defaulting to none**. Not merged into `llm`: one takes text, the other takes images, and merging
-   them leaves no place for the real combination "DeepSeek for generation + SiliconFlow for
-   recognition" — which is exactly what a local-profile user with a cloud key wants. `api.yaml`
-   defaults to SiliconFlow `Qwen2.5-VL-32B-Instruct` (sharing `SILICONFLOW_API_KEY` with the
-   retrieval side); `local.yaml` / `offline.yaml` say none explicitly (offline keeps its zero-call
-   promise).
-2. **Vision is its own provider layer** (`providers/vision.py`), and **the LLM Protocol is left
-   alone**: multimodal content arrays cannot pass `list[dict[str, str]]` typing, and widening it
-   would drag in the ask pipeline and MockLLM's crash point on non-string content. Only
-   `build_openai_client` is extracted for shared key handling (a second copy would drift into
-   "recognition works, chat does not").
-3. **Recognition is a draft, not an ingest**: "识别图片" in the editor inserts the text at the
-   cursor, the user corrects it, and saving ingests it. Images **never enter the body text**: the
-   body feeds the index, so an image marker is retrieval noise and would force a re-embed on every
-   save.
-4. **Images are anchored to the note key** (`data_dir/note-media/<key>/<nnn>-<sha8>.<ext>`):
-   the key inside `source_ref = "note:<key>"` is fixed at creation and survives renames and edits
-   (ADR-0021 already established that the copy's filename is never regenerated). Content-addressed
-   for dedup, several per note, and deleting the document removes the directory (**failures are
-   logged, never blocking** — the same policy as the uploads copy, and lower risk since note-media
-   is not scanned by reindex).
-5. **The panel gains a vision group, but its key is write-only**: `SILICONFLOW_API_KEY` is shared
-   with embedding/reranker/judge, so clearing it here would break the whole retrieval chain while
-   presenting as "search results got worse" — the hardest failure to trace back to a key. An empty
-   string is rejected with 422 pointing at the model section, and the frontend never sends an empty
-   key in the first place. The panel is **purely additive** (`vision-settings.js` + `#v-*` DOM); the
-   existing model section's regression surface is untouched.
-6. **The OCR endpoint** (`POST /api/notes/ocr`): magic-byte validation (never the extension or
-   Content-Type), a 12 MB cap (**independent of BodySizeLimit**, which is baked at `create_app` and
-   does not follow hot reloads), images **never written to disk** (memory → base64 data URL),
-   400 with an actionable message when vision is not connected (pointing at the panel or
-   `ollama pull qwen2.5vl:7b`), and 502 on upstream failure (the app-level handler).
-7. **Three frontend entry points, one function** (button / drag-and-drop / pasted screenshot →
-   `addImage()`); compression reuses `image-util.js`, extracted from settings.js (two copies would
-   eventually drift into "one compresses to 1600 px, the other ships the full phone photo"). A failed
-   recognition **keeps the image** (the user may have wanted it stored anyway).
+1. **视觉独立成一段配置**（`VisionConfig`：`backend: none | api | local`），
+   **默认 none**。不与 llm 合并：一个收文本、一个收图，混在一起"生成用 DeepSeek
+   ＋识图用 SiliconFlow"这种真实组合无处落脚——而用户日常正是 local 生成 + 云端
+   识图。`api.yaml` 默认接 SiliconFlow `Qwen2.5-VL-32B-Instruct`（与检索侧共用
+   `SILICONFLOW_API_KEY`）；`local.yaml` / `offline.yaml` 明确 none（守住离线零调用）。
+2. **Provider 独立成层**（`providers/vision.py`），**不动 llm 的 Protocol**：多模态
+   content 数组过不了 `list[dict[str, str]]` 的静态标注，而放宽它会牵动 ask 链路与
+   MockLLM 对数组内容崩溃的那处守卫。只从中抽出 `build_openai_client` 共用密钥解析
+   （复制一份必然漂移成"识图能用、问答不能用"）。
+3. **识别只是草稿，不是入库**：编辑器里「识别图片」→ 文本插到光标处 → 用户改 →
+   保存才入库。图片**不进正文**：正文是索引的输入，图片标记进去就是检索噪声，
+   还会让每次保存都重嵌一遍。
+4. **原图锚在笔记 key**（`data_dir/note-media/<key>/<序号>-<sha8>.<ext>`）：
+   `source_ref = "note:<key>"` 的 key 创建时定下、改名与编辑都不变（ADR-0021 已确认
+   "副本文件名永不重生成"）。按内容去重；一篇可存多张；删文档连带清目录
+   （**失败只记日志不阻断**——与 uploads 副本同款政策，且风险更低：note-media 不在
+   uploads 里，reindex 不会把图片"复活"成文档）。
+5. **面板新增「视觉模型」一组，但密钥只写不删**：`SILICONFLOW_API_KEY` 被
+   embedding/reranker/judge 共用，在这里清空会打挂整条检索链，故障表现却是
+   "搜索结果变差"——最难联想到密钥的那种静默降级。所以空串直接 422 并指路
+   「模型」段。前端也在发送前就不带空密钥。面板是**纯新增**
+   （`vision-settings.js` + `#v-*` DOM），不动既有模型段的回归面。
+6. **识图端点**（`POST /api/notes/ocr`）：**魔数**验真（不看扩展名/Content-Type）、
+   12MB 上限（**独立于 BodySizeLimit**——后者是 `create_app` 时烘焙的、不随热更新
+   重算）、图片**不落盘**（内存 → base64 data URL）、未接入 → 400 可操作文案
+   （指路面板或 `ollama pull qwen2.5vl:7b`）、上游失败 → 502（app 层处理器）。
+7. **前端三条入口汇到一个函数**（按钮 / 拖拽 / 粘贴截图 → `addImage()`）；
+   压缩复用从 settings.js 抽出的 `image-util.js`（两份拷贝迟早漂移成"一边压到
+   1600、一边把手机原图整张发出去"）。识别失败**保留原图**（用户可能本就想存）。
 
-**Explicitly not doing**:
+**明确不做**：
 
-- **Archival image quality**: what is stored is a compressed JPEG (1600 px long edge ≈ 150 dpi),
-  enough to check against later, not a scan.
-- **Orphan-directory sweeping**: `ingest --reindex` empties the rows and leaves note-media
-  directories unclaimed (recorded in limitations for a later round).
-- **Batch recognition**: the frontend runs one image at a time (each takes seconds; concurrency
-  would only queue).
-- **Real Ollama VLM testing**: this round only documents the `ollama pull qwen2.5vl:7b` path.
+- **不把原图当档案**：存的是压缩后 JPEG（长边 1600 ≈ 150dpi），"事后对照"够用；
+- **不做孤儿目录清扫**：`ingest --reindex` 清空行会让 note-media 目录无人认领
+  （记入 limitations，留二期）；
+- **不做批量多图一次识别**：前端串行（识别十几秒一张，并发只会互相排队）；
+- **不实测 Ollama VLM**：本期只给 `ollama pull qwen2.5vl:7b` 的指引。
 
-**Consequences**: any profile can set up recognition — api works out of the box, local can point at
-the cloud with one click or pull a local VLM; images stay decoupled from the body, so retrieval
-quality is unaffected. The price: the settings panel lives on the QA page only (a cross-page
-reality, handled with a pointer in the copy), and apart from deleting a note there is no automatic
-cleanup path for images (the editor can remove them one by one).
+**后果**：任意档位都能配识图——api 档开箱可用，local 档要么一键切云端、要么 pull
+本机 VLM；图片与正文解耦，检索质量完全不受影响。代价：设置面板只在问答页
+（知识库页没有入口，跨页配置是既成事实，用文案指路）；除删除笔记外没有自动清理
+原图的路径（用户可在编辑器里逐张删）。
 
-**Code**: `config/settings.py` (`VisionConfig`, `note_media_dir`, the read-modify-write
-`write_section_overlay`), `providers/vision.py` (new: magic-byte sniffing and `NoVision`'s
-actionable error), `providers/llm.py` (extracted `build_openai_client`),
-`web/routers/documents.py` (`/api/notes/ocr` + the four media endpoints + delete cleanup),
-`web/routers/settings.py` (three `/api/settings/vision` endpoints), `web/schemas.py`,
-`web/services.py` (`services.vision` + `rebuild_vision`); frontend
-`static/js/{image-util,vision-settings,note-editor,reader,settings}.js` + `index.html` +
-`style.css`; tests `tests/unit/providers/test_vision.py`, `tests/unit/web/test_note_ocr_api.py`,
-`test_note_media_api.py`, `test_vision_settings_api.py`, `tests/unit/config/test_user_config.py`;
-E2E `tools/chrome_note_ocr.py` (a fake multimodal endpoint driving the real browser through the
-whole flow) and `tools/chrome_model_settings.py` (extended to the vision section, including the
-end-to-end red line "configuring vision must not wipe the model section").
+**代码**：`config/settings.py`（`VisionConfig` / `note_media_dir` /
+`write_section_overlay` 的读-改-写）、`providers/vision.py`（新，含魔数嗅探与
+`NoVision` 的可操作报错）、`providers/llm.py`（抽出 `build_openai_client`）、
+`web/routers/documents.py`（`/api/notes/ocr` + media 四端点 + 删除连带）、
+`web/routers/settings.py`（`/api/settings/vision` 三端点）、`web/schemas.py`、
+`web/services.py`（`services.vision` + `rebuild_vision`）、前端
+`static/js/{image-util,vision-settings,note-editor,reader,settings}.js` +
+`index.html` + `style.css`；测试 `tests/unit/providers/test_vision.py`、
+`tests/unit/web/test_note_ocr_api.py`、`test_note_media_api.py`、
+`test_vision_settings_api.py`、`tests/unit/config/test_user_config.py`；
+E2E `tools/chrome_note_ocr.py`（假多模态服务 + 真浏览器全流程）、
+`tools/chrome_model_settings.py`（扩视觉段，含"配视觉不伤模型段"的端到端红线）。
 
-## ADR-0028 Formulas are typeset locally: KaTeX is vendored into the build
+## ADR-0028 公式在本地排版：把 KaTeX 内置进发布物
 
-**Context**: the user asked a calculus question in free mode and got a correct, well-structured
-answer whose `$$…$$` block formulas were displayed as raw LaTeX source — "why is the layout such a
-mess". The cause was not a regression: the project had never rendered math at all. `renderAnswer`
-is a small hand-written Markdown-ish renderer (fenced code, inline code, bold, headings, lists,
-tables, `---`, citation chips), and it passed `$…$` / `\frac{}` through as plain text. A grep for
-`KaTeX|MathJax|LaTeX` across the repo returned zero hits.
+**背景**：用户在自由问答里问了道高等数学题，答案内容正确、结构也清楚，但里面
+`$$…$$` 的块级公式全是**源码原样显示**——用户原话"为什么这个文字的排版是这样的，
+特别的乱"。查下来不是回归：本项目**从来没有渲染过公式**。`renderAnswer` 是一套
+手写的轻量 Markdown 渲染器（围栏代码、行内代码、粗体、标题、列表、表格、`---`、
+引用角标），`$…$` / `\frac{}` 一律当普通文字输出；全仓 grep
+`KaTeX|MathJax|LaTeX` 是 0 命中。
 
-**Decision**: vendor KaTeX 0.18.7 (`katex.min.js`, `katex.min.css`, 20 `.woff2` fonts, `LICENSE`)
-into `web/static/vendor/katex/` and typeset math inside `renderAnswer` as a **pre-pass**:
-extract LaTeX from the raw text, replace it with placeholders, run the existing pipeline
-(escape → controlled replacement), then swap the KaTeX HTML back in.
+**决定**：把 KaTeX 0.18.7（`katex.min.js`、`katex.min.css`、20 个 `.woff2` 字体、
+`LICENSE`）内置到 `web/static/vendor/katex/`，并在 `renderAnswer` 里以**前置一遍**
+的方式排版公式：从**原始文本**抽出 LaTeX → 换成占位符 → 走既有的
+（esc → 受控替换）管线 → 最后把 KaTeX 的 HTML 还原回去。
 
-**Why a pre-pass instead of a DOM post-pass**: KaTeX's own `renderToString` is a pure string
-function, which keeps the "no build chain, no DOM dependency" property of this renderer (and its
-smoke test can run it under plain Node). Extracting *before* `esc()` matters: a post-pass would
-hand KaTeX `x &lt; y` and render nonsense.
+**为什么是前置字符串处理、而不是渲染后再扫 DOM**：KaTeX 的 `renderToString` 是纯
+字符串函数，这样"无构建链、不依赖 DOM"这条性质原封不动（Node 冒烟里也能跑真
+KaTeX）。而且必须在 `esc()` **之前**抽：放到之后，交给 KaTeX 的会是 `x &lt; y`，
+渲染出来是错的。
 
-**Guardrails**: code fences and inline code are masked first (`echo $HOME` is not a formula), and
-paired `$` alone is not enough — a Chinese-character run without any LaTeX command, or a purely
-numeric payload, is treated as prose/currency (`价格$5到$10之间`, `$1000$`). The first version of
-that rule was too strict and silently skipped 8 real formulas in the user's own answer
-(`(-1, 1]`, `n!`, `2n+1`, `o(x)`) — the rule is now "exclude, then accept by default", with the
-miss locked by smoke assertions.
+**两道闸**：先摘掉围栏代码与行内代码（`echo $HOME` 不是公式）；成对的 `$` 也不够
+——内容里有中文且不含 LaTeX 命令、或整体是纯数字的，按散文/金额处理
+（`价格$5到$10之间`、`$1000$`）。这条判据的**第一版太严**，在用户那条回答里
+静默漏掉了 8 处真公式（`(-1, 1]`、`n!`、`2n+1`、`o(x)`），已改成"先排除、其余
+默认放行"，并用冒烟断言把这个漏法钉死。
 
-**Alternatives considered and rejected**: telling the model to avoid LaTeX (math becomes unreadable
-in exactly the subject where it matters); MathJax (heavier, and its DOM-walking design does not fit
-a string-returning renderer); a CDN loader (this app must work offline, and the desktop window has
-no guaranteed internet path — the project already burned a day on GitHub connectivity).
+**考虑过并否决**：让模型别写 LaTeX（恰好在最需要公式的学科里变得难读）；MathJax
+（更重，且它按 DOM 遍历的设计跟这个"返回字符串"的渲染器不合）；CDN 加载（这个应用
+必须离线可用，桌面窗口没有可靠的联网前提——本项目已经在 GitHub 连通性上栽过一天）。
 
-**Consequences**: answers carry ~150 KB of KaTeX HTML for a formula-dense reply (the user's Taylor
-expansions: 15 display + 42 inline formulas → 148 KB rendered, up from 6 KB of Markdown), and the
-package grows by 545 KB. In exchange, math is readable, selectable and copyable, and it works with
-the network unplugged. If KaTeX is missing (script absent, Node smoke), the raw LaTeX is shown
-verbatim — never swallowed.
+**代价与收益**：公式密集的回答会带上约 150 KB 的 KaTeX HTML（用户那份泰勒展开：
+15 个块级 + 42 个行内 → 渲染后 148 KB，原文 6 KB），发布包增大 545 KB；换来的是
+公式可读、可选、可复制，且断网也能用。KaTeX 缺席时（脚本没加载 / Node 冒烟）原样
+显示 LaTeX 源码，**绝不吞内容**。
 
-**Code**: `web/static/vendor/katex/**` (vendored, MIT, listed in `THIRD_PARTY_NOTICES.md` via
-`tools/make_third_party_notices.py`), `web/static/js/common.js` (the "公式渲染" section),
-the four pages (`vendor` CSS **before** `style.css`, so the project's font-size override wins),
-`css/style.css` (`.katex` / `.katex-display`, long formulas scroll instead of bursting the bubble);
-tests `tools/smoke_render.mjs` (fake KaTeX: wiring, code masking, currency rejection),
-`tools/smoke_math.mjs` (the real vendored KaTeX, 24 assertions), and
-`tests/unit/web/test_frontend_static.py` (files present + every page wired + CSS order).
+**代码**：`web/static/vendor/katex/**`（内置的 MIT 资源，已由
+`tools/make_third_party_notices.py` 记进 `THIRD_PARTY_NOTICES.md`）、
+`web/static/js/common.js`（"公式渲染"段）、四个页面（vendor 样式排在 `style.css`
+**之前**，好让项目里的字号覆盖生效）、`css/style.css`（`.katex` / `.katex-display`，
+长公式横向滚动而不是撑破气泡）；测试 `tools/smoke_render.mjs`（假 KaTeX：接线、
+代码遮蔽、货币误判）、`tools/smoke_math.mjs`（真 KaTeX，24 条断言）、
+`tests/unit/web/test_frontend_static.py`（文件在 + 四页都引 + 样式顺序）。
