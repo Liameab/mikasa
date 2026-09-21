@@ -40,7 +40,7 @@ $Payload     = Join-Path $ScriptDir "Mikasa"            # 与安装器同级的�
 $AppExe      = Join-Path $Payload "Mikasa.exe"
 $AppName     = "Mikasa"
 $DisplayName = "Mikasa"
-$Version     = "0.1.10"
+$Version     = "0.1.11"
 $Publisher   = "Liameab"
 $UninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Mikasa"
 
