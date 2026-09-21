@@ -204,6 +204,45 @@ class ItemRecord:
 
 
 @dataclass
+class ShapeStats:
+    """作答**形态**统计（交接单 P3，2026-09-21）。
+
+    提示词里那份 OUTPUT_FORMAT_CONTRACT（分节 / 表格 / 公式 / 列表）在
+    2026-09-20 只有一条问题的肉眼实测——改提示词没有任何回归手段。这个容器
+    让"形态"进评测：同一题库跑两轮，分节数、表格数、字数一眼可比。
+
+    只统计**真正作答**的样本（可答题且未拒答）：拒答题只有一句固定句式，
+    混进来会把均值稀释成没有意义的数字。**只记形态、不判好坏**——"用了三张
+    表格"不等于"答得好"，语义正确性仍归裁判与引用指标。
+    """
+
+    answers: int = 0
+    chars: _Mean = field(default_factory=_Mean)
+    sections: _Mean = field(default_factory=_Mean)
+    tables: _Mean = field(default_factory=_Mean)
+    formulas: _Mean = field(default_factory=_Mean)
+    bullets: _Mean = field(default_factory=_Mean)
+
+    def add(self, text: str) -> None:
+        from mikasa.eval.metrics import shape_stats
+
+        stats = shape_stats(text)
+        self.answers += 1
+        for key in ("chars", "sections", "tables", "formulas", "bullets"):
+            getattr(self, key).add(float(stats[key]))
+
+    def final(self) -> dict[str, object]:
+        """序列化（空样本 → None，报告渲染成"—"，同 _summ_or_none 的口径）。"""
+        return {
+            "answers": self.answers,
+            **{
+                k: _summ_or_none(getattr(self, k))
+                for k in ("chars", "sections", "tables", "formulas", "bullets")
+            },
+        }
+
+
+@dataclass
 class EvalResult:
     """一次评测的全部产物（纯内存；CLI 负责落库 eval_runs 与出报告）。"""
 
@@ -216,6 +255,8 @@ class EvalResult:
     # 逐题校验被跳过的题（id, 原因）：语料变动后标准答案所在分块没了/内容变了。
     # 报告里必须显式写出来——静默缩小分母会让分数看着变好。
     skipped_items: list[tuple[str, str]] = field(default_factory=list)
+    # 作答形态（见 ShapeStats）：提示词改动的回归镜子
+    shape: ShapeStats = field(default_factory=ShapeStats)
 
     def to_metrics_json(self) -> dict[str, object]:
         """metrics_json 快照：报告渲染与 DB 落库共用同一序列化口径。"""
@@ -249,6 +290,7 @@ class EvalResult:
                 "inconsistent": judge.inconsistent,
                 "errors": judge.errors,
             },
+            "shape": self.shape.final(),
             "items": [r.to_json() for r in self.items],
             "skipped_items": [{"id": i, "reason": r} for i, r in self.skipped_items],
         }
@@ -270,6 +312,8 @@ class EvalRunner:
     def __init__(self, settings: Settings, golden: GoldenSet) -> None:
         self._settings = settings
         self._golden = golden
+        # 作答形态（见 ShapeStats）：本轮的累加器
+        self._shape = ShapeStats()
 
     # ------------------------------------------------------------------
 
@@ -352,6 +396,7 @@ class EvalRunner:
             items=items,
             latency_sec=perf_counter() - t0,
             skipped_items=check.skipped,
+            shape=self._shape,
         )
 
     @staticmethod
@@ -472,6 +517,11 @@ class EvalRunner:
                 gen.answered_unanswerable += 1
                 if answer.citations:
                     gen.answered_with_citation += 1
+
+        # 作答形态：与裁判同一批样本（可答题且未拒答）——拒答题只有一句固定
+        # 句式，混进来会把"分节/表格"的均值稀释成没有意义的数字
+        if item.kind == "answerable" and not answer.refused:
+            self._shape.add(answer.text)
 
         # ---- 阶段 C：语义裁判（仅可答题非拒答样本值得判） ----
         if item.kind == "answerable" and not answer.refused:

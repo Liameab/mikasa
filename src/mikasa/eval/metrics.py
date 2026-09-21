@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 
 _EPS = 1e-9
@@ -149,3 +150,56 @@ def make_retrieval_metrics(ks: tuple[int, ...]) -> RetrievalMetrics:
         ndcg={k: _Mean() for k in ks},
         rr=_Mean(),
     )
+
+
+# ---------------------------------------------------------------------------
+# 作答形态（2026-09-21，交接单 P3）
+# ---------------------------------------------------------------------------
+
+# 分节标题：## 起的行（h1 留给报告自身，模型的分节从 ## 算起，与提示词的
+# OUTPUT_FORMAT_CONTRACT 一致）
+_SECTION_RE = re.compile(r"^\s{0,3}#{2,4}\s+\S", re.MULTILINE)
+# 表格：连续以 | 起头的行，≥2 行才算一张（单行是正文里的竖线，不算）
+_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
+# 列表项：- / * / + 或 1. / 1)
+_BULLET_RE = re.compile(r"^\s{0,3}(?:[-*+]\s+\S|\d{1,3}[.)]\s+\S)", re.MULTILINE)
+# 公式：行间 $$...$$ 与行内 $...$（同一个 $ 计数里，行间占 2）
+_DISPLAY_MATH_RE = re.compile(r"\$\$[^$]+\$\$", re.DOTALL)
+_INLINE_MATH_RE = re.compile(r"(?<!\$)\$[^$\n]+\$(?!\$)")
+
+
+def shape_stats(text: str) -> dict[str, int]:
+    """一段回答的"形态"计数：字数 / 分节 / 表格 / 公式 / 列表项。
+
+    为什么要有它（交接单 P3）：提示词里那份 OUTPUT_FORMAT_CONTRACT（分节、
+    表格、公式、示意图）在 2026-09-20 只有**一条问题的肉眼实测**——
+    改提示词没有任何回归手段，只能靠感觉。这几个计数就是那面镜子：
+    同一个题库跑两轮，形态变化一眼可见（见 evaluation.md 的使用说明）。
+
+    **只统计形态，不判断好坏**——"用了 3 张表格"不等于"答得好"，
+    语义正确性仍归裁判与引用指标管。别把这两件事混成一个人造分数。
+    """
+    body = text or ""
+    stripped = body.strip()
+    # 围栏代码块里的竖线与 $ 不算形态（那是代码/公式的字面量，不是呈现）
+    without_fences = re.sub(r"```.*?```", "", body, flags=re.DOTALL)
+    tables = 0
+    run = 0
+    for line in without_fences.splitlines():
+        if _TABLE_ROW_RE.match(line):
+            run += 1
+            continue
+        if run >= 2:
+            tables += 1
+        run = 0
+    if run >= 2:
+        tables += 1
+    display = len(_DISPLAY_MATH_RE.findall(without_fences))
+    inline = len(_INLINE_MATH_RE.findall(without_fences))
+    return {
+        "chars": len(stripped),
+        "sections": len(_SECTION_RE.findall(without_fences)),
+        "tables": tables,
+        "formulas": display + inline,
+        "bullets": len(_BULLET_RE.findall(without_fences)),
+    }

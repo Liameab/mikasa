@@ -16,6 +16,7 @@ from mikasa.eval.metrics import (
     ndcg_at,
     recall_at,
     reciprocal_rank,
+    shape_stats,
     summarize,
 )
 
@@ -142,3 +143,37 @@ def test_metrics_final_snapshot_shape():
     # 内存快照的 k 键保持 int（落库 JSON 时由 json.dumps 自动转成字符串键）
     assert snapshot["recall_at"][5]["mean"] == 1.0
     assert snapshot["by_difficulty"]["easy"][5]["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 作答形态（交接单 P3）
+# ---------------------------------------------------------------------------
+
+
+def test_shape_stats_counts_the_shapes_that_matter():
+    """分节 / 表格 / 公式 / 列表 / 字数——提示词改动的回归镜子。
+
+    计数口径写死在这里：围栏代码块里的竖线与 $ **不算**（那是代码字面量，
+    不是呈现形态），单行竖线也不算表格（≥2 行才算一张）。
+    """
+    text = (
+        "## 结论\n\n"
+        "| 模型 | 分数 |\n| --- | --- |\n| a | 1 |\n\n"
+        "- 要点一 $x^2$\n- 要点二\n\n"
+        "$$E = mc^2$$\n\n"
+        "```python\n# | 这不是表格 |\nprint('$不是公式$')\n```\n"
+        "收尾一句。"
+    )
+    stats = shape_stats(text)
+    assert stats["sections"] == 1
+    assert stats["tables"] == 1  # 代码块里的竖线不算
+    assert stats["formulas"] == 2  # 一个行内 + 一个行间
+    assert stats["bullets"] == 2
+    assert stats["chars"] == len(text.strip())
+
+
+def test_shape_stats_empty_and_plain():
+    """空文本与纯段落都不炸，且全 0（回放/拒答轮会出现空文本）。"""
+    assert shape_stats("")["chars"] == 0
+    plain = shape_stats("就是一句话，没有任何形态。")
+    assert plain == {"chars": 13, "sections": 0, "tables": 0, "formulas": 0, "bullets": 0}

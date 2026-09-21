@@ -104,6 +104,27 @@ def render_report(
     )
     add("")
 
+    # 作答形态（2026-09-21，交接单 P3）：提示词的"呈现规范"改了之后，只有
+    # 这几个数字能当回归镜子。**只列形态、不给结论**——"用了三张表"不等于
+    # "答得好"，语义质量仍归阶段 C。老快照没有这一段时整节跳过（不硬造 0）。
+    shape = getattr(result, "shape", None)
+    if shape is not None and shape.answers:
+        add("**作答形态**（只统计可答题且未拒答的样本；改提示词后比这几个数）")
+        add("")
+        add(
+            _table(
+                ["形态", "每份回答平均", "样本数"],
+                [
+                    ["字数", _mean_text(shape.chars), str(shape.answers)],
+                    ["分节（## 起）", _mean_text(shape.sections), ""],
+                    ["表格（张）", _mean_text(shape.tables), ""],
+                    ["公式（处）", _mean_text(shape.formulas), ""],
+                    ["列表项（条）", _mean_text(shape.bullets), ""],
+                ],
+            )
+        )
+        add("")
+
     # ---------------- 阶段 C：语义裁判 ----------------
     add("## 阶段C 语义裁判")
     add("")

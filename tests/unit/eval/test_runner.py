@@ -252,9 +252,16 @@ def test_run_full_offline_protocol_metrics(tmp_path, offline_settings):
         "judge",
         "items",
         "skipped_items",  # 逐题校验跳过的题（2026-09-19 起）；静默缩分母最危险
+        "shape",  # 作答形态（2026-09-21 起）；改提示词的回归镜子
     }
     assert snapshot["skipped_items"] == []
     assert snapshot["generation"]["refusal_accuracy"] == 0.5
+    # 形态只统计"可答题且未拒答"的样本：a1/a2 作答、a3 拒答、u1/u2 不可答
+    # → 分母 2。MockLLM 只会平铺直叙，所以分节/表格/公式都是 0，字数 > 0。
+    shape = snapshot["shape"]
+    assert shape["answers"] == 2
+    assert shape["chars"]["mean"] > 0
+    assert shape["sections"]["mean"] == 0 and shape["tables"]["mean"] == 0
 
 
 def test_run_item_to_json_shape(tmp_path, offline_settings):
