@@ -41,6 +41,10 @@ vision:
   # 非离线档开放）。
   backend: none
 
+image:
+  # 文生图：离线档**永远不接入**（本档承诺零密钥、零外部调用）。
+  backend: none
+
 judge:
   enabled: false
 

@@ -49,6 +49,7 @@
 | ADR-0028 | 公式在本地排版：把 KaTeX 内置进发布物 | Accepted |
 | ADR-0029 | 本地档改走 Ollama 原生接口：think / num_ctx 两个旋钮 + 作答呈现规范 | Accepted |
 | ADR-0030 | 向量模型随包携带：固定 revision + 构建期取件 + 运行时铺设 | Accepted |
+| ADR-0031 | 文生图：出图独立成段 + 字节落盘 + 只放行同源图片 | Accepted |
 
 ---
 
@@ -1492,3 +1493,67 @@ Ollama），而国内直连 huggingface.co 常超时；更糟的是这个下载�
 `_cached_snapshot` / `_hf_repo_of`）、`.github/workflows/release.yml`（取件 + 断言）、
 `tools/smoke_frozen.py`（离线入库哨兵）、`tools/make_release.py`（安装说明文案）；
 测试 `tests/unit/providers/test_embed_model.py`（8 条）。
+
+## ADR-0031 文生图：出图独立成段 + 字节落盘 + 只放行同源图片
+
+**背景**：用户拍了"三个全做"——识图（M6 ②）、公式排版、**文生图**，这是第三件。
+需求原话是"不要只能输出文字，希望软件自己能出图"。
+
+**决定**：
+
+1. **出图独立成一个配置段**（`image: none|api`，默认 `none`），与 vision 分开：
+   一个收图、一个出图，模型名与请求参数都不是一回事（SiliconFlow 的出图端点要
+   `image_size`，OpenAI 那套要 `size`），混在一段里"识图用 A、出图用 B"无处落脚。
+   offline 档永远 `none`（该档承诺零密钥、零外部调用）。
+2. **取回的是字节，不是 URL**。上游给的图片链接**只有 1 小时有效期**
+   （SiliconFlow 文档明写），把 URL 直接写进回答就是"一小时后变裂图"。
+   落盘到 `data_dir/generated/`（与 uploads 分开——uploads 是 ingest 的输入，
+   图片进去会被 reindex 当文档扫），文件名 = `日期-内容哈希.扩展名`（同图重生成
+   不堆副本），回答里引用的是本机地址、永久有效。
+3. **两张形状都认**：SiliconFlow 是 `{"images":[{"url":…}]}`，OpenAI/DALL·E 是
+   `{"data":[{"url"|"b64_json":…}]}`。只认一种，换家服务商就是"调用成功但没图片"。
+4. **出网两条路都过闸门**（复用论文下载器那套 `reject_reason`）：发请求的目标
+   （用户填的 base_url）与**下载图片的目标**（上游返回的 URL，算半可信输入）。
+   后者不能省——上游被攻破或返回内网地址时，那是一个现成的内网探测原语。
+5. **未配密钥槽位 = 本机免密钥服务**（注入占位钥匙，同 `llm._LOCAL_API_KEY`）；
+   **配了槽位但没填 = 如实报错**。"我知道这个服务不要密钥"与"忘了填"是两件事。
+6. **接口**：`POST /api/images/generate`（提示词 → 图）与
+   `GET /api/images/generated/{name}`（取图）。取图端点的文件名是**服务端拼的**
+   （正则白名单 → 目录拼接 → is_file），路径穿越在这层没有入口；inline + nosniff +
+   私有缓存（与 note-media 同款纪律）。
+7. **没会话就建一个**：生成成功后把图片作为一条助手消息落进会话（`![提示词](同源地址)`
+   + 一行 `（模型 · 尺寸）` 说明）。不落库的话刷新即失——用户要的是"这条对话里
+   有这张图"。失败路径一个空会话都不留（同 ask 的 `_drop_session_if_empty` 纪律）。
+8. **前端只放行同源图片**（`renderAnswer` 新增独占一行的 `![alt](url)` 分支，
+   URL 必须是单个 `/` 开头的同源路径）。远程图片会让"用户看了这条回答"变成一次
+   对外请求（图片即追踪像素）；不放行的写法降级成原文一行，不静默吞掉。
+   加载失败由消息级委托（捕获阶段，`error` 不冒泡）挂 `.broken`，CSS 显示一行说明。
+9. **「测试连接」不生成图片**：出图按张计费或耗免费额度，拿它当探针不合适。
+   只读 `/models` 列表并核对模型名在不在其中（几百字节）。
+10. **对话框的尺寸跟随配置**（输入框只给占位符 + 预设下拉，留空即用配置值）。
+    写死一个默认值会静默覆盖用户在面板里选好的尺寸——各模型推荐值不同
+    （Qwen-Image 1328x1328 / Kolors 1024x1024），猜错就是白等几十秒。
+    （这条是 E2E 当场抓出来的：假服务收到的 image_size 是对话框默认值而不是配置值。）
+11. **视频不做**（按秒计费 + 要转码），写进 limitations。
+
+**实测**（2026-09-21，SiliconFlow + Qwen/Qwen-Image，1328x1328）：
+一次出图 **21.0 秒**、1199KB PNG，响应走 `images[].url` 分支 → 当场下载落盘。
+客户端头的四张预设之外，SiliconFlow 上还有 `Kwai-Kolors/Kolors`、
+`Tongyi-MAI/Z-Image(-Turbo)`、`baidu/ERNIE-Image-Turbo` 等出图模型（实测 /models 列表 95 个模型里有 7 个出图模型）。
+
+**代价与边界**：
+
+- **出图必须出网**（云端模型），本机档默认关闭；提示词会发到所选服务商，
+  面板与对话框里都写明了。
+- 生成图**不进知识库**（它不在 uploads，也不参与检索）——要沉淀为可检索内容，
+  走"笔记 + 原图"那条路（M6 ②）。
+- 图片尺寸/质量取决于所选模型；本项目不做本地出图（要另引 SD/ComfyUI 一类运行时）。
+
+**代码**：`config/settings.py`（`ImageConfig` + `generated_dir`）、
+`providers/image.py`（`OpenAICompatImage` / `NoImage`）、`providers/__init__.py`、
+`web/services.py`（`rebuild_image`）、`web/routers/images.py`、
+`web/routers/settings.py`（`/api/settings/image` 三端点）、`web/schemas.py`、
+`web/static/js/image-gen.js`（对话框）+ `image-settings.js`（面板段）+
+`common.js`（`renderAnswer` 的图片块）+ `qa.js`（入口与追加）+ `style.css`；
+测试 `tests/unit/providers/test_image_provider.py`、`tests/unit/web/test_images_api.py`、
+`tools/smoke_render.mjs`（13 条断言）、E2E `tools/chrome_image.py`（自带假出图服务）。

@@ -431,6 +431,15 @@ export function renderAnswer(text, citations, showCites = true) {
     return escaped.replace(new RegExp(PH + "(\\d+)" + PH, "g"), (_m, i) => tokens[Number(i)]);
   };
 
+  /** 图片 URL 白名单：只放行同源相对路径（同源 = 我们自己发的图）。
+   *  返回 null 表示不放行，调用方降级成文字。 */
+  const safeImageUrl = (raw) => {
+    const url = raw.trim();
+    if (!url.startsWith("/") || url.startsWith("//")) return null;
+    // 属性注入面：esc 已经兜底一次，这里再挡一次"引号/尖括号/空白"
+    return /[<>"'\s]/.test(url) ? null : url;
+  };
+
   /** 围栏代码块：独立区域 = 角标行（语言 + 复制钮）+ 等宽代码主体。
    *  content 必须已 esc；lang 是 LLM 输出，同样先 esc。复制交互靠
    *  消息级委托（.btn-copy 无内联 onclick），见 qa.js。 */
@@ -547,6 +556,25 @@ export function renderAnswer(text, citations, showCites = true) {
     if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
       flush();
       out.push("<hr>");
+      i += 1;
+      continue;
+    }
+
+    // 图片：**独占一行**的 ![alt](url)。
+    // 只放行**同源路径**（单个 / 开头、不是 //host）：远程图片会让"用户看了
+    // 这条回答"变成一次对外请求（图片即追踪像素），而本应用的图片一律来自
+    // 自己（生成图走 /api/images/generated/…）。不放行的写法降级成原文一行，
+    // 不静默吞掉。alt 里的提示词照常 esc。
+    const img = line.trim().match(/^!\[([^\]]*)\]\(([^)\s]+)\)$/);
+    if (img) {
+      flush();
+      const url = safeImageUrl(img[2]);
+      out.push(
+        url
+          ? `<figure class="md-figure"><img src="${esc(url)}" alt="${esc(img[1])}" ` +
+              `loading="lazy" decoding="async"></figure>`
+          : `<p>${inline(esc(line.trim()))}</p>`
+      );
       i += 1;
       continue;
     }

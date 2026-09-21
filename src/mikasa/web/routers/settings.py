@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import ValidationError
 
 from mikasa.config.settings import (
+    ImageConfig,
     LLMConfig,
     Settings,
     VisionConfig,
@@ -38,12 +39,20 @@ from mikasa.config.settings import (
     write_section_overlay,
 )
 from mikasa.errors import ProviderError, ZhiwenError, strip_paths
+from mikasa.providers.image import OpenAICompatImage
 from mikasa.providers.llm import OpenAICompatLLM
 from mikasa.providers.ollama import OllamaNativeLLM, fetch_ollama_tags
 from mikasa.providers.vision import OpenAICompatVision
 from mikasa.utils.net import default_port, reject_reason
 from mikasa.web.deps import get_services, get_settings
-from mikasa.web.schemas import ModelSettingsIn, ModelTestIn, VisionSettingsIn, VisionTestIn
+from mikasa.web.schemas import (
+    ImageSettingsIn,
+    ImageTestIn,
+    ModelSettingsIn,
+    ModelTestIn,
+    VisionSettingsIn,
+    VisionTestIn,
+)
 
 router = APIRouter(tags=["settings"])
 
@@ -466,6 +475,185 @@ def test_vision_settings(body: VisionTestIn) -> dict[str, Any]:
                 "model": model,
                 "latency_ms": latency_ms,
                 "reply": result.text.strip()[:60],
+            }
+        except ZhiwenError as exc:
+            return {"ok": False, "model": model, "error": strip_paths(str(exc))}
+        except Exception as exc:  # noqa: BLE001 - 探测端点：任何异常都是"连不通"的一种
+            return {"ok": False, "model": model, "error": f"{type(exc).__name__}: {exc}"}
+        finally:
+            os.environ.pop(_TEST_KEY_ENV, None)
+
+
+# ---------------------------------------------------------------------------
+# 图像生成段（文生图，ADR-0031）
+# ---------------------------------------------------------------------------
+
+# 图像段没给 api_key_env 时的兜底槽位（前端预设自带变量名）
+_DEFAULT_IMAGE_KEY_ENV = "MIKASA_IMAGE_API_KEY"
+
+
+def _image_payload(settings: Settings) -> dict[str, Any]:
+    """当前出图配置的展示体（密钥只回有无，永不下发）。"""
+    env = settings.image.api_key_env or ""
+    shared_envs = {
+        settings.embedding.api_key_env,
+        settings.reranker.api_key_env,
+        settings.judge.api_key_env,
+        settings.vision.api_key_env,
+    }
+    return {
+        "backend": settings.image.backend,
+        "base_url": settings.image.base_url or "",
+        "model": settings.image.model,
+        "size": settings.image.size,
+        "api_key_env": env,
+        "has_api_key": settings.image.api_key is not None,
+        # 与检索/识图共用密钥槽位时为真：前端据此常显提示（在那个槽位上清空
+        # 会连带打挂 embedding/reranker/judge/vision）
+        "key_shared_with_retrieval": bool(env) and env in shared_envs,
+        "profile": settings.profile,
+        "locked": settings.config_path is not None,
+    }
+
+
+def _validated_image_fields(body: ImageSettingsIn) -> dict[str, Any]:
+    """校验并组装要写进覆盖层的 image 字段（校验先于任何写入）。"""
+    if body.backend == "none":
+        # 停止使用出图：整段塌缩成只有 backend（理由同视觉段：留一串用不上的
+        # 字段，下次打开面板会看到"我都关了怎么还有地址"）
+        return {"backend": "none"}
+    model = body.model.strip()
+    base_url = body.base_url.strip()
+    if not model:
+        raise HTTPException(status_code=422, detail="出图模型名不能为空")
+    if not base_url:
+        raise HTTPException(status_code=422, detail="API 地址（base_url）不能为空")
+    env_name = body.api_key_env.strip() or _DEFAULT_IMAGE_KEY_ENV
+    if body.api_key == "":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"图像生成与检索/识图共用同一个密钥槽位（{env_name}），"
+                "这里不能清空——要清除请到「模型」段操作。"
+            ),
+        )
+    size = body.size.strip() or "1024x1024"
+    # 形状校验：SiliconFlow 要 `宽x高`，写错了上游回的是"参数错误"，
+    # 而那个报错不会告诉用户该写什么
+    parts = size.lower().split("x")
+    if len(parts) != 2 or not all(p.isdigit() and 64 <= int(p) <= 4096 for p in parts):
+        raise HTTPException(
+            status_code=422, detail=f"图片尺寸要写成「宽x高」（如 1328x1328），收到：{size}"
+        )
+    fields: dict[str, Any] = {
+        "backend": body.backend,
+        "base_url": base_url,
+        "api_key_env": env_name,
+        "model": model,
+        "size": size,
+    }
+    try:
+        ImageConfig(**fields)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=format_validation_error(exc)) from exc
+    return fields
+
+
+def _apply_image_key(env_name: str, body: ImageSettingsIn) -> None:
+    """图像段的密钥**只写不删**（清除是模型段的职责，见 ImageSettingsIn）。"""
+    if body.api_key is None or not env_name:
+        return
+    write_api_key(env_name, body.api_key)
+    os.environ[env_name] = body.api_key  # 立即可用（load_dotenv 不覆盖已存在变量）
+
+
+@router.get("/api/settings/image")
+def get_image_settings(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
+    """当前图像生成配置（密钥永不下发，只回 has_api_key）。"""
+    return _image_payload(settings)
+
+
+@router.put("/api/settings/image")
+def save_image_settings(
+    body: ImageSettingsIn,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """保存出图配置并热生效（免重启；顺序与模型段同款）。"""
+    if settings.config_path is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"当前配置来自显式配置文件（{settings.config_path}）："
+                "设置面板的改动会被它覆盖。请直接编辑该文件，或改用默认 profile 启动。"
+            ),
+        )
+    fields = _validated_image_fields(body)
+    with _APPLY_LOCK:
+        write_section_overlay("image", fields)
+        _apply_image_key(fields.get("api_key_env", ""), body)
+        new_settings = load_settings(settings.profile, data_dir=settings.data_dir)
+        services = get_services(request)
+        # 顺序敏感（同模型段）：rebuild_image 读 self.settings，必须先换它
+        services.settings = new_settings
+        services.rebuild_image()
+        request.app.state.settings = new_settings
+    return _image_payload(new_settings)
+
+
+@router.post("/api/settings/image/test")
+def test_image_settings(body: ImageTestIn) -> dict[str, Any]:
+    """测出图连接：**不生成图片**（按张计费，不适合当探针），只读 /models。
+
+    响应恒 200（ok 在体内），与其余探测端点同一契约。
+    """
+    model = body.model.strip()
+    base_url = body.base_url.strip()
+    if not model:
+        raise HTTPException(status_code=422, detail="出图模型名不能为空")
+    if not base_url:
+        raise HTTPException(status_code=422, detail="API 地址（base_url）不能为空")
+    _guard_base_url(base_url)  # SSRF：内网段拒绝（见 helper docstring）
+    env_name = body.api_key_env.strip()
+    if body.api_key:
+        key: str | None = body.api_key
+    elif env_name:
+        key = os.environ.get(env_name) or None
+    else:
+        key = None
+    if not key:
+        return {"ok": False, "model": model, "error": "未填写 API 密钥"}
+
+    with _PROBE_LOCK:
+        os.environ[_TEST_KEY_ENV] = key
+        try:
+            cfg = ImageConfig(
+                backend="api",
+                base_url=base_url,
+                api_key_env=_TEST_KEY_ENV,
+                model=model,
+                timeout_seconds=20.0,
+            )
+            started = time.monotonic()
+            names = OpenAICompatImage(cfg).list_models()
+            latency_ms = int((time.monotonic() - started) * 1000)
+            if not names:
+                return {
+                    "ok": True,
+                    "model": model,
+                    "latency_ms": latency_ms,
+                    "error": "地址与密钥可用；该服务没有 /models 列表，"
+                    "模型名是否有效要等真出图才知道",
+                }
+            present = model in names
+            return {
+                "ok": True,
+                "model": model,
+                "latency_ms": latency_ms,
+                "model_available": present,
+                "error": ""
+                if present
+                else f"连通正常，但模型列表里没有「{model}」（可能名字写错）",
             }
         except ZhiwenError as exc:
             return {"ok": False, "model": model, "error": strip_paths(str(exc))}

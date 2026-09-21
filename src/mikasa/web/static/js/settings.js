@@ -18,6 +18,7 @@ import { $, el, toast } from "./common.js";
 import { imageToDataUrl } from "./image-util.js";
 import { initModelSettings, refreshModelSettings } from "./model-settings.js";
 import { initVisionSettings, refreshVisionSettings } from "./vision-settings.js";
+import { initImageSettings, refreshImageSettings } from "./image-settings.js";
 
 const KEY = {
   nick: "mikasa.ui.nick",
@@ -138,6 +139,7 @@ function openPanel(open) {
     $("#s-font-val").textContent = $("#s-font").value;
     void refreshModelSettings(); // 「模型」段：从服务端拉当前配置回填
     void refreshVisionSettings(); // 「视觉模型」段：同上
+    void refreshImageSettings(); // 「图像生成」段：同上
   }
 }
 
@@ -149,6 +151,7 @@ export function initSettings() {
   buildSwatches();
   initModelSettings(); // 「模型」段（服务端配置，见 js/model-settings.js）
   initVisionSettings(); // 「视觉模型」段（识图来源，见 js/vision-settings.js）
+  initImageSettings(); // 「图像生成」段（文生图，见 js/image-settings.js）
   $("#s-font-val").textContent = $("#s-font").value = localStorage.getItem(KEY.font) || "14.5";
 
   $("#btn-settings").addEventListener("click", () => openPanel($("#settings-panel").classList.contains("hidden")));

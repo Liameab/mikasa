@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 from mikasa.config.settings import Settings
 from mikasa.ingest.service import IngestService
 from mikasa.pipeline.ask import AskService
-from mikasa.providers import get_vision
+from mikasa.providers import get_image, get_vision
 from mikasa.update import UpdateChecker, UpdateManager
 
 if TYPE_CHECKING:
@@ -201,6 +201,8 @@ class AppServices:
         # 视觉模型（M6 ②）：识图是无状态的，但实例要留着——OpenAI 客户端
         # 是惰性建在实例里的，每次请求新建一个就等于每次丢连接池
         self.vision = get_vision(settings.vision)
+        # 出图（文生图）：与 vision 同理留着实例（客户端/连接池复用）
+        self.image = get_image(settings.image)
         self.eval_jobs = EvalJobManager()
         self.synth_jobs = SynthJobManager()
         # 更新链路：检查器带 TTL 缓存、下载是单槽后台任务（见 update 包）
@@ -218,3 +220,7 @@ class AppServices:
         routers/settings.py 里那段"顺序敏感"的注释）。
         """
         self.vision = get_vision(self.settings.vision)
+
+    def rebuild_image(self) -> None:
+        """面板改了图像段后热生效（前提同 rebuild_vision：先换 settings）。"""
+        self.image = get_image(self.settings.image)

@@ -41,6 +41,12 @@ vision:
   #      照片会发到云端）——生成仍走本地，只有识图这一件事出网。
   backend: none
 
+image:
+  # 文生图：默认**未接入**——本机没有出图模型，而云端出图意味着提示词要发
+  # 出去，接不接受由你定。开法：设置面板「图像生成」选一个来源（推荐，不用
+  # 改这个文件）；出图这一件事出网，问答与检索仍全在本机。
+  backend: none
+
 llm:
   backend: local
   base_url: ${OLLAMA_BASE_URL:-http://localhost:11434/v1}

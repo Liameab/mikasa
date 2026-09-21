@@ -225,6 +225,37 @@ class VisionConfig(BaseModel):
         return _secret_from_env(self.api_key_env)
 
 
+class ImageConfig(BaseModel):
+    """图像生成配置（文生图）。
+
+    backend: api（OpenAI 兼容风格的 /images/generations）/ none（未接入，默认）。
+    **默认 none 是刻意的**（同 VisionConfig）：老的 --config 文件没有这一段时
+    行为不漂移，offline 档也天然守住"零外部调用"承诺。
+
+    为什么与 VisionConfig 分开：一个收图、一个出图，模型名和请求参数都不是
+    一回事（SiliconFlow 的出图端点要 `image_size`，而 OpenAI 那套要 `size`），
+    混在一段里会让"识图用 A、出图用 B"这种组合无处落脚。
+
+    size 是**必填**（SiliconFlow 的规矩）：各模型推荐值不同（Kolors 系列
+    1024x1024、Qwen-Image 系列 1328x1328），所以只给一个通用默认值，
+    面板与配置文件都可以覆盖。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    backend: Literal["api", "none"] = "none"
+    base_url: str | None = None
+    api_key_env: str | None = None
+    model: str = ""
+    size: str = "1024x1024"
+    # 出图比文本生成慢得多（实测 10–60 秒级），借 ask 的默认值会一片超时
+    timeout_seconds: float = 120.0
+
+    @property
+    def api_key(self) -> str | None:
+        return _secret_from_env(self.api_key_env)
+
+
 class EmbeddingConfig(BaseModel):
     """词向量配置：api（SiliconFlow bge-m3 免费）/ local（fastembed bge-small-zh）/ none。"""
 
@@ -291,6 +322,7 @@ class Settings(BaseModel):
     reranker: RerankerConfig = RerankerConfig()
     llm: LLMConfig = LLMConfig()
     vision: VisionConfig = VisionConfig()
+    image: ImageConfig = ImageConfig()
     embedding: EmbeddingConfig = EmbeddingConfig()
     judge: JudgeConfig = JudgeConfig()
     web: WebConfig = WebConfig()
@@ -319,6 +351,15 @@ class Settings(BaseModel):
         return self.data_dir / "note-media"
 
     @property
+    def generated_dir(self) -> Path:
+        """生成图目录（文生图产出的图片）。
+
+        与 note-media 同理放在 uploads 之外：uploads 是 ingest 的输入，
+        图片混进去会被 reindex 当成待解析文档。
+        """
+        return self.data_dir / "generated"
+
+    @property
     def log_dir(self) -> Path:
         return self.data_dir / "logs"
 
@@ -329,6 +370,7 @@ class Settings(BaseModel):
             self.index_dir,
             self.uploads_dir,
             self.note_media_dir,
+            self.generated_dir,
             self.log_dir,
         ):
             path.mkdir(parents=True, exist_ok=True)

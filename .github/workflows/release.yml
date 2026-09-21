@@ -76,8 +76,10 @@ jobs:
       - name: Build the app (PyInstaller)
         run: python -m PyInstaller --clean --noconfirm packaging/Mikasa.spec --distpath dist --workpath build
 
-      # 载荷断言：spec 收模型的逻辑一旦失效（路径改了、目录名变了），
-      # 构建会悄悄出一个"少带模型"的包——这里把它拦住。
+      # 载荷断言：这段能拦住三类"包不对"——① 模型没进去（spec 路径失效）；
+      # ② 进去了两份（HF 走 Xet 时会写 blobs/ 第二副本，PyInstaller 两份都收：
+      # 2026-09-21 v0.1.8 实测 zip 263.6MB 而不是 165MB）；
+      # ③ 快照不完整（缺 tokenizer 之类，加载时表现为"模型损坏"）。
       - name: Assert the vector model is in the payload
         run: python tools/fetch_embed_model.py --check --dest dist/Mikasa/_internal/models/embed
 

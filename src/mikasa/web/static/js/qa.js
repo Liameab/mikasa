@@ -33,6 +33,7 @@ import { initSettings, nickname } from "./settings.js"; // 聊天设置（昵称
 import { initReader, openChunk } from "./reader.js"; // 阅读器（两页共用）
 import { initOnboard } from "./onboard.js"; // 首启引导（空库时弹一次）
 import { initUpdate } from "./update.js"; // 更新提示（启动静默检查，ADR-0022）
+import { initImageGen } from "./image-gen.js"; // 文生图入口（ADR-0031）
 
 /* ---------------- 状态与 DOM 引用 ---------------- */
 
@@ -192,6 +193,16 @@ function bubble(content, role, citations = [], refused = false, when = "", showC
  * （流式 done 帧与历史回放走同一入口）。
  */
 function attachBubbleActions(root) {
+  // 图片加载失败（生成图被清理 / 服务重启换了数据目录）：给容器挂个标记，
+  // 由 CSS 显示一行说明。error 事件**不冒泡**，所以必须用捕获阶段。
+  root.addEventListener(
+    "error",
+    (ev) => {
+      const fig = ev.target instanceof HTMLImageElement ? ev.target.closest(".md-figure") : null;
+      if (fig) fig.classList.add("broken");
+    },
+    true
+  );
   root.addEventListener("click", async (ev) => {
     const btn = ev.target.closest(".btn-copy");
     if (btn) {
@@ -421,6 +432,21 @@ initTopbar("qa").then((health) => {
   initUpdate(health); // 版本号回填 + 启动静默查更新（失败不打扰）
 });
 initSettings(); // 聊天设置面板（昵称/字号/对话框背景，本地持久化）
+// 文生图：生成的图作为一条助手消息进对话（后端连图一起落库，刷新仍在）
+initImageGen({
+  button: $("#gen-image"),
+  getSessionId: () => activeSession,
+  onGenerated: (res) => {
+    // 后端在"没有会话"时会新建一个并回传——先接管它，否则下一问会丢
+    if (activeSession === null && res.session_id) {
+      activeSession = res.session_id;
+      setActiveSession(res.session_id);
+      refreshSessions();
+    }
+    messagesBox.append(bubble(res.content, "assistant", [], false, new Date().toISOString(), false));
+    messagesBox.scrollTo({ top: messagesBox.scrollHeight, behavior: "smooth" });
+  },
+});
 initReader(); // 阅读面板：点引用角标 → 打开并定位到原文块（js/reader.js）
 refreshSessions();
 questionInput.focus();

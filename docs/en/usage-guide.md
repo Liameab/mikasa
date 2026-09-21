@@ -156,6 +156,28 @@ handwritten outlines become searchable notes. You can also **drag an image** ont
   recognition to SiliconFlow — the two sections do not interfere. The vision section shares its key
   slot with the retrieval side; to clear the key, do it in the model section.
 
+### Generating images (text-to-image)
+
+The **生成图片** button at the bottom of the ask page: describe what you want, get an image,
+saved into the current conversation (it survives a refresh).
+
+- **Requires an image model first**: **Settings (gear) -> 图像生成**. The SiliconFlow preset
+  uses `Qwen/Qwen-Image` at 1328x1328; if you switch to `Kwai-Kolors/Kolors`, set the size back
+  to 1024x1024 (**size is required**, recommended values differ per model, and a wrong one only
+  earns you a bare "bad parameter" from upstream). The default is **not configured**: generation
+  needs the network and your prompt travels to that provider, so the switch is yours to flip.
+- **Leaving the size empty in the dialog follows the settings** (the placeholder shows the
+  configured value); fill it in or pick from the dropdown for a one-off different shape.
+- **"Test connection" does not generate an image**: generation costs money or free quota, which
+  makes it a poor probe - it reads the model list once and checks "address reachable, key valid,
+  model name present".
+- **Key-free local services** (an OpenAI-compatible shell around Automatic1111 / ComfyUI):
+  leave `api_key_env` empty in the config file (the panel always wants a key slot).
+- **Where the images live**: `%LOCALAPPDATA%\\Mikasa\\generated\\`, separate from your uploaded
+  material. Generated images **do not enter the knowledge base** and are never retrieved - to
+  make one searchable, run it through 识别图片 so it becomes note text.
+- **No video**: billed per second and requiring transcoding, it is out of scope.
+
 ## 6b. Find-Papers Page · Searching the literature and importing what you find
 
 The **找论文** page is its own tab (ADR-0020). Four free sources are queried at once — arXiv (preprints, all open access), OpenAlex (journal metadata including Chinese journals), CORE (an open-access aggregator with full-text links) and **DOAJ** (the open-access journal directory, **no key required**, which is where Chinese open-access journals such as 工业水处理 live) — and a result can be imported straight into your corpus, where it becomes askable like any other document. **Three of the four need no registration at all** (only OpenAlex prefers a free key, see below).
