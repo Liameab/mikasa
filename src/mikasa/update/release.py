@@ -75,11 +75,16 @@ def is_newer(latest: str, current: str) -> bool:
 
 @dataclass(frozen=True)
 class Asset:
-    """一个发布资产（安装包 / 校验和文件）。"""
+    """一个发布资产（安装包 / 校验和文件）。
+
+    `digest` 是 GitHub API 给的服务端 sha256（形如 `sha256:abc…`），**可能缺席**
+    （老 API / 非 GitHub 的假源）——所以有它时优先用、没有才回退下载 SHA256SUMS.txt。
+    """
 
     name: str
     url: str
     size: int
+    digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -126,7 +131,13 @@ def _asset_from_json(raw: Any) -> Asset | None:
     if not isinstance(name, str) or not isinstance(url, str):
         return None
     size = raw.get("size")
-    return Asset(name=name, url=url, size=size if isinstance(size, int) else 0)
+    digest = raw.get("digest")
+    return Asset(
+        name=name,
+        url=url,
+        size=size if isinstance(size, int) else 0,
+        digest=digest if isinstance(digest, str) and digest else None,
+    )
 
 
 def fetch_latest_release(timeout: float = _TIMEOUT) -> ReleaseInfo:

@@ -200,3 +200,38 @@ def test_fetch_latest_release_rejects_prerelease_tag(opener: _FakeOpener) -> Non
 
 def test_release_page_url_falls_back_to_tag_rule() -> None:
     assert release_page_url("v0.1.2") == "https://github.com/Liameab/mikasa/releases/tag/v0.1.2"
+
+
+def test_asset_parses_the_server_side_digest() -> None:
+    """资产里带 GitHub 的服务端 sha256（`sha256:…`）时要解析出来（ADR-0024 补丁）。
+
+    它是"更新失败、进度永远 0%"那条报障的修法核心：有它就不必去 github.com
+    下载校验和文件（那条链路在国内常被掐）。
+    """
+    from mikasa.update.release import _asset_from_json
+
+    asset = _asset_from_json(
+        {
+            "name": "Mikasa-Setup-0.1.11-win64.exe",
+            "browser_download_url": "https://github.com/x/y/releases/download/v1/a.exe",
+            "size": 123,
+            "digest": "sha256:" + "c" * 64,
+        }
+    )
+    assert asset is not None and asset.digest == "sha256:" + "c" * 64
+
+    # 缺席 / 空串 / 非字符串都当作"没有"（老 API 与假源会遇到）
+    for raw in (
+        {"name": "a", "browser_download_url": "https://github.com/x/y", "size": 1},
+        None,
+        7,
+    ):
+        plain = _asset_from_json(
+            {
+                **(raw if isinstance(raw, dict) else {}),
+                "name": "a",
+                "browser_download_url": "https://github.com/x/y",
+                "size": 1,
+            }
+        )
+        assert plain is not None and plain.digest is None

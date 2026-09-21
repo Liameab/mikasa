@@ -673,13 +673,31 @@ def _clear_residue(updates_dir: Path, asset_name: str) -> None:
             old.unlink(missing_ok=True)
 
 
-def _expected_digest(sums_asset: Asset, setup: Asset) -> str:
-    """取本次安装包的期望 sha256；校验和文件里没有记录 → 中止（老规矩）。"""
+def _expected_digest(sums_asset: Asset | None, setup: Asset) -> str:
+    """取本次安装包的期望 sha256（**优先用 API 自带的 digest**）。
+
+    为什么不是"一律下载 SHA256SUMS.txt"（2026-09-21 用户报障后的改动）：
+    那个文件在 **github.com** 上，而国内到下载主机的握手会被掐——用户实测
+    连吃三次 `WinError 10054`，更新在**大文件开始之前**就判失败，界面表现为
+    "更新失败 + 进度永远 0%"（他以为是自己的网不好，其实网络没问题）。
+    而 GitHub API 的 `asset.digest` 是同一个文件的服务端 sha256，走的
+    **api.github.com**——实测这条链路稳得多。**安全语义不变**：仍是发布方
+    提供、与本包同批的哈希，只是取它的路少一次易断的连接。
+    拿不到 digest（老 API / 假源）时回退到下载校验和文件，判据一条不减。
+    """
+    digest = (setup.digest or "").strip().lower()
+    if digest.startswith("sha256:"):
+        from_digest = digest.split(":", 1)[1].strip()
+        if from_digest:
+            return from_digest
+    if sums_asset is None:
+        # 两个来源都没有 → 宁可不更新（与"没有校验和文件"同一条安全策略）
+        raise UpdateError("这个版本既没有校验和文件、也没有服务端哈希，为安全起见不自动更新")
     sums_text = fetch_text(sums_asset.url, max_bytes=_MAX_SUMS_BYTES)
-    expected = expected_sha256(sums_text, setup.name)
-    if expected is None:
+    from_sums = expected_sha256(sums_text, setup.name)
+    if from_sums is None:
         raise UpdateError(f"校验和文件里没有 {setup.name} 的记录，已中止（安全策略）")
-    return expected
+    return from_sums
 
 
 def run_download(
@@ -698,9 +716,9 @@ def run_download(
             raise UpdateError(
                 "这个版本里没有安装包（Mikasa-Setup-*-win64.exe），请到发布页手动下载"
             )
+        # 校验和资产**可以为空**：安装包自带 API digest 时就不需要它了
+        # （判据在 _expected_digest 里，两处不重复判断）
         sums_asset = release.checksums_asset()
-        if sums_asset is None:
-            raise UpdateError("这个版本里没有校验和文件（SHA256SUMS.txt），为安全起见不自动更新")
 
         setup = asset  # 上面已挡掉 None；另起个名字，闭包里也保住收窄
         updates_dir.mkdir(parents=True, exist_ok=True)

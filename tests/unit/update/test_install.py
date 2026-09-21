@@ -745,6 +745,79 @@ def _started(manager: UpdateManager) -> install_mod.JobTicket:
     return ticket
 
 
+def test_expected_digest_prefers_the_api_digest_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """有 API digest 时**不联网**取校验和。
+
+    2026-09-21 用户报障（更新失败、进度永远 0%）的根因就是"先下 SHA256SUMS.txt"：
+    那个文件在 github.com，国内握手会被掐（连吃三次 WinError 10054）。而
+    GitHub API 的 asset.digest 是同一份文件的服务端哈希、走 api.github.com。
+    """
+    opener = _RouteOpener({})
+    monkeypatch.setattr(install_mod, "_open", opener)
+    setup = Asset(_SETUP_NAME, _SETUP_URL, 1, digest="sha256:" + "a" * 64)
+
+    assert install_mod._expected_digest(None, setup) == "a" * 64
+    assert opener.calls == []  # 一次都没连
+
+
+def test_expected_digest_falls_back_to_sums_when_no_digest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """没有 digest（老 API / 假源）→ 回退下载校验和文件，判据一条不减。"""
+    sums = _sums_for(_SETUP_BYTES)
+    monkeypatch.setattr(install_mod, "_open", _RouteOpener({_SUMS_URL: sums}))
+    setup = Asset(_SETUP_NAME, _SETUP_URL, len(_SETUP_BYTES))
+
+    expected = install_mod._expected_digest(Asset("SHA256SUMS.txt", _SUMS_URL, len(sums)), setup)
+    assert expected == hashlib.sha256(_SETUP_BYTES).hexdigest()
+
+
+def test_expected_digest_refuses_when_neither_source_exists() -> None:
+    """ "没有校验和文件"的老规矩不变：两个来源都没有 → 不自动更新。"""
+    setup = Asset(_SETUP_NAME, _SETUP_URL, 1)
+    with pytest.raises(UpdateError, match="既没有校验和文件"):
+        install_mod._expected_digest(None, setup)
+
+
+def test_run_download_works_with_digest_and_no_sums_asset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**发布里没有 SHA256SUMS.txt 也能更新**——只要安装包自带服务端 digest。"""
+    source = _FakeAsset(_SETUP_BYTES)
+    monkeypatch.setattr(install_mod, "_open", _RouteOpener({_SETUP_URL: source}))
+    manager = UpdateManager()
+    setup = Asset(
+        _SETUP_NAME,
+        _SETUP_URL,
+        len(_SETUP_BYTES),
+        digest="sha256:" + hashlib.sha256(_SETUP_BYTES).hexdigest(),
+    )
+
+    run_download(manager, _started(manager), _release(setup), tmp_path / "updates")
+
+    assert manager.snapshot()["status"] == "done"
+    path = manager.result_path()
+    assert path is not None and path.read_bytes() == _SETUP_BYTES
+
+
+def test_run_download_rejects_when_digest_disagrees(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """digest 与下载到的字节不符 → 与"校验和不符"同一条路：失败且删半成品。"""
+    source = _FakeAsset(_SETUP_BYTES)
+    monkeypatch.setattr(install_mod, "_open", _RouteOpener({_SETUP_URL: source}))
+    manager = UpdateManager()
+    setup = Asset(_SETUP_NAME, _SETUP_URL, len(_SETUP_BYTES), digest="sha256:" + "b" * 64)
+
+    run_download(manager, _started(manager), _release(setup), tmp_path / "updates")
+
+    assert manager.snapshot()["status"] == "error"
+    assert "校验" in manager.snapshot()["error"]
+    assert not _part(tmp_path / "updates" / _SETUP_NAME).exists()
+
+
 def test_run_download_completes_and_verifies(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
