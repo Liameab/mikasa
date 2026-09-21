@@ -13,9 +13,9 @@ are reproducible.
 modes → M4 local profile → M4.5 session management (including the first real schema migration v1→v2)
 → corpus folders v3 → table rendering → cross-lingual retrieval → original + translation for cited
 English passages → document reader with citation jump → pre-M5 audit (23 fixes, 4 of them
-data-safety) → packaged installer → model settings in the panel → the embedding model shipped inside the package (first ingest is offline, ADR-0030) → text-to-image (draw straight from the ask page, ADR-0031). Currently **977 tests passing**,
+data-safety) → packaged installer → model settings in the panel → the embedding model shipped inside the package (first ingest is offline, ADR-0030) → text-to-image (draw straight from the ask page, ADR-0031). Currently **995 tests passing**,
 ruff + mypy clean, ~93% coverage. Windows portable zip and installer builds are published
-(v0.1.0 → v0.1.9) with in-app update checking — downloads resume across dropped connections, and
+(v0.1.0 → v0.1.10) with in-app update checking — downloads resume across dropped connections, and
 closing the dialog, switching pages or reloading no longer interrupts them (progress lives in a
 top-bar pill; ADR-0024).
 
@@ -198,6 +198,7 @@ API docs (Swagger) at http://127.0.0.1:8000/docs.
 | v0.1.7 | The local profile moves to **Ollama's native API**: "thinking mode / context length" knobs (thinking off, context 16384 by default — fixing a silent cut that processed only 2050 tokens of every prompt, ADR-0029) + an output-shape contract (sections, tables, formulas, diagrams) + **v0.1.6 double-click fixed** (leftover websockets stub; release sentinel `smoke_frozen` added) + four-lane audit, 17 fixes (cross-site writes 403, panel host allow-list, interrupted ingests self-heal, reindex mapping persisted…) + formula pre-pass misses (multiline `$$`, spaced `$ x $`) | ✅ 943 tests |
 | v0.1.8 | **The embedding model ships with the app**: the first upload no longer needs a network download (the 91 MB bge-small-zh-v1.5 rides inside the installer; a pinned revision fetched at build time, seeded into the cache at runtime, with an offline-ingest release sentinel and a payload assertion, ADR-0030) | ✅ 951 tests |
 | v0.1.9 | **Text-to-image**: one click on the ask page, and the picture stays in the conversation. Generation is its own section (off by default), upstream images are saved immediately (their URLs live one hour), the frontend renders same-origin images only (remote images are tracking pixels), and both network hops pass an SSRF gate (ADR-0031). The same release fixes a payload that carried the model twice (with Xet the blobs land at the **cache root** as a second copy, doubling the zip — caught by the release sentinel, located with a CI probe, ADR-0030 patch) | ✅ 977 tests |
+| v0.1.10 | Model sources grow: **Claude** (through Anthropic's OpenAI-compatible endpoint) and **OpenAI** presets, six in total, with the compatibility layer's boundaries and 'a subscription is not an API' stated in the UI; **the local model pulls from inside the app** (native /api/pull streamed progress, cancellable, single slot - installing Ollama itself is still manual, no 1.5 GB installer fetched on your behalf); fixes a race where clicking a preset right after opening the panel was overwritten by the async fill-in (ADR-0032) | ✅ 995 tests |
 
 ## Engineering notes
 
@@ -205,7 +206,7 @@ API docs (Swagger) at http://127.0.0.1:8000/docs.
 - Source comments and the README are written in **Chinese** (the project's working language; this
   page is the English edition); baseline gates are `ruff format`, `ruff check`, `mypy`, and
   `pytest`;
-- Current suite: **977 tests**, coverage ~93% (see the regression gate in `docs/en/evaluation.md`);
+- Current suite: **995 tests**, coverage ~93% (see the regression gate in `docs/en/evaluation.md`);
 - Zero-compilation install on Windows + CPython 3.13 (all dependencies ship prebuilt wheels;
   see `pyproject.toml` and ADR-0006/0008 for the version-pinning rationale).
 
