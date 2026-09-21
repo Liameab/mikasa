@@ -28,6 +28,7 @@ from typing import Protocol
 from mikasa.config.settings import JudgeConfig, LLMConfig
 from mikasa.pipeline.prompts import REFUSAL_TEXT
 from mikasa.providers.llm import OpenAICompatLLM
+from mikasa.providers.ollama import OllamaNativeLLM
 from mikasa.utils.logging import get_logger
 
 logger = get_logger("eval.judge")
@@ -95,16 +96,25 @@ class LLMJudge:
     def __init__(self, config: JudgeConfig) -> None:
         self.model = config.model
         self._temperature = config.temperature
-        self._llm = OpenAICompatLLM(
-            LLMConfig(
-                backend="api" if config.backend == "api" else "local",
-                base_url=config.base_url,
-                api_key_env=config.api_key_env,
-                model=config.model,
-                temperature=config.temperature,
-                max_tokens=256,
-                timeout_seconds=120.0,
-            )
+        llm_config = LLMConfig(
+            backend="api" if config.backend == "api" else "local",
+            base_url=config.base_url,
+            api_key_env=config.api_key_env,
+            model=config.model,
+            temperature=config.temperature,
+            # 判题只要三行结论，256 token 的预算经不起思考：
+            # 实测（2026-09-21）同一条译文，兼容面 10.5s、原生 think=false 0.4s
+            # ——思考既拖时间又可能把预算吃光（空输出是踩过的坑，见 ADR-0029）。
+            think=False if config.backend == "local" else None,
+            max_tokens=256,
+            timeout_seconds=120.0,
+        )
+        # 本地档走**原生通道**：`think` 只有它认，兼容面会静默忽略
+        # （ADR-0029 的教训——同一个模型、同一个提示词，差 26 倍）。
+        self._llm = (
+            OllamaNativeLLM(llm_config)
+            if config.backend == "local"
+            else OpenAICompatLLM(llm_config)
         )
 
     # ------------------------------------------------------------------

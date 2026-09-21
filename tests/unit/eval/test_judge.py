@@ -60,6 +60,44 @@ def _verdict_lines(score: int = 5, grade: str = "A", faithful: str = "是") -> s
 # ---------------------------------------------------------------------------
 
 
+def test_local_judge_uses_native_channel_with_thinking_off(monkeypatch):
+    """本地裁判走**原生通道**且关掉思考（ADR-0029 的同一课）。
+
+    判题是短任务，而兼容面会静默忽略 `think`：实测同一条译文，兼容面 10.5 秒、
+    原生关思考 0.4 秒（2026-09-21）。这条锁住"本地档不再走兼容面"。
+    """
+    from mikasa.eval.judge import LLMJudge
+
+    seen: dict = {}
+
+    class _FakeNative:
+        def __init__(self, config) -> None:
+            seen["config"] = config
+            seen["think"] = config.think
+            seen["backend"] = config.backend
+
+    monkeypatch.setattr("mikasa.eval.judge.OllamaNativeLLM", _FakeNative)
+    LLMJudge(JudgeConfig(model="qwen3:8b", backend="local", temperature=0.0))
+
+    assert seen["backend"] == "local"
+    assert seen["think"] is False  # 关掉思考：短任务不该烧预算
+
+
+def test_api_judge_stays_on_the_compat_surface(monkeypatch):
+    """云端裁判仍走 OpenAI 兼容面（那边没有 think 这个概念）。"""
+    from mikasa.eval.judge import LLMJudge
+
+    seen: dict = {}
+
+    class _FakeCompat:
+        def __init__(self, config) -> None:
+            seen["think"] = config.think
+
+    monkeypatch.setattr("mikasa.eval.judge.OpenAICompatLLM", _FakeCompat)
+    LLMJudge(JudgeConfig(model="Qwen/Qwen3-8B", backend="api", temperature=0.0))
+    assert seen["think"] is None  # 不写这个键
+
+
 def test_nojudge_always_none():
     nojudge = NoJudge()
     assert nojudge.model == "none"
