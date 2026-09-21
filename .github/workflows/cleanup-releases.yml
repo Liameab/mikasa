@@ -1,0 +1,36 @@
+# 一次性清理（用完即删）：删掉旧编号的 Release 对象。
+#
+# 背景：0.1.10/0.1.11/0.1.12 三个版本整体前挪成 0.1.9/0.1.10/0.1.11（tag 已强推），
+# 但**同名 tag 上还挂着旧的 Release**——不删掉的话，新构建走到 "create draft" 时
+# 会因为"该 tag 已有 Release"而退化成 --clobber 覆盖，把新资产传进旧发布里。
+# **不带 --cleanup-tag**：tag 是我们刚挪好的，必须留着。
+#
+# 触发：提交消息里带 [cleanup-old-releases]（零凭据，走 push）。
+name: Cleanup old releases
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: contains(github.event.head_commit.message, '[cleanup-old-releases]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Delete the releases carrying the old numbers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          for tag in v0.1.10 v0.1.11 v0.1.12; do
+            echo "--- $tag ---"
+            gh release delete "$tag" --yes || echo "（没有 $tag 的 Release，跳过）"
+          done
+          echo "=== 清理后 ==="
+          gh release list --limit 12
+          echo "=== tag 仍在（必须还在） ==="
+          git ls-remote --tags origin | grep -E 'v0\.1\.(9|10|11|12)' || true
