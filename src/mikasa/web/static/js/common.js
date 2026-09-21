@@ -400,6 +400,58 @@ function stashMath(text, tokens) {
  */
 const BILINGUAL_TITLE = "<strong>原文与译文对照</strong>";
 
+/**
+ * 复制文本到剪贴板：先走 Clipboard API（127.0.0.1 属安全上下文，点击手势下
+ * 可用），失败（权限拒绝/老引擎）降级隐藏 textarea + execCommand。
+ *
+ * 放在这里而不是某个页面模块里：问答气泡与**更新说明**都要用（2026-09-21
+ * 用户报障"更新说明里的复制根本没法复制"——那份说明用的是同一个渲染器、
+ * 却没人给它挂点击委托）。
+ */
+export async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // 走降级路径
+  }
+  const ghost = el("textarea", { class: "clip-ghost", "aria-hidden": "true" });
+  ghost.value = text;
+  document.body.append(ghost);
+  ghost.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  }
+  ghost.remove();
+  return ok;
+}
+
+/**
+ * 给容器挂**代码块复制钮**的点击委托（`.btn-copy` 无内联 onclick）。
+ *
+ * 任何渲染了 markdown 的地方都要调它一次——渲染器只负责把「复制」按钮画出来，
+ * 点了发生什么由这一层决定。挂重复了会复制两次，所以**每次构建容器时挂一次**。
+ */
+export function attachCopyButtons(root) {
+  root.addEventListener("click", async (ev) => {
+    const btn = ev.target.closest(".btn-copy");
+    if (!btn) return;
+    const code = btn.closest(".code-block")?.querySelector("pre code");
+    if (code && (await copyText(code.textContent))) {
+      btn.classList.add("ok");
+      btn.textContent = "✓ 已复制";
+      clearTimeout(btn._t);
+      btn._t = setTimeout(() => {
+        btn.classList.remove("ok");
+        btn.textContent = "复制";
+      }, 1600);
+    }
+  });
+}
+
 export function renderAnswer(text, citations, showCites = true) {
   const byMarker = showCites ? new Map(citations.map((c) => [c.marker, c])) : null;
   const mathTokens = []; // 公式的 KaTeX HTML（末段统一还原）

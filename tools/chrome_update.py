@@ -116,7 +116,12 @@ class _FakeGitHub(BaseHTTPRequestHandler):
                 "body": (
                     f"## {NOTES_TITLE}\n\n"
                     "- 新增应用内更新：打开就提示、一键下载安装\n"
-                    "- 修了若干毛病"
+                    "- 修了若干毛病\n\n"
+                    # 代码块是刻意的：发布说明里几乎一定有命令，而"代码围栏有没有
+                    # 渲染成代码框、复制钮能不能用"只有这条链路能验（2026-09-21
+                    # 用户报障的两条，断言就挂在这段上）。
+                    "升级到本机模型：\n\n"
+                    "```bash\nollama pull qwen3:8b\n```\n"
                 ),
                 "published_at": "2026-09-19T00:00:00Z",
                 "assets": [
@@ -397,6 +402,52 @@ async def run(args):
             if args.out_shot:
                 await screenshot(cdp, args.out_shot)
 
+            # ---- 1b. 发布说明的**排版与复制**（2026-09-21 用户报障两条）----
+            # 必须**趁弹窗开着**捕获与点击：断言区在流程末尾，那时弹窗已关、
+            # 页面也刷新过（第一版就把查询写在那儿，结果 notesCount=0——现场
+            # 证据就是这么来的）。
+            # ① 代码围栏要变成真正的代码框（有底色），不能退化成一行纯文本：
+            #    渲染器产出的 .code-block 样式挂在 `.bubble` 作用域下，而说明区
+            #    是 .upd-notes——不带上那个类就没有样式（曾经如此）。
+            # ② 「复制」要真的能用：渲染器只画按钮，点击行为得由容器挂委托。
+            code_state = await cdp.evaluate("""(() => {
+              const notesEl = document.querySelector('.upd-notes');
+              const box = document.querySelector('.upd-notes .code-block');
+              if (!box) {
+                return {
+                  found: false,
+                  notesCount: document.querySelectorAll('.upd-notes').length,
+                  html: notesEl ? notesEl.innerHTML.slice(0, 200) : '(没有 .upd-notes)',
+                };
+              }
+              const pre = box.querySelector('pre');
+              const btn = box.querySelector('.btn-copy');
+              // 打桩剪贴板：无头 Chrome 里 writeText 会被权限拒掉、降级的
+              // execCommand 也可能返回 false（按钮就不变"已复制"）。打桩后
+              // 既能验"点了有反应"，还能顺带验**复制到的正是那条命令**——
+              // 比只看按钮文案更强。
+              window.__copied = null;
+              try {
+                Object.defineProperty(navigator, 'clipboard', {
+                  configurable: true,
+                  value: {writeText: async (t) => { window.__copied = String(t); }},
+                });
+              } catch {}
+              btn?.click();
+              return {
+                found: true,
+                // 底色在外层 .code-block 上（pre 自己透明）——第一版查错了元素
+                bg: getComputedStyle(box).backgroundColor,
+                hasCopy: !!btn,
+                text: (pre.textContent || '').trim(),
+              };
+            })()""")
+            await asyncio.sleep(0.3)
+            code_state["copyLabel"] = await cdp.evaluate(
+                "(document.querySelector('.upd-notes .btn-copy')?.textContent || '')"
+            )
+            code_state["copied"] = await cdp.evaluate("window.__copied")
+
             # ---- 2. 「打开发布页」打开的是 release 页（打桩 window.open）----
             opened = await cdp.evaluate("""(() => {
               window.__opened = [];
@@ -589,6 +640,27 @@ async def run(args):
                 bad.append(f"弹窗没有显示当前版本：{first['sub']}")
             if NOTES_TITLE not in first["notes"] or "一键下载安装" not in first["notes"]:
                 bad.append(f"发布说明没有渲染出来：{first['notes'][:60]}")
+
+            # 1b. 发布说明的排版与复制（数据在弹窗打开时捕获，见上）
+            if not code_state.get("found"):
+                bad.append(
+                    "发布说明里的代码块没渲染成代码框（渲染器或作用域类掉了）："
+                    f"notesCount={code_state.get('notesCount')} "
+                    f"html={code_state.get('html')!r}"
+                )
+            else:
+                if code_state["bg"] in ("rgba(0, 0, 0, 0)", "transparent"):
+                    bad.append(f"代码框没有底色（样式没作用到更新说明上）：{code_state['bg']}")
+                if code_state["text"] != "ollama pull qwen3:8b":
+                    bad.append(f"代码框内容不对：{code_state['text']!r}")
+                if not code_state["hasCopy"]:
+                    bad.append("代码框里没有「复制」按钮")
+                else:
+                    if "已复制" not in code_state["copyLabel"]:
+                        bad.append(f"点了「复制」没有反应（按钮文案：{code_state['copyLabel']!r}）")
+                    if code_state.get("copied") != "ollama pull qwen3:8b":
+                        bad.append(f"复制到的内容不对：{code_state.get('copied')!r}")
+
             for need in ("下载并安装", "以后再说", "跳过此版本", "打开发布页"):
                 if need not in first["buttons"]:
                     bad.append(f"弹窗缺少按钮「{need}」：{first['buttons']}")

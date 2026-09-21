@@ -17,6 +17,7 @@
 import {
   $,
   apiFetch,
+  attachCopyButtons,
   el,
   esc,
   fmtLatency,
@@ -203,21 +204,9 @@ function attachBubbleActions(root) {
     },
     true
   );
+  // 代码块复制钮：与更新说明共用同一份实现（common.js 的 attachCopyButtons）
+  attachCopyButtons(root);
   root.addEventListener("click", async (ev) => {
-    const btn = ev.target.closest(".btn-copy");
-    if (btn) {
-      const code = btn.closest(".code-block")?.querySelector("pre code");
-      if (code && (await copyText(code.textContent))) {
-        btn.classList.add("ok");
-        btn.textContent = "✓ 已复制";
-        clearTimeout(btn._t);
-        btn._t = setTimeout(() => {
-          btn.classList.remove("ok");
-          btn.textContent = "复制";
-        }, 1600);
-      }
-      return;
-    }
     // 点整张引用卡 = 点它的 [n] 角标：阅读面板里打开并定位到该块（2026-09-11，
     // 用户要求：不要跳新标签，要跟角标一样的面板内打开）
     // 变量名不可用 card：下面角标分支已在同一作用域声明了 const card
@@ -245,30 +234,6 @@ function attachBubbleActions(root) {
   });
 }
 
-/**
- * 复制文本到剪贴板：先走 Clipboard API（127.0.0.1 属安全上下文，点击
- * 手势下可用），失败（权限拒绝/老引擎）降级隐藏 textarea + execCommand。
- */
-async function copyText(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    // 走降级路径
-  }
-  const ghost = el("textarea", { class: "clip-ghost", "aria-hidden": "true" });
-  ghost.value = text;
-  document.body.append(ghost);
-  ghost.select();
-  let ok = false;
-  try {
-    ok = document.execCommand("copy");
-  } catch {
-    ok = false;
-  }
-  ghost.remove();
-  return ok;
-}
 
 function scrollBottom() {
   messagesBox.scrollTop = messagesBox.scrollHeight;

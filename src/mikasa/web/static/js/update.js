@@ -25,7 +25,7 @@
    不出现在这里（服务端挑 URL，客户端连碰都碰不到）。
    ========================================================================= */
 
-import { $, apiFetch, el, renderAnswer, toast } from "./common.js";
+import { $, apiFetch, attachCopyButtons, el, renderAnswer, toast } from "./common.js";
 
 const CHECK_KEY = "mikasa.ui.checkUpdates";
 const SKIP_KEY = "mikasa.ui.skipVersion";
@@ -205,7 +205,16 @@ export function openUpdateDialog() {
 
   const head = el("div", { class: "upd-head" });
   const sub = el("div", { class: "upd-sub" });
-  const notes = el("div", { class: "upd-notes" });
+  // 「bubble」是**内容样式的作用域类**：markdown 的块级样式（代码块/表格/标题/
+  // 列表）在 style.css 里全部挂在 `.bubble` 下（那是渲染器的既有约定）。
+  // 更新说明用的是同一个渲染器，所以也要带上这个类——否则代码围栏会退化成
+  // 一行 "bash 复制" 的纯文本（2026-09-21 用户报障）。.upd-notes 自己的
+  // 内边距/底色写在 style.css 更靠后的位置，会覆盖 .bubble 的盒子样式。
+  const notes = el("div", { class: "upd-notes bubble" });
+  // 复制钮的点击委托（渲染器只负责画按钮，点了发生什么由这里决定）
+  attachCopyButtons(notes);
+  // 复制钮的点击委托（渲染器只负责画按钮，点了发生什么由这里决定）
+
   const bar = el("i");
   const progressText = el("div", { class: "upd-progress-text" }, "准备中…");
   const progressBox = el(
