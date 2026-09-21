@@ -307,6 +307,10 @@ directory), **Chat appearance** lives in the browser (localStorage, this browser
 | Deleting a folder returns 409 with a count | The folder contains subfolders or documents; move them out first (see §6) |
 | The KB answers "that isn't in these materials…" | The anti-hallucination refusal feature, not a bug; paraphrase hit rates are verified by evaluation (see §4.1) |
 | The free-chat button is greyed out | A limitation of the offline (zero-key demo) profile; available on api/local |
+| Does the first upload need the network? | **No** (since v0.1.9): the Chinese embedding model ships inside the installer, so parse -> chunk -> embed -> index runs offline; a source install still downloads it once |
+| Does 生成图片 cost money / use the network? | **Yes, it uses the network** (cloud image models bill per picture or consume free quota, and the prompt goes to the chosen provider). It ships off by default: enable it under Settings -> 图像生成; generation and recognition are configured separately |
+| Where do generated images live / do they enter the library? | Under `%LOCALAPPDATA%\Mikasa\generated\`, and they **do not enter the knowledge base** or get retrieved. To make one searchable, run it through 识别图片 so it becomes note text |
+| The answers feel short - how do I get longer ones? | Settings -> 模型 -> 回答上限 (raise it; empty follows the profile default of 4096). The local profile can also turn 思考模式 on for harder questions - steadier but far slower (measured 1.6 s -> 28 s) |
 | Session titles don't match what you expected | Auto-distilled to ≤16 characters; rename to lock in your own (see §7) |
 | You want a different answering model | Open ⚙ → **Model** in the top right, pick a source, paste the key, Save (see §8.1) — no restart, no `.env` editing |
 | The ⚙ panel's model fields are greyed out | The service was started with `--config`/`config.yaml`; the panel reports the file to edit instead |
