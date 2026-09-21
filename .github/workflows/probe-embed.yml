@@ -1,0 +1,64 @@
+# 临时探针（用完即删）：复刻 release.yml 的取件步骤，把"载荷里到底有什么"
+# 经 check-run annotation 发出来（作业日志要管理员权限，annotation 匿名可读）。
+name: Probe embed payload
+on:
+  push:
+    branches: [probe-embed-size]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[local]"
+      - name: Fetch
+        shell: bash
+        run: python tools/fetch_embed_model.py 2>&1 | tail -20
+      - name: Inspect
+        shell: bash
+        run: |
+          python - <<'PY' > report.txt 2>&1
+          from pathlib import Path
+          root = Path("build/embed-model")
+          print(f"总字节: {sum(p.stat().st_size for p in root.rglob('*') if p.is_file())/1048576:.1f} MB")
+          for sub in sorted({p.relative_to(root).parts[0] for p in root.rglob('*')}):
+              d = root / sub
+              n = sum(1 for p in d.rglob('*') if p.is_file())
+              b = sum(p.stat().st_size for p in d.rglob('*') if p.is_file())
+              print(f"  {sub}: {n} 文件 / {b/1048576:.1f} MB")
+          repo = root / "models--Qdrant--bge-small-zh-v1.5"
+          if repo.is_dir():
+              for sub in sorted(p.relative_to(repo).as_posix() for p in repo.iterdir()):
+                  print(f"  repo/{sub}")
+              snap = repo / "snapshots" / "46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59"
+              for p in sorted(snap.iterdir()) if snap.is_dir() else []:
+                  print(f"  snap/{p.name}: {p.stat().st_size if p.is_file() else 'dir'} link={p.is_symlink()}")
+          blobs = repo / "blobs"
+          if blobs.is_dir():
+              for p in sorted(blobs.iterdir()):
+                  print(f"  blob/{p.name}: {p.stat().st_size} link={p.is_symlink()}")
+          onnx = sorted(root.rglob("*.onnx"))
+          print(f".onnx 数量: {len(onnx)}")
+          for p in onnx:
+              print(f"  {p.relative_to(root).as_posix()}: {p.stat().st_size/1048576:.1f} MB")
+          PY
+          cat report.txt
+      - name: Annotate
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, urllib.parse
+          text = open("report.txt", encoding="utf-8", errors="replace").read()[:6000]
+          msg = urllib.parse.quote(text)
+          print(f"::error file=tools/fetch_embed_model.py::{msg}")
+          PY
