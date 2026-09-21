@@ -192,10 +192,14 @@ def main() -> int:
         # 上传文档要联网下 91MB——国内直连 huggingface.co 常超时，整条入库链以
         # 网络异常的样子失败（2026-09-15 实测）。
         embed_root = exe.parent / "_internal" / "models" / "embed"
-        if not embed_root.is_dir() or not any(embed_root.rglob("*.onnx")):
+        onnx_files = sorted(embed_root.rglob("*.onnx")) if embed_root.is_dir() else []
+        if len(onnx_files) != 1:
+            # 0 份 = 模型没打进去；2 份 = blobs/ 没清、同一份权重收了两遍
+            # （2026-09-21 CI 实测：zip 因此从 165MB 涨到 263.6MB）
             bad.append(
-                f"载荷里没有随包向量模型（{embed_root}）："
-                "先跑 python tools/fetch_embed_model.py 再打包"
+                f"载荷里的模型权重有 {len(onnx_files)} 份（应当只有 1 份，{embed_root}）："
+                "0 份先跑 python tools/fetch_embed_model.py；"
+                "2 份是 blobs/ 第二副本没清"
             )
 
         env = dict(os.environ, MIKASA_DATA_DIR=str(data_dir))

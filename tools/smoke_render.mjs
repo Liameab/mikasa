@@ -329,4 +329,35 @@ const free = (text, citations = []) => renderAnswer(text, citations, false); // 
   assert(!noKatex.includes("katex-fake") && noKatex.includes("\\frac{a}{b}"), "KaTeX 缺席时不吞内容（原样显示 LaTeX）");
 }
 
+/* ---- 图片（文生图，ADR-0031） ---- */
+{
+  const fig = free("![一只白猫](/api/images/generated/20260921-1a2b3c4d.png)");
+  assert(fig.includes('<figure class="md-figure">'), "独占一行的图片渲染成 figure");
+  assert(fig.includes('src="/api/images/generated/20260921-1a2b3c4d.png"'), "同源路径进 src");
+  assert(fig.includes('alt="一只白猫"'), "alt 带上（读屏与图裂时可见）");
+  assert(fig.includes('loading="lazy"'), "懒加载（长对话里不抢带宽）");
+
+  // 图 + 说明行（后端 _image_markdown 的形态）：两段都要在
+  const withCaption = free("![猫](/api/images/generated/x.png)\n\n（Qwen/Qwen-Image · 1328x1328）");
+  assert(
+    withCaption.includes("md-figure") && withCaption.includes("Qwen/Qwen-Image · 1328x1328"),
+    "图与说明行各成一块"
+  );
+
+  // 远程地址不放行：图片即追踪像素（打开回答就会向第三方发请求）
+  for (const url of ["https://evil.example.com/a.png", "//evil.example.com/a.png", "http://x/a.png"]) {
+    const out = free(`![x](${url})`);
+    assert(!out.includes("<img"), `远程图片不放行：${url}`);
+    assert(out.includes("![x]"), "不放行时降级成原文（不静默吞掉）");
+  }
+
+  // 属性注入面：alt/URL 里的引号与尖括号必须被转义
+  const evil = free('![a" onerror="alert(1)](/api/images/generated/x.png?a=1)');
+  assert(!evil.includes('onerror="alert'), "alt 里的引号被转义（无内联注入）");
+
+  // 行内（非独占一行）的图片语法不当作图片：那是正文里的字面量
+  const inline = free("看这个 ![x](/api/images/generated/y.png) 就行");
+  assert(!inline.includes("<img"), "非独占一行时不渲染成块级图片");
+}
+
 console.log(`✓ smoke_render：${passed} 条断言全部通过`);

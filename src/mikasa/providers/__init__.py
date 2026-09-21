@@ -6,9 +6,21 @@ get_llm / get_embedding / get_reranker 依配置分发到各实现；
 
 from __future__ import annotations
 
-from mikasa.config.settings import EmbeddingConfig, LLMConfig, RerankerConfig, VisionConfig
+from mikasa.config.settings import (
+    EmbeddingConfig,
+    ImageConfig,
+    LLMConfig,
+    RerankerConfig,
+    VisionConfig,
+)
 from mikasa.errors import ConfigError
 from mikasa.providers.embedding import ApiEmbedding, EmbeddingProvider, LocalFastEmbed, NoEmbedding
+from mikasa.providers.image import (
+    GeneratedImage,
+    ImageProvider,
+    NoImage,
+    OpenAICompatImage,
+)
 from mikasa.providers.llm import Completion, LLMProvider, MockLLM, OpenAICompatLLM
 from mikasa.providers.ollama import OllamaNativeLLM
 from mikasa.providers.reranker import ApiReranker, LocalReranker, NoReranker, RerankerProvider
@@ -20,18 +32,23 @@ __all__ = [
     "Completion",
     "EmbeddingProvider",
     "LLMProvider",
+    "GeneratedImage",
+    "ImageProvider",
     "LocalFastEmbed",
     "LocalReranker",
     "MockLLM",
     "NoEmbedding",
+    "NoImage",
     "NoReranker",
     "NoVision",
     "OllamaNativeLLM",
+    "OpenAICompatImage",
     "OpenAICompatLLM",
     "OpenAICompatVision",
     "RerankerProvider",
     "VisionProvider",
     "get_embedding",
+    "get_image",
     "get_llm",
     "get_reranker",
     "get_vision",
@@ -70,6 +87,15 @@ def get_vision(config: VisionConfig) -> VisionProvider:
     if config.backend in ("api", "local"):
         return OpenAICompatVision(config)
     raise ConfigError(f"未知 Vision backend：{config.backend}")
+
+
+def get_image(config: ImageConfig) -> ImageProvider:
+    """依据配置构造出图提供方（none / api）。"""
+    if config.backend == "none":
+        return NoImage()
+    if config.backend == "api":
+        return OpenAICompatImage(config)
+    raise ConfigError(f"未知 Image backend：{config.backend}")
 
 
 def get_reranker(config: RerankerConfig) -> RerankerProvider:

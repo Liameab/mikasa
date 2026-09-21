@@ -119,6 +119,39 @@
         <span id="v-test-result" class="s-test-result"></span>
       </div>
 
+      <div class="s-group">图像生成（文生图）</div>
+      <div class="s-row">
+        <span class="s-name">来源</span>
+        <span id="g-provider" class="s-chips">
+          <button class="s-chip" type="button" data-preset="none">未接入</button>
+          <button class="s-chip" type="button" data-preset="siliconflow">SiliconFlow</button>
+          <button class="s-chip" type="button" data-preset="custom">自定义</button>
+        </span>
+      </div>
+      <label class="s-row">
+        <span class="s-name">API 地址</span>
+        <input id="g-base-url" type="text" placeholder="https://api.siliconflow.cn/v1" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="s-row">
+        <span class="s-name">模型名</span>
+        <input id="g-model" type="text" placeholder="Qwen/Qwen-Image" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="s-row">
+        <span class="s-name">图片尺寸</span>
+        <input id="g-size" type="text" list="g-size-options" placeholder="1328x1328" autocomplete="off" spellcheck="false">
+        <datalist id="g-size-options"></datalist>
+      </label>
+      <label class="s-row">
+        <span class="s-name">API 密钥</span>
+        <input id="g-api-key" type="password" placeholder="粘贴密钥" autocomplete="off">
+      </label>
+      <span id="g-model-hint" class="s-hint">文字 → 图片。未接入时，问答页的「生成图片」会提示怎么开。</span>
+      <div class="s-row">
+        <button id="g-test-btn" class="btn ghost" type="button">测试连接</button>
+        <button id="g-save-btn" class="btn primary" type="button">保存并生效</button>
+        <span id="g-test-result" class="s-test-result"></span>
+      </div>
+
       <div class="s-group">聊天外观</div>
       <label class="s-row">
         <span class="s-name">我的昵称</span>
@@ -192,6 +225,7 @@
         <div class="composer-row">
           <textarea id="question" rows="1" placeholder="输入你的问题（Enter 发送，Shift+Enter 换行）…"></textarea>
           <div class="composer-actions">
+            <button id="gen-image" class="btn ghost" type="button" title="用接入的图像模型生成一张图（设置面板 →「图像生成」）">生成图片</button>
             <button id="send" class="btn primary" type="button">发送</button>
             <span class="hint">Enter ↵ 发送</span>
           </div>

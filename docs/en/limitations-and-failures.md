@@ -389,6 +389,25 @@ else → 400 — the same rule the app-level handler uses. Regression tests lock
 
 | **The first ingest had to download the ~91 MB embedding model** (direct access to huggingface.co from China times out routinely) → the whole ingest failed as a network error | 2026-09-15, reported by the user ("documents won't ingest") | The embedding model (bge-small-zh-v1.5; Ollama is unrelated) did not ship with the app, and the download ran *inside the upload request*: a timeout failed the request and surfaced as an unreadable httpx stack. The two mitigations of that day (retry via hf-mirror, move the cache out of system Temp into the data directory) lowered the odds but **never removed "the first attempt must reach the network"** | Since v0.1.8 the model ships with the app (ADR-0030): a pinned revision is fetched at build time into the payload's `_internal/models/embed/`, seeded file-by-file into the fastembed cache at runtime (a cache the user already has stays untouched), and the backend is constructed with `local_files_only=True` — no network. **Offline ingest became a release sentinel** (smoke_frozen launches the frozen artifact under offline env vars and uploads a document; it must return 201, and hiding the model turns it red — verified). Lesson: **"the first run must reach the network" is a defect, not a probability** |
 
+**Boundaries of text-to-image (ADR-0031)**
+
+- **The network is required**: cloud image models bill per picture or consume free quota, and
+  the prompt travels to the chosen provider. The local profile defaults to
+  `image: backend: none`; enabling it is a deliberate act, and both the panel and the dialog
+  say so.
+- **No video**: per-second billing plus transcoding puts it in a different order of magnitude
+  in cost and effort - explicitly out of scope.
+- **Generated images do not enter the knowledge base**: they live in `data_dir/generated/`
+  (outside uploads) and are never retrieved. To make one searchable, run it through image
+  recognition so it becomes note text.
+- **The frontend renders same-origin images only**: `renderAnswer`'s image branch permits a
+  single-`/` same-origin path and nothing else. A remote `https://...` image degrades to a
+  literal line, because a remote image turns "the user read this answer" into an outbound
+  request (images are tracking pixels). This is a deliberate capability boundary, not a TODO.
+- **Upstream URLs live for one hour** (SiliconFlow documents this): the response must be
+  downloaded to bytes immediately. That is correctness, not an optimisation - a minute later
+  and it is a broken image.
+
 ## 5. Evolution of What `doctor` Checks
 
 The value of doctor is not in reporting a wall of OKs, but in **every check pointing at an

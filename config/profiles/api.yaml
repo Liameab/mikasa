@@ -63,6 +63,17 @@ vision:
   max_tokens: 2048
   timeout_seconds: 60.0
 
+image:
+  # 文生图：SiliconFlow 的 Qwen-Image（与检索/识图共用 SILICONFLOW_API_KEY）。
+  # size 是**必填**且各模型推荐值不同：Qwen-Image 用 1328x1328，
+  # 换成 Kwai-Kolors/Kolors 请改成 1024x1024（面板里也能改）。
+  backend: api
+  base_url: https://api.siliconflow.cn/v1
+  api_key_env: SILICONFLOW_API_KEY
+  model: Qwen/Qwen-Image
+  size: 1328x1328
+  timeout_seconds: 120.0
+
 judge:
   enabled: true
   backend: api

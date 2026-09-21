@@ -580,6 +580,36 @@ table.list td.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 .bubble .md-table tr:hover td { background: rgba(20, 20, 19, 0.02); }
 
+/* 生成图（ADR-0031）：块级图片。宽度不超气泡，高图也不撑破版心；
+   加载失败时容器加 .broken，由 CSS 显示一行说明（错误处理在 qa.js 的委托里）。 */
+.bubble .md-figure {
+  margin: 8px 0;
+  position: relative;
+  min-height: 0;
+}
+.bubble .md-figure img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+}
+.bubble .md-figure.broken {
+  min-height: 64px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.bubble .md-figure.broken img { display: none; }
+.bubble .md-figure.broken::after {
+  content: "图片无法显示（可能已被清理）";
+  color: var(--muted);
+  font-size: 13px;
+}
+
 /* 正文块节奏：段落/列表/标题/引用/分割线的间距（首末块贴气泡内边距） */
 .bubble p { margin: 7px 0; }
 .bubble > :first-child { margin-top: 0; }
@@ -1446,6 +1476,42 @@ a.pd-title:hover { color: var(--accent); }
   padding: 18px 20px 16px;
   box-shadow: 0 18px 48px rgba(20, 20, 19, 0.18);
 }
+
+/* 「生成图片」对话框（复用确认框的遮罩/卡片骨架，只加宽 + 表单行） */
+.img-box {
+  width: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.img-box .img-prompt {
+  width: 100%;
+  resize: vertical;
+  min-height: 76px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-inset);
+  color: var(--fg);
+  font: inherit;
+  line-height: 1.6;
+}
+.img-box .img-prompt:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.img-box .img-row { display: flex; align-items: center; gap: 10px; }
+.img-box .img-row input {
+  flex: 1;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-inset);
+  color: var(--fg);
+  font: inherit;
+}
+.img-box .cf-actions { display: flex; align-items: center; gap: 10px; }
+.img-box .cf-actions .btn:first-of-type { margin-left: auto; }
+.img-status { font-size: 13px; color: var(--muted); }
+.img-status.error { color: var(--danger); }
+.img-status.muted { color: var(--muted); }
 .cf-title {
   font-size: 15px;
   font-weight: 600;

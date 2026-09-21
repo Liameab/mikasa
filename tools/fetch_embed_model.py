@@ -54,6 +54,10 @@ ALLOW_PATTERNS = [
 # 必需，本机缓存里明明有完整模型，却每次都判成"不完整"→ 白下一次 91MB）。
 REQUIRED_FILES = ["config.json", "tokenizer.json", "model_optimized.onnx"]
 
+# 载荷预算：权重 91MB + 少量元数据。**超了几乎必然是重复副本**——HF 的
+# blobs/ 用 etag 命名（没有 .onnx 后缀），只数 ".onnx" 会漏掉它，所以按总字节兜。
+MAX_PAYLOAD_MB = 130
+
 # 本机可能已有的 fastembed 缓存（复制优先于下载）
 _LOCAL_CACHES = (
     REPO_ROOT / "data" / "models" / "fastembed",
@@ -130,6 +134,40 @@ def _download(dest: Path) -> None:
     )
 
 
+def payload_bytes(dest: Path) -> int:
+    """该目录下所有文件的总字节数（判"有没有重复副本"用）。"""
+    return sum(p.stat().st_size for p in dest.rglob("*") if p.is_file())
+
+
+def _drop_blob_duplicates(dest: Path) -> int:
+    """删掉 `blobs/`：snapshots 里已是真文件时，blobs 就是同一份数据的第二副本。
+
+    为什么必须做：**HF 的传输后端不同，缓存形状不同**——走 Xet（CI 直连时的
+    默认）会写 `blobs/<etag>` 真文件 + `snapshots/<rev>/文件` 副本；走普通
+    HTTP（镜像、或关了 Xet）只写 snapshots（本机缓存就是这样，blobs 是空的）。
+    而 PyInstaller 会把两份都收进载荷：同一个 91MB 模型在包里出现两次
+    （2026-09-21 CI 实测：zip 263.6MB 而不是预期的 165MB、安装包 204MB 而不是
+    127MB——差值正是那 91MB）。
+
+    删之前逐个确认 snapshots 里都是**真文件**（不是指向 blobs 的符号链接）：
+    是链接就先落成真文件再删，否则会把数据删没。返回释放的字节数。
+    """
+    repo = repo_dir(dest)
+    blobs = repo / "blobs"
+    if not blobs.is_dir():
+        return 0
+    for path in sorted(repo.joinpath("snapshots").rglob("*")):
+        if path.is_symlink():
+            data = path.read_bytes()  # 顺着链接读真数据
+            path.unlink()
+            path.write_bytes(data)
+    freed = sum(p.stat().st_size for p in blobs.rglob("*") if p.is_file())
+    shutil.rmtree(blobs, ignore_errors=True)
+    if freed:
+        log(f"  清理 blobs/ 重复副本：{freed / 1048576:.1f} MB")
+    return freed
+
+
 def _write_license_note(dest: Path) -> None:
     """在模型旁边留一份来源与许可说明（声明要跟着权重走）。
 
@@ -183,6 +221,7 @@ def fetch(dest: Path) -> bool:
         _download(dest)
 
     _normalize_refs(dest)
+    _drop_blob_duplicates(dest)
     _write_license_note(dest)
     if not is_complete(dest):
         missing = [name for name in REQUIRED_FILES if not (snapshot_dir(dest) / name).is_file()]
@@ -199,11 +238,26 @@ def main() -> int:
     dest = Path(args.dest).resolve()
 
     if args.check:
-        if is_complete(dest):
-            log(f"向量模型在：{snapshot_dir(dest)}")
-            return 0
-        log(f"[x] 目标目录里没有完整的向量模型：{dest}\n    先跑 python tools/fetch_embed_model.py")
-        return 1
+        if not is_complete(dest):
+            log(
+                f"[x] 目标目录里没有完整的向量模型：{dest}\n"
+                "    先跑 python tools/fetch_embed_model.py"
+            )
+            return 1
+        # 只准有一份权重：blobs/ 没清时同一份模型在载荷里会出现两次
+        # （2026-09-21 CI 实测：zip 263.6MB 而不是 165MB，就是这么来的）
+        onnx = sorted(dest.rglob("*.onnx"))
+        total_mb = payload_bytes(dest) / 1048576
+        if len(onnx) != 1 or total_mb > MAX_PAYLOAD_MB:
+            log(
+                f"[x] 载荷里的模型不对：{len(onnx)} 份 .onnx、共 {total_mb:.1f} MB"
+                f"（应当 1 份、{MAX_PAYLOAD_MB} MB 以内）\n"
+                + "\n".join(f"    {p}" for p in onnx)
+                + "\n    多半是 blobs/ 第二副本没清（见 _drop_blob_duplicates）"
+            )
+            return 1
+        log(f"向量模型在（一份 · {total_mb:.1f} MB）：{onnx[0]}")
+        return 0
 
     dest.mkdir(parents=True, exist_ok=True)
     fresh = fetch(dest)

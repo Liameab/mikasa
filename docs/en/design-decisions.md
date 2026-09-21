@@ -56,6 +56,7 @@
 | ADR-0028 | Formulas are typeset locally: KaTeX is vendored into the build | Accepted |
 | ADR-0029 | The local profile uses Ollama's native API: think / num_ctx knobs plus an answer-shape contract | Accepted |
 | ADR-0030 | The embedding model ships with the app: pinned revision, fetched at build time, seeded at runtime | Accepted |
+| ADR-0031 | Text-to-image: a separate section, bytes on disk, same-origin images only | Accepted |
 
 ---
 
@@ -1861,3 +1862,84 @@ removed the precondition "the first attempt must reach the network". The user as
 `_cached_snapshot` / `_hf_repo_of`), `.github/workflows/release.yml` (fetch + assertion),
 `tools/smoke_frozen.py` (offline-ingest sentinel), `tools/make_release.py` (wording of the
 install notes); tests `tests/unit/providers/test_embed_model.py` (8 cases).
+
+## ADR-0031 Text-to-image: a separate section, bytes on disk, same-origin images only
+
+**Context**: the user asked for three things - image *recognition* (M6 (2)), formula
+typesetting, and **text-to-image**; this is the third. In their words: "it shouldn't only
+be able to output text - I want the app itself to produce images".
+
+**Decision**:
+
+1. **Image generation is its own config section** (`image: none|api`, default `none`),
+   separate from vision: one takes images in, the other puts images out, and neither the
+   model names nor the request parameters are the same (SiliconFlow's endpoint wants
+   `image_size`, the OpenAI one wants `size`). Mixing them would leave "recognise with A,
+   draw with B" with nowhere to live. The offline profile is always `none` (that profile
+   promises zero keys and zero external calls).
+2. **What comes back is bytes, not a URL.** The upstream link is valid for **one hour**
+   (SiliconFlow says so explicitly), so writing that URL into an answer is "a broken image
+   an hour later". The bytes are saved under `data_dir/generated/` (outside uploads, which
+   is ingest's input - a picture in there would be scanned as a document), named
+   `date-contenthash.ext` (regenerating the same image does not pile up copies), and the
+   answer references a local, permanent URL.
+3. **Both response shapes are accepted**: SiliconFlow's `{"images":[{"url":...}]}` and
+   OpenAI/DALL-E's `{"data":[{"url"|"b64_json":...}]}`. Accepting one means "call succeeded
+   but no picture" the day you switch providers.
+4. **Both network hops pass the host gate** (the same `reject_reason` the paper downloader
+   uses): the request target (the user-supplied base_url) and **the image URL we download**
+   (semi-trusted input). The second one is not optional - a compromised upstream returning
+   an internal address is a ready-made SSRF primitive.
+5. **No key slot configured = a key-free local service** (a placeholder key is injected,
+   as `llm._LOCAL_API_KEY` does); **a slot configured but empty = an honest error**.
+   "I know this service needs no key" and "I forgot to fill it in" are different things.
+6. **Endpoints**: `POST /api/images/generate` (prompt to image) and
+   `GET /api/images/generated/{name}` (fetch it). The filename is built **by the server**
+   (regex whitelist, then directory join, then `is_file`), so traversal has no entry point;
+   inline + nosniff + private cache, the same discipline as note media.
+7. **No session? One is created.** On success the image becomes an assistant message in the
+   conversation (`![prompt](same-origin-url)` plus a `(model - size)` line). Without
+   persisting it a refresh would lose it, and what the user wants is "this image is in this
+   conversation". Failure paths leave no empty session behind (same discipline as ask's
+   `_drop_session_if_empty`).
+8. **The frontend only allows same-origin images** (`renderAnswer` gained a
+   standalone-line `![alt](url)` branch; the URL must be a single-`/` same-origin path).
+   A remote image turns "the user read this answer" into an outbound request (images are
+   tracking pixels); a non-permitted one degrades to a literal line rather than being
+   silently dropped. Load failures are caught by the message-level delegate (capture phase,
+   since `error` does not bubble) which sets `.broken`, and CSS shows an explanation.
+9. **"Test connection" does not generate an image**: generation costs money or free quota,
+   making it a poor probe. It reads the `/models` list and checks whether the configured
+   model is in it (a few hundred bytes).
+10. **The dialog follows the configured size** (the input only offers a placeholder plus a
+    preset datalist; leaving it empty uses the config). Hard-coding a default silently
+    overrides the size the user picked in the panel - recommended values differ per model
+    (Qwen-Image 1328x1328, Kolors 1024x1024) and guessing wrong means waiting tens of
+    seconds for nothing. (The E2E caught exactly this: the fake service received the
+    dialog's default instead of the configured size.)
+11. **No video** (per-second billing plus transcoding); recorded in limitations.
+
+**Measured** (2026-09-21, SiliconFlow + Qwen/Qwen-Image at 1328x1328): one image takes
+**21.0 s** and is a 1199 KB PNG, arriving via the `images[].url` branch and downloaded to
+disk immediately. Besides the four panel presets, SiliconFlow also serves
+`Kwai-Kolors/Kolors`, `Tongyi-MAI/Z-Image(-Turbo)`, `baidu/ERNIE-Image-Turbo` and others
+(7 image models among the 95 the `/models` list returned).
+
+**Costs and boundaries**:
+
+- **Generation needs the network** (cloud models); the local profile ships it off by
+  default, and both the panel and the dialog state that prompts go to the chosen provider.
+- Generated images **do not enter the knowledge base** (they live outside uploads and are
+  never retrieved) - to make one searchable, use the note-with-original-image path (M6 (2)).
+- Size and quality depend on the chosen model; this project does not run local generation
+  (that would mean another runtime such as SD/ComfyUI).
+
+**Code**: `config/settings.py` (`ImageConfig` plus `generated_dir`),
+`providers/image.py` (`OpenAICompatImage` / `NoImage`), `providers/__init__.py`,
+`web/services.py` (`rebuild_image`), `web/routers/images.py`, `web/routers/settings.py`
+(the three `/api/settings/image` endpoints), `web/schemas.py`,
+`web/static/js/image-gen.js` (dialog), `image-settings.js` (panel section),
+`common.js` (the image block in `renderAnswer`), `qa.js` (entry point and appending),
+`style.css`; tests `tests/unit/providers/test_image_provider.py` and
+`tests/unit/web/test_images_api.py`, `tools/smoke_render.mjs` (13 assertions), E2E
+`tools/chrome_image.py` (with its own fake image service).

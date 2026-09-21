@@ -155,6 +155,54 @@ class VisionTestIn(BaseModel):
     api_key: str | None = Field(default=None, max_length=500, description="缺省=用已存密钥")
 
 
+class ImageSettingsIn(BaseModel):
+    """图像生成配置保存请求体（PUT /api/settings/image，见 ADR-0031）。
+
+    backend 允许 none（= **停止使用**出图），与"清空密钥"是两件事。
+    **密钥只写不删**（与 vision 段同款理由）：SILICONFLOW_API_KEY 被
+    embedding/reranker/judge/vision 共用，在这里清空会连带打挂整条检索链，
+    且症状是"搜索结果变差"——最难联想到密钥的那种静默降级。空串 422。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    backend: Literal["none", "api"] = Field(description="none=未接入；api=云端")
+    base_url: str = Field(default="", max_length=500, description="OpenAI 兼容端点（含 /v1）")
+    model: str = Field(default="", max_length=200, description="出图模型名")
+    size: str = Field(default="", max_length=20, description="如 1328x1328（各模型推荐值不同）")
+    api_key_env: str = Field(default="", max_length=100, description="密钥所在环境变量名")
+    api_key: str | None = Field(
+        default=None, max_length=500, description="None=不改；非空=写入；空串=拒绝（见类说明）"
+    )
+
+
+class ImageTestIn(BaseModel):
+    """测试出图连接（POST /api/settings/image/test）。
+
+    **不生成图片**：出图按张计费，拿它当连通性测试不合适。这里只读
+    `/models` 列表并核对配置的模型名在不在其中（几百字节、不烧额度）。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    base_url: str = Field(default="", max_length=500)
+    model: str = Field(default="", max_length=200)
+    api_key_env: str = Field(default="", max_length=100)
+    api_key: str | None = Field(default=None, max_length=500, description="缺省=用已存密钥")
+
+
+class ImageGenerateIn(BaseModel):
+    """生成图片请求体（POST /api/images/generate）。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    prompt: str = Field(min_length=1, max_length=2000, description="提示词")
+    size: str | None = Field(default=None, max_length=20, description="缺省=用配置里的 size")
+    session_id: int | None = Field(
+        default=None, description="给了就把这条图消息落进该会话（刷新后仍在）"
+    )
+
+
 class PaperFiltersIn(BaseModel):
     """在线论文检索的筛选条件（能力对齐见 papers/sources.py 的 SourceCaps）。
 
