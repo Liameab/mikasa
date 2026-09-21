@@ -140,6 +140,13 @@ export async function refreshModelSettings() {
   $("#s-think").value =
     current.think === null || current.think === undefined ? "" : current.think ? "on" : "off";
   $("#s-num-ctx").value = current.num_ctx ? String(current.num_ctx) : "";
+  // 回答上限：null/undefined → 空选项（跟随档位默认）；值不在预设里也照填
+  const maxTok = $("#s-max-tokens");
+  const tokValue = current.max_tokens ? String(current.max_tokens) : "";
+  if (tokValue && ![...maxTok.options].some((o) => o.value === tokValue)) {
+    maxTok.append(el("option", { value: tokValue }, tokValue));
+  }
+  maxTok.value = tokValue;
   const hint = $("#s-model-hint");
   if (current.backend === "mock") {
     hint.textContent = "当前是离线体验档（mock，不调用真实模型）：选一个来源，保存后即可问答。";
@@ -161,6 +168,7 @@ export async function refreshModelSettings() {
     "#s-api-key",
     "#s-think",
     "#s-num-ctx",
+    "#s-max-tokens",
     "#s-save-btn",
     "#s-test-btn",
   ]) {
@@ -181,6 +189,9 @@ function collectFields() {
     model: ($("#s-model").value || "").trim(),
     api_key_env: preset.keyEnv,
   };
+  // 回答上限：两档通用；空选项 = null = 不写进覆盖层（跟随档位默认）
+  const tok = $("#s-max-tokens").value;
+  body.max_tokens = tok ? Number(tok) : null;
   if (preset.backend === "local") {
     // 两个本机旋钮：空选项 = null = 不写进请求（跟随模型/Ollama 默认）
     const think = $("#s-think").value;

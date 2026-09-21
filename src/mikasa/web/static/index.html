@@ -62,6 +62,17 @@
       <!-- 本机（Ollama）专属的两个旋钮：只在这条来源下出现（api 档没有这两个概念）。
            思考模式：实测同一个问题 开=14.2s 且可能答不上、关=1.4s
            上下文长度：越大能塞进越多检索块，也越慢越吃显存 -->
+      <label class="s-row">
+        <span class="s-name">回答上限</span>
+        <select id="s-max-tokens" title="单次回答的 token 上限；留空=跟随档位默认（云端 4096 / 本机 4096）">
+          <option value="">跟随档位默认</option>
+          <option value="1024">1024（短）</option>
+          <option value="2048">2048</option>
+          <option value="4096">4096（标准）</option>
+          <option value="8192">8192（详尽）</option>
+          <option value="16384">16384（很长）</option>
+        </select>
+      </label>
       <label class="s-row hidden" id="s-local-row">
         <span class="s-name">本机选项</span>
         <select id="s-think" title="思考模式：本机模型实测开关相差 10 倍（关=快）">
@@ -69,7 +80,7 @@
           <option value="off">思考：关闭（快）</option>
           <option value="on">思考：开启（慢，难题更稳）</option>
         </select>
-        <select id="s-num-ctx" title="上下文长度：越大能塞进越多检索块，也越慢越吃显存">
+        <select id="s-num-ctx" title="上下文长度：越大能塞进越多检索块，也越吃显存。本机 8GB 卡实测：8192 全在显卡（占用 6.2GB）、16384 会分载 20% 到 CPU（7.8GB，回答略慢）——但提示词本身要 ~9000 token，降到 8192 会被截掉一部分材料">
           <option value="">上下文：Ollama 默认</option>
           <option value="4096">上下文 4096</option>
           <option value="8192">上下文 8192</option>

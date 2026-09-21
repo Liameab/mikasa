@@ -99,6 +99,13 @@ class ModelSettingsIn(BaseModel):
     num_ctx: int | None = Field(
         default=None, ge=2048, le=131072, description="None=Ollama 默认；否则为上下文 token 数"
     )
+    # 两档通用：None = 不写进覆盖层（继续跟档位默认值），数字 = 写进覆盖层
+    max_tokens: int | None = Field(
+        default=None,
+        ge=256,
+        le=32768,
+        description="回答 token 上限；None=跟随档位默认",
+    )
 
 
 class ModelTestIn(BaseModel):
