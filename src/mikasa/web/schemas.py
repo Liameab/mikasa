@@ -162,6 +162,19 @@ class VisionTestIn(BaseModel):
     api_key: str | None = Field(default=None, max_length=500, description="缺省=用已存密钥")
 
 
+class OllamaPullIn(BaseModel):
+    """拉取本机模型请求体（POST /api/settings/ollama/pull，ADR-0032）。
+
+    模型名照 Ollama 的写法：`qwen3:8b`、`qwen2.5vl:7b`、`hf.co/...` 这类。
+    校验只挡"明显不是模型名"的输入（长度、字符集）——真正的名字由 Ollama
+    自己裁决，它报的"没有这个模型"比我们猜的准。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    model: str = Field(min_length=1, max_length=120, description="如 qwen3:8b")
+
+
 class ImageSettingsIn(BaseModel):
     """图像生成配置保存请求体（PUT /api/settings/image，见 ADR-0031）。
 

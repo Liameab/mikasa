@@ -1511,6 +1511,22 @@ a.pd-title:hover { color: var(--accent); }
 .img-box .cf-actions .btn:first-of-type { margin-left: auto; }
 .img-status { font-size: 13px; color: var(--muted); }
 .img-status.error { color: var(--danger); }
+
+/* 本机模型拉取进度条（ADR-0032）：细、低调，只占一行 */
+.s-progress {
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.s-progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
 .img-status.muted { color: var(--muted); }
 .cf-title {
   font-size: 15px;

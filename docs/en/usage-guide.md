@@ -215,9 +215,25 @@ directory), **Chat appearance** lives in the browser (localStorage, this browser
 
 ### 8.1 Model — pick a provider, paste a key, done
 
-- **Source presets**: Ollama (local, free, keyless), DeepSeek (official API),
-  SiliconFlow (has free models — the cheapest way to try a cloud model), or Custom (any
-  OpenAI-compatible endpoint: a `/v1` URL + model name + key).
+- **Six presets**: Ollama (local, free, keyless), DeepSeek (official API), SiliconFlow (has
+  free models — the cheapest way to try a cloud model), **Claude**, **OpenAI**, and Custom
+  (any OpenAI-compatible endpoint: a `/v1` URL + model name + key).
+  - **Claude** goes through Anthropic's **OpenAI-compatible endpoint**
+    (`https://api.anthropic.com/v1/`, default model `claude-opus-5`, or `claude-sonnet-5`).
+    Said plainly: Anthropic positions that surface as a compatibility layer — prompt caching
+    and other native features are unavailable, and unrecognised parameters are ignored. It
+    works, but it is not the full feature set.
+  - **OpenAI** is the official API (`https://api.openai.com/v1`). **A ChatGPT/Codex
+    subscription is not an API** — there is no key to paste.
+- **Local model** (shown with the Ollama preset): it reports whether this machine already has
+  the model, and if not, **「拉取模型」** downloads it in-app — with progress and a cancel
+  button (cancelling keeps the downloaded layers in Ollama's cache, so the next attempt
+  resumes where it stopped). **Installing Ollama itself is still yours to do** (download and
+  run it from the official site): the app does not fetch a 1.5 GB installer on your behalf.
+- **Local or cloud?** The local profile's value is **free, offline, private — not "better"**:
+  on the same 8 GB card only so much model fits, and the quality ceiling comes with it. **Use
+  the cloud for everyday work**; keep local for "works with no network" and "material never
+  leaves this machine".
 - **This-machine options** (shown only for the "Ollama (local)" source; both knobs affect
   local models only):
   - **Thinking mode**: models like qwen3 reason before answering by default. On the same

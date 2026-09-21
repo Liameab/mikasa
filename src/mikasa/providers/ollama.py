@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from mikasa.config.settings import LLMConfig
@@ -69,6 +69,71 @@ def fetch_ollama_tags(base_url: str) -> list[str]:
     except Exception as exc:  # noqa: BLE001 - 读超时/HTTP/JSON 解析等统一翻译为可执行文案
         raise RuntimeError(f"Ollama 服务响应异常（{url}）：{exc}") from exc
     return [str(model["name"]) for model in data.get("models", [])]
+
+
+def pull_model(
+    base_url: str,
+    model: str,
+    *,
+    on_progress: Callable[[str, int, int], None] | None = None,
+    is_cancelled: Callable[[], bool] | None = None,
+) -> None:
+    """让 Ollama 拉取一个模型（POST /api/pull，流式 NDJSON 逐行报进度）。
+
+    为什么要它：新用户装上 Mikasa 后，"本机模型"这条路要走两步命令行
+    （装 Ollama、`ollama pull qwen3:8b`）。第二步完全可以进应用内做——
+    5GB 的下载配上进度条，比让用户对着黑窗口敲命令友好得多（ADR-0032）。
+
+    `on_progress(status, completed, total)`：status 是 Ollama 给的中文/英文
+    短语（"pulling manifest" / "downloading" / "verifying sha256 digest"…），
+    completed/total 是字节数（manifest 阶段为 0）。**进度只上报、不解释**——
+    解释留给 UI（这里不做百分比四舍五入之类的判断）。
+
+    `is_cancelled()` 返回 True 时**掐断连接**（关闭流即 Ollama 侧停止下载）；
+    已下载的分层会留在本机（Ollama 自己有缓存，下次接着来）。
+
+    失败抛 `ProviderError`（app 层 502）：连不上、模型名不存在、磁盘满都走这条。
+    """
+    if callable(is_cancelled) and is_cancelled():
+        return
+    url = f"{ollama_api_root(base_url)}/pull"
+    body = json.dumps({"name": model, "stream": True}).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request) as resp:  # 拉 5GB：不设读超时
+            for raw in resp:
+                if callable(is_cancelled) and is_cancelled():
+                    resp.close()
+                    return
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line.decode("utf-8", "replace"))
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                if event.get("error"):
+                    raise ProviderError(f"拉取模型失败：{event['error']}")
+                if callable(on_progress):
+                    on_progress(
+                        str(event.get("status") or ""),
+                        int(event.get("completed") or 0),
+                        int(event.get("total") or 0),
+                    )
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:200]
+        if exc.code == 404:
+            raise ProviderError(f"Ollama 里没有这个模型：{model}（{detail}）") from exc
+        raise ProviderError(f"拉取模型失败（HTTP {exc.code}）：{detail}") from exc
+    except urllib.error.URLError as exc:
+        raise ProviderError(f"连不上 Ollama（{url}）：{exc.reason}") from exc
 
 
 class OllamaNativeLLM:

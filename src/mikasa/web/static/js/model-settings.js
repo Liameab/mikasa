@@ -41,6 +41,23 @@ const PRESETS = {
     keyEnv: "SILICONFLOW_API_KEY",
     hint: "SiliconFlow：有免费模型（Qwen2.5-7B 等），注册即有额度——不想装本地模型可先用它。",
   },
+  claude: {
+    backend: "api",
+    // Anthropic 官方的 **OpenAI 兼容入口**（内容同 OpenAI SDK，非长期生产面：
+    // 提示词缓存等原生特性不可用、不认识的字段会被静默忽略）。Mikasa 只用
+    // chat/completions + 流式，都在这层里。
+    baseUrl: "https://api.anthropic.com/v1",
+    model: "claude-opus-5",
+    keyEnv: "ANTHROPIC_API_KEY",
+    hint: "Claude（api.anthropic.com 的 OpenAI 兼容入口）：密钥在 platform.claude.com 创建；模型可换 claude-sonnet-5（更便宜）。",
+  },
+  openai: {
+    backend: "api",
+    baseUrl: "https://api.openai.com/v1",
+    model: "gpt-5",
+    keyEnv: "OPENAI_API_KEY",
+    hint: "OpenAI 官方接口：需要平台 API key（ChatGPT 订阅不能当 API 用）。",
+  },
   custom: {
     backend: "api",
     baseUrl: "",
@@ -54,6 +71,9 @@ const PRESETS = {
 let current = null;
 let keyDirty = false;
 let activePreset = null;
+// 过期响应守卫（同 qa.js 的 sessionSeq）：面板打开时会异步拉一次服务端配置，
+// 若用户在它返回之前就点了预设，那份旧响应不能把用户的选择覆盖掉。
+let loadSeq = 0;
 
 /** 服务端当前的密钥槽（api 档）；local/mock 无槽位。 */
 function serverKeyEnv() {
@@ -96,11 +116,14 @@ function syncKeyRow() {
   // 本机选项（思考模式 / 上下文长度）：api 档没有这两个概念，跟着来源显隐。
   // 服务端也只认 local 档的这两个字段（见 settings.py 的 _validated_llm_fields）。
   $("#s-local-row").classList.toggle("hidden", !isLocal);
+  $("#s-pull-row").classList.toggle("hidden", !isLocal);
+  $("#s-pull-bar-row").classList.toggle("hidden", !isLocal);
 }
 
 function applyPreset(name) {
   const preset = PRESETS[name];
   if (!preset) return;
+  loadSeq += 1; // 用户已经动了：让还在路上的那次回填作废
   activePreset = name;
   $("#s-base-url").value = preset.baseUrl;
   $("#s-model").value = preset.model;
@@ -126,12 +149,18 @@ function syncKeyPlaceholder() {
 
 /** 拉取服务端当前配置并回填表单（打开面板时调用，保存后再调一次）。 */
 export async function refreshModelSettings() {
+  const seq = ++loadSeq;
+  let fetched;
   try {
-    current = await apiFetch("/api/settings/model");
+    fetched = await apiFetch("/api/settings/model");
   } catch (err) {
     setResult(`读取配置失败：${err.message}`, "error");
     return;
   }
+  // 期间用户点过预设（或又刷新了一次）：这份响应已过期，丢弃——
+  // 否则会把用户刚选好的来源覆盖回服务端的旧值（2026-09-21 E2E 实测到）
+  if (seq !== loadSeq) return;
+  current = fetched;
   keyDirty = false;
   $("#s-api-key").value = "";
   $("#s-base-url").value = current.base_url || "";
@@ -251,6 +280,109 @@ async function loadOllamaModels() {
   }
 }
 
+/* ---- 本机模型准备（ADR-0032）：一键拉取 + 进度 + 取消 ---------------- */
+
+let pullTimer = null; // 轮询句柄（running 时每秒一问）
+
+/** 字节 → 人话（GB/MB）。进度条上写"3.2 GB / 5.1 GB"，比百分比直观。 */
+function fmtBytes(n) {
+  if (!n) return "0 MB";
+  const gb = n / 1024 ** 3;
+  return gb >= 1 ? `${gb.toFixed(1)} GB` : `${(n / 1024 ** 2).toFixed(0)} MB`;
+}
+
+function stopPullPolling() {
+  if (pullTimer !== null) {
+    clearInterval(pullTimer);
+    pullTimer = null;
+  }
+}
+
+/** 渲染一次拉取状态（拉取中/完成/失败/取消各有各的文案）。 */
+function renderPull(state) {
+  const row = $("#s-pull-row");
+  const barRow = $("#s-pull-bar-row");
+  const text = $("#s-pull-state");
+  const bar = $("#s-pull-bar");
+  const btn = $("#s-pull-btn");
+  const cancel = $("#s-pull-cancel");
+  if (!row) return;
+
+  const status = state.status || "idle";
+  const running = status === "running";
+  $("#s-model").disabled = false; // 拉取期间模型名仍可改（只是这次拉的不是它）
+  btn.classList.toggle("hidden", running);
+  cancel.classList.toggle("hidden", !running);
+  barRow.classList.toggle("hidden", !running);
+
+  if (running) {
+    const total = state.total || 0;
+    const percent = total ? Math.min(100, (state.completed / total) * 100) : 0;
+    bar.style.width = `${percent}%`;
+    const size = total ? ` · ${fmtBytes(state.completed)} / ${fmtBytes(total)}` : "";
+    text.textContent = `正在拉取 ${state.model}${size}（${percent.toFixed(0)}%）`;
+    text.className = "s-hint";
+    return;
+  }
+
+  bar.style.width = "0%";
+  if (status === "done") {
+    text.textContent = `${state.model} 已就绪`;
+    text.className = "s-hint ok";
+  } else if (status === "cancelled") {
+    text.textContent = "已取消（已下载的部分留在 Ollama 缓存里，再点会接着下）";
+    text.className = "s-hint";
+  } else if (status === "error") {
+    text.textContent = `拉取失败：${state.error}`;
+    text.className = "s-hint error";
+  } else {
+    text.textContent = "";
+    text.className = "s-hint";
+  }
+}
+
+async function refreshPull() {
+  try {
+    const state = await apiFetch("/api/settings/ollama/pull");
+    renderPull(state);
+    if (state.status === "running") {
+      if (pullTimer === null) pullTimer = setInterval(() => void refreshPull(), 1000);
+    } else {
+      stopPullPolling();
+    }
+  } catch {
+    stopPullPolling(); // 读不到就静默（面板其余部分照用）
+  }
+}
+
+async function startPull() {
+  const model = ($("#s-model").value || "").trim();
+  if (!model) {
+    $("#s-pull-state").textContent = "先在「模型名」里填一个，如 qwen3:8b";
+    $("#s-pull-state").className = "s-hint error";
+    return;
+  }
+  try {
+    await apiFetch("/api/settings/ollama/pull", {
+      method: "POST",
+      body: JSON.stringify({ model }),
+    });
+    await refreshPull();
+  } catch (err) {
+    $("#s-pull-state").textContent = err.message;
+    $("#s-pull-state").className = "s-hint error";
+  }
+}
+
+async function cancelPull() {
+  try {
+    await apiFetch("/api/settings/ollama/pull", { method: "DELETE" });
+  } catch {
+    // 409 = 已经结束了，无所谓；下一轮轮询会刷新状态
+  }
+  await refreshPull();
+}
+
 /** 装配「模型」段。问答页启动时调用一次（settings.js 转调）。 */
 export function initModelSettings() {
   document.querySelectorAll("#s-provider .s-chip").forEach((chip) => {
@@ -266,4 +398,8 @@ export function initModelSettings() {
   $("#s-test-btn").addEventListener("click", () => void testConnection());
   $("#s-save-btn").addEventListener("click", () => void saveSettings());
   $("#s-models-refresh").addEventListener("click", () => void loadOllamaModels());
+  // 本机模型准备（ADR-0032）：拉取 / 取消；打开面板时先读一次当前状态
+  $("#s-pull-btn").addEventListener("click", () => void startPull());
+  $("#s-pull-cancel").addEventListener("click", () => void cancelPull());
+  void refreshPull();
 }

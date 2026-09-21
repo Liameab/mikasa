@@ -57,6 +57,7 @@
 | ADR-0029 | The local profile uses Ollama's native API: think / num_ctx knobs plus an answer-shape contract | Accepted |
 | ADR-0030 | The embedding model ships with the app: pinned revision, fetched at build time, seeded at runtime | Accepted |
 | ADR-0031 | Text-to-image: a separate section, bytes on disk, same-origin images only | Accepted |
+| ADR-0032 | Model sources: cloud presets (Claude / OpenAI) and an in-app local-model pull | Accepted |
 
 ---
 
@@ -1943,3 +1944,65 @@ disk immediately. Besides the four panel presets, SiliconFlow also serves
 `style.css`; tests `tests/unit/providers/test_image_provider.py` and
 `tests/unit/web/test_images_api.py`, `tools/smoke_render.mjs` (13 assertions), E2E
 `tools/chrome_image.py` (with its own fake image service).
+
+## ADR-0032 Model sources: cloud presets (Claude / OpenAI) and an in-app local-model pull
+
+**Context**: three questions from the user on 2026-09-21 settled the direction - can it talk
+to Claude and Codex? Does the local model really need that much memory? And "if the quality
+drops, it is less useful to me". Measured on their RTX 4060 (8 GB) with qwen3:8b: 5.2 GB of
+weights, 7.8 GB resident at 16k context - **over the card, with 20% spilling to the CPU**;
+a smaller model (4B, about 2.5 GB) fits but **clearly loses quality**. The conclusion: on
+this machine the local profile's value is **free, offline, private - not "good"**; daily use
+belongs in the cloud. So "download and use" shifts from "ship a 6.7 GB local stack" to two
+legs: make the cloud one click away, and turn the two-step local setup into one.
+
+**Decision**:
+
+1. **Six presets**: Ollama (local) / DeepSeek / SiliconFlow / **Claude** / **OpenAI** /
+   custom.
+   - **Claude goes through Anthropic's official OpenAI-compatible endpoint**
+     (`https://api.anthropic.com/v1/` with `ANTHROPIC_API_KEY`, models `claude-opus-5` /
+     `claude-sonnet-5`). The boundary is recorded honestly: Anthropic positions that surface
+     as a **compatibility layer** (not a long-term production interface); prompt caching and
+     other native features are unavailable, and **unrecognised fields are silently ignored** -
+     so "it runs" does not mean "fully featured". Mikasa only needs chat/completions and
+     streaming, both of which are inside that surface.
+   - **OpenAI's own API** (`https://api.openai.com/v1` with `OPENAI_API_KEY`). The preset
+     text says plainly that **a ChatGPT/Codex subscription is not an API** - there is no
+     credential to paste, and working around someone's login state is reverse-engineering
+     their auth, which this project does not do.
+2. **The second step of the local path moves into the app**: `POST /api/settings/ollama/pull`
+   (202 plus polling) - a single-slot state machine (the shape the eval jobs already use),
+   frame-by-frame progress (Ollama's `/api/pull` is streaming NDJSON), and **cancellable**
+   (closing the stream stops it; downloaded layers stay in Ollama's cache so the next attempt
+   resumes). The panel grows one row under the Ollama preset: status text, a progress bar,
+   pull and cancel.
+3. **We do not download the Ollama installer** (1.5 GB): redistributing a third-party binary,
+   plus version drift, plus silent bulk traffic, to save one trip to a download page. Without
+   Ollama installed the app gives instructions that can be followed; pulling the model is the
+   step the app takes over.
+4. **A real race fixed along the way**: opening the panel asynchronously fetches the server
+   config to fill the form; clicking a preset before that lands let the stale response
+   overwrite the choice (the E2E caught it: the chip's class was `s-chip`, not `s-chip on`,
+   and the URL field was written back to the server value). Fix: a **stale-response guard**
+   (`loadSeq`, the same idiom as `sessionSeq` when opening a session in qa.js).
+5. **The local profile's positioning goes into the docs**: free, offline, private; on an 8 GB
+   card 8192 stays entirely on the GPU while 16384 spills (the numbers are in usage-guide
+   section 8.1), so "bigger is better" is false - trade off against the material length.
+
+**Costs and boundaries**:
+
+- The compatibility layer's gaps (no caching, unknown fields ignored) are **recorded, not
+  hidden**; closing them would mean adopting the native Anthropic SDK, which this project
+  deliberately avoids (same reasoning as ADR-0003: one protocol surface is enough, and every
+  extra SDK is another version line to track).
+- Pulling remains subject to Ollama's own behaviour: a wrong model name or a full disk is
+  reported by upstream, and the app's job is to carry that message to the UI faithfully.
+- **This does not make the local model better** - it makes it installable and watchable.
+
+**Code**: `web/services.py` (`PullJob` / `PullJobManager`), `providers/ollama.py`
+(`pull_model`), `web/routers/settings.py` (three endpoints), `web/schemas.py` (`OllamaPullIn`),
+`web/static/js/model-settings.js` (presets, pull section, stale-response guard),
+`index.html`, `style.css`; tests `tests/unit/web/test_ollama_pull_api.py` (11 cases), E2E
+`tools/chrome_ollama_pull.py` (its own fake Ollama; asserts that progress really advances and
+that the model name really reaches /api/pull).

@@ -18,12 +18,13 @@ v1 只开放 llm 段：embedding 一动就是向量维度变化 → 必须全量
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import ValidationError
 
 from mikasa.config.settings import (
@@ -41,7 +42,7 @@ from mikasa.config.settings import (
 from mikasa.errors import ProviderError, ZhiwenError, strip_paths
 from mikasa.providers.image import OpenAICompatImage
 from mikasa.providers.llm import OpenAICompatLLM
-from mikasa.providers.ollama import OllamaNativeLLM, fetch_ollama_tags
+from mikasa.providers.ollama import OllamaNativeLLM, fetch_ollama_tags, pull_model
 from mikasa.providers.vision import OpenAICompatVision
 from mikasa.utils.net import default_port, reject_reason
 from mikasa.web.deps import get_services, get_settings
@@ -50,9 +51,11 @@ from mikasa.web.schemas import (
     ImageTestIn,
     ModelSettingsIn,
     ModelTestIn,
+    OllamaPullIn,
     VisionSettingsIn,
     VisionTestIn,
 )
+from mikasa.web.services import AppServices
 
 router = APIRouter(tags=["settings"])
 
@@ -670,3 +673,76 @@ def test_image_settings(body: ImageTestIn) -> dict[str, Any]:
             return {"ok": False, "model": model, "error": f"{type(exc).__name__}: {exc}"}
         finally:
             os.environ.pop(_TEST_KEY_ENV, None)
+
+
+# ---------------------------------------------------------------------------
+# 本机模型准备（ADR-0032）：应用内一键拉取，带进度、可取消
+# ---------------------------------------------------------------------------
+
+# 模型名字符集：Ollama 允许 `name:tag`、`hf.co/用户/仓库`、`@digest` 等
+_OLLAMA_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$")
+
+
+def _ollama_base(settings: Settings) -> str:
+    """本机 Ollama 的根地址：优先 llm 段配的（本机档），否则用默认端点。"""
+    base = (settings.llm.base_url or "").strip()
+    return base or "http://127.0.0.1:11434/v1"
+
+
+def _run_pull(manager: Any, base_url: str, model: str) -> None:
+    """后台线程体：拉取 + 把结果写回任务槽（异常一律落到 error，不裸抛）。"""
+    try:
+        pull_model(
+            base_url,
+            model,
+            on_progress=manager.progress,
+            is_cancelled=manager.is_cancelled,
+        )
+    except ZhiwenError as exc:
+        manager.fail(strip_paths(str(exc)))
+        return
+    except Exception as exc:  # noqa: BLE001 - 后台任务的任何异常都要有归宿
+        manager.fail(f"{type(exc).__name__}: {exc}")
+        return
+    if manager.is_cancelled():
+        manager.finish_cancelled()
+    else:
+        manager.finish()
+
+
+@router.post("/api/settings/ollama/pull", status_code=202)
+def pull_ollama_model(
+    body: OllamaPullIn,
+    background_tasks: BackgroundTasks,
+    services: AppServices = Depends(get_services),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """让本机 Ollama 拉取一个模型（202 + GET 轮询进度）。
+
+    为什么放在服务端而不是让用户敲命令行：装完 Mikasa 到能用本机模型之间
+    隔着"装 Ollama + pull 5GB"两步，第二步完全可以进应用内做（ADR-0032）。
+    **不代下 Ollama 安装器**：那是第三方二进制再分发 + 版本漂移 + 1.5GB
+    静默流量，得不偿失（下载页链接给在文案里）。
+    """
+    model = body.model.strip()
+    if not _OLLAMA_NAME_RE.match(model):
+        raise HTTPException(status_code=422, detail="模型名不合法（形如 qwen3:8b）")
+    if not services.pulls.start(model):
+        raise HTTPException(status_code=409, detail="已经有一个拉取任务在跑，先等它结束或取消")
+    background_tasks.add_task(_run_pull, services.pulls, _ollama_base(settings), model)
+    snapshot = services.pulls.snapshot()
+    return snapshot or {"status": "idle"}
+
+
+@router.get("/api/settings/ollama/pull")
+def pull_ollama_status(services: AppServices = Depends(get_services)) -> dict[str, Any]:
+    """当前拉取任务快照（无任务 → status: idle）。"""
+    return services.pulls.snapshot() or {"status": "idle"}
+
+
+@router.delete("/api/settings/ollama/pull", status_code=204)
+def cancel_ollama_pull(services: AppServices = Depends(get_services)) -> None:
+    """请求取消：关流即停（已下载的分层留在 Ollama 缓存里，下次接着来）。"""
+    if not services.pulls.cancel():
+        raise HTTPException(status_code=409, detail="当前没有正在进行的拉取任务")
+    return None

@@ -111,6 +111,110 @@ class EvalJobManager:
 
 
 @dataclass
+class PullJob:
+    """一次"本机模型拉取"的进度状态（ADR-0032）。
+
+    Ollama 的 /api/pull 是流式 NDJSON：状态短语（pulling manifest →
+    downloading → verifying sha256 digest → writing manifest → success）与
+    已下载/总字节交替出现。这里**只记事实**（谁、到哪一步、多少字节），
+    百分比与文案交给前端——把"下载中"翻译成百分比是 UI 的事。
+    """
+
+    model: str
+    status: str  # running / done / error / cancelled
+    stage: str = ""
+    completed: int = 0
+    total: int = 0
+    error: str = ""
+    started_at: str = ""
+
+    def to_snapshot(self) -> dict:
+        return {
+            "model": self.model,
+            "status": self.status,
+            "stage": self.stage,
+            "completed": self.completed,
+            "total": self.total,
+            "percent": round(self.completed / self.total * 100, 1) if self.total else 0.0,
+            "error": self.error,
+            "started_at": self.started_at,
+        }
+
+
+class PullJobManager:
+    """单槽模型拉取管理器（形状同 EvalJobManager，多一个取消位）。
+
+    "单槽"的理由与评测一致：Ollama 自己的拉取是串行队列，界面也只该显示
+    一件事；两个并发拉取在 5GB 量级上只会互相抢带宽。取消不杀进程，只是
+    把流关掉——已下载的分层留在 Ollama 缓存里，下次接着来。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._job: PullJob | None = None
+        self._cancel = False
+
+    def start(self, model: str) -> bool:
+        """占槽启动。已有 running 任务 → False（POST 端点回 409）。"""
+        with self._lock:
+            if self._job is not None and self._job.status == "running":
+                return False
+            self._cancel = False
+            self._job = PullJob(
+                model=model,
+                status="running",
+                started_at=datetime.now().isoformat(timespec="seconds"),
+            )
+            return True
+
+    def progress(self, stage: str, completed: int, total: int) -> None:
+        """后台线程回调：推进阶段与字节数（只在 running 时写）。"""
+        with self._lock:
+            if self._job is None or self._job.status != "running":
+                return
+            if stage:
+                self._job.stage = stage
+            if total:
+                self._job.total = total
+            if completed:
+                self._job.completed = completed
+
+    def is_cancelled(self) -> bool:
+        with self._lock:
+            return self._cancel
+
+    def cancel(self) -> bool:
+        """请求取消（真正停下由拉取线程看到标志后关流）。没有 running 任务 → False。"""
+        with self._lock:
+            if self._job is None or self._job.status != "running":
+                return False
+            self._cancel = True
+            return True
+
+    def finish(self) -> None:
+        with self._lock:
+            if self._job is not None:
+                self._job.status = "done"
+                self._job.stage = "完成"
+
+    def finish_cancelled(self) -> None:
+        with self._lock:
+            if self._job is not None:
+                self._job.status = "cancelled"
+                self._job.stage = "已取消"
+
+    def fail(self, message: str) -> None:
+        with self._lock:
+            if self._job is not None:
+                self._job.status = "error"
+                self._job.error = message
+
+    def snapshot(self) -> dict | None:
+        with self._lock:
+            return self._job.to_snapshot() if self._job is not None else None
+
+
+@dataclass
 class SynthJob:
     """一次后台出题任务的进度状态（与 EvalJob 同款单槽状态机）。"""
 
@@ -204,6 +308,8 @@ class AppServices:
         # 出图（文生图）：与 vision 同理留着实例（客户端/连接池复用）
         self.image = get_image(settings.image)
         self.eval_jobs = EvalJobManager()
+        # 本机模型拉取（ADR-0032）：设置面板里一键 pull，带进度
+        self.pulls = PullJobManager()
         self.synth_jobs = SynthJobManager()
         # 更新链路：检查器带 TTL 缓存、下载是单槽后台任务（见 update 包）
         self.updates = UpdateChecker()

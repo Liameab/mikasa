@@ -46,6 +46,8 @@
           <button class="s-chip" type="button" data-preset="ollama">Ollama 本机</button>
           <button class="s-chip" type="button" data-preset="deepseek">DeepSeek</button>
           <button class="s-chip" type="button" data-preset="siliconflow">SiliconFlow</button>
+          <button class="s-chip" type="button" data-preset="claude">Claude</button>
+          <button class="s-chip" type="button" data-preset="openai">OpenAI</button>
           <button class="s-chip" type="button" data-preset="custom">自定义</button>
         </span>
       </div>
@@ -73,6 +75,16 @@
           <option value="16384">16384（很长）</option>
         </select>
       </label>
+      <div class="s-row hidden" id="s-pull-row">
+        <span class="s-name">本机模型</span>
+        <span id="s-pull-state" class="s-hint"></span>
+        <button id="s-pull-btn" class="btn ghost" type="button">拉取模型</button>
+        <button id="s-pull-cancel" class="btn ghost hidden" type="button">取消</button>
+      </div>
+      <div class="s-row hidden" id="s-pull-bar-row">
+        <span class="s-name"></span>
+        <div class="s-progress"><div id="s-pull-bar" class="s-progress-fill"></div></div>
+      </div>
       <label class="s-row hidden" id="s-local-row">
         <span class="s-name">本机选项</span>
         <select id="s-think" title="思考模式：本机模型实测开关相差 10 倍（关=快）">

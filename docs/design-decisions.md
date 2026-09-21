@@ -50,6 +50,7 @@
 | ADR-0029 | 本地档改走 Ollama 原生接口：think / num_ctx 两个旋钮 + 作答呈现规范 | Accepted |
 | ADR-0030 | 向量模型随包携带：固定 revision + 构建期取件 + 运行时铺设 | Accepted |
 | ADR-0031 | 文生图：出图独立成段 + 字节落盘 + 只放行同源图片 | Accepted |
+| ADR-0032 | 模型来源：云端预设补齐（Claude / OpenAI）+ 本机模型拉取进应用内 | Accepted |
 
 ---
 
@@ -1557,3 +1558,53 @@ Ollama），而国内直连 huggingface.co 常超时；更糟的是这个下载�
 `common.js`（`renderAnswer` 的图片块）+ `qa.js`（入口与追加）+ `style.css`；
 测试 `tests/unit/providers/test_image_provider.py`、`tests/unit/web/test_images_api.py`、
 `tools/smoke_render.mjs`（13 条断言）、E2E `tools/chrome_image.py`（自带假出图服务）。
+
+## ADR-0032 模型来源：云端预设补齐（Claude / OpenAI）+ 本机模型拉取进应用内
+
+**背景**：2026-09-21 用户的三个问题把方向摆清楚了——① 能不能接 Claude 和 Codex？
+② 本地大模型真的要那么多内存吗？③「质量降档我会觉得更不好用」。实测（RTX 4060 8GB +
+qwen3:8b）：权重 5.2GB，16k 上下文时运行时占用 **7.8GB → 超卡、20% 算力分载 CPU**；
+换小模型（4B≈2.5GB）内存下来了但**质量明显下滑**。结论：**这台机器上本地档的价值是
+「免费 + 离线 + 隐私」，不是「好用」；日常应当走云端**——于是「下载即用」的重点从「随包
+6.7GB 的本地栈」转向两条腿：云端一键可达 + 本机模型的两步收成一步。
+
+**决定**：
+
+1. **云端预设补齐到六个**：Ollama 本机 / DeepSeek / SiliconFlow / **Claude** /
+   **OpenAI** / 自定义。
+   - **Claude 走 Anthropic 官方的 OpenAI 兼容入口**（`https://api.anthropic.com/v1/` +
+     `ANTHROPIC_API_KEY`，模型 `claude-opus-5` / `claude-sonnet-5`）。如实记录的边界：
+     官方把这层定位为**兼容层**（不是长期生产面）；提示词缓存等原生特性不可用，
+     **不认识的字段静默忽略**——所以「能跑」不等于「用满」。Mikasa 只用到
+     chat/completions + 流式，都在这层里。
+   - **OpenAI 官方接口**（`https://api.openai.com/v1` + `OPENAI_API_KEY`）。
+     预设文案里写明「**ChatGPT/Codex 订阅不能当 API 用**」——那不是 API，没有可粘贴的
+     凭据；绕过登录态属于逆向第三方认证，本项目不做。
+2. **本机模型的第二步进应用内**：`POST /api/settings/ollama/pull`（202 + 轮询）——
+   单槽状态机（同评测作业的形状）、逐帧进度（Ollama 的 `/api/pull` 是流式 NDJSON）、
+   **可取消**（关流即停，已下载的分层留在 Ollama 缓存里，再点接着下）。
+   前端在「Ollama 本机」预设下多一行：状态文案 + 进度条 + 拉取/取消按钮。
+3. **不代下 Ollama 安装器**（1.5GB）：那是第三方二进制再分发 + 版本漂移 + 静默大流量，
+   收益却只是省一次「点开官网下载」。没装 Ollama 时给可照做的指引，装好模型这一步
+   才由应用接管。
+4. **顺手修掉一个真竞态**：面板打开时会异步拉一次服务端配置回填；用户若在它返回前
+   点了预设，那份旧响应会把选择覆盖回旧值（E2E 实测到：芯片点亮的类是 `s-chip`
+   而不是 `s-chip on`，输入框被写回服务端地址）。修法 = **过期响应守卫**
+   （`loadSeq`，与 qa.js 打开会话的 `sessionSeq` 同一套路）。
+5. **本地档的定位写进文档**：免费/离线/隐私；8GB 卡上 8192 全 GPU、16384 分载
+   （见 usage-guide §8.1 的实测数字），所以「更大更好」不成立，按材料长度取舍。
+
+**代价与边界**：
+
+- Claude 兼容层的能力缺口是**如实记录**的（不支持缓存、忽略未知字段）——不是我们在
+  这里能做掉的事；要全能力得走 Anthropic 原生 SDK（本项目不引，理由同 ADR-0003：
+  单协议面已经够用，多一个 SDK 就多一条要跟的版本线）。
+- 拉取仍受 Ollama 自己的行为约束：模型名写错、磁盘不足都由上游报错，我们只负责把
+  消息如实带到界面。
+- **本机模型的「好用」程度不会因为这次改动而提高**——它提高的是「装得上、看得见进度」。
+
+**代码**：`web/services.py`（`PullJob` / `PullJobManager`）、`providers/ollama.py`
+（`pull_model`）、`web/routers/settings.py`（三个端点）、`web/schemas.py`（`OllamaPullIn`）、
+`web/static/js/model-settings.js`（预设 + 拉取段 + 过期响应守卫）、`index.html`、`style.css`；
+测试 `tests/unit/web/test_ollama_pull_api.py`（11 条）、E2E `tools/chrome_ollama_pull.py`
+（自带假 Ollama，断言「进度真的前进」与「模型名真的发到了 /api/pull」）。
