@@ -48,6 +48,7 @@
 | ADR-0027 | 拍照转笔记：视觉模型独立成段、识别只是草稿、原图锚在笔记 key | Accepted |
 | ADR-0028 | 公式在本地排版：把 KaTeX 内置进发布物 | Accepted |
 | ADR-0029 | 本地档改走 Ollama 原生接口：think / num_ctx 两个旋钮 + 作答呈现规范 | Accepted |
+| ADR-0030 | 向量模型随包携带：固定 revision + 构建期取件 + 运行时铺设 | Accepted |
 
 ---
 
@@ -1429,3 +1430,65 @@ KaTeX）。而且必须在 `esc()` **之前**抽：放到之后，交给 KaTeX �
 （「本机选项」两个下拉）；测试 `tests/unit/providers/test_ollama_native.py`、
 `tests/unit/providers/test_factory.py`、`tests/unit/web/test_settings_api.py`。
 E2E 的假服务同步学会两种协议（`tools/fake_llm.py`）。
+
+## ADR-0030 向量模型随包携带：固定 revision + 构建期取件 + 运行时铺设
+
+**背景**：2026-09-15 用户实测"文档入不进去"——日志栈底是
+`fastembed → huggingface_hub.model_info` 的 `httpx.ConnectTimeout`。根因不是 Ollama、
+也不是解析：**首次入库要下 ~91MB 的 bge-small-zh-v1.5**（那只是向量模型，提问才用
+Ollama），而国内直连 huggingface.co 常超时；更糟的是这个下载发生在**上传文档的请求
+里**——整条入库链路以一句看不懂的网络异常失败，用户以为软件坏了。
+
+当时的两层缓解（失败自动换 hf-mirror 镜像重试 + 缓存从系统 Temp 挪进数据目录）只是
+降低概率，**没有消除"第一次必须联网成功"这个前提**。用户 2026-09-15 提出「不装任何
+外置东西、下载即用」，本次落地的第一块就是把这个模型塞进包里。
+
+**决定**：
+
+1. **模型随发布物分发**（安装版与免安装 zip 同源）：载荷 `_internal/models/embed/`，
+   布局是 fastembed 认的 HuggingFace 缓存形状（`models--Qdrant--bge-small-zh-v1.5/`）。
+2. **revision 固定**（`46fbe35f…`，写死在取件工具里）：所有用户的向量必须出自同一份
+   权重。跟 main 走的代价是上游一更新，新用户的查询向量就与老用户的索引不同源——
+   不报错、只是检索悄悄变差（ADR-0014 的单模型语义）。换模型 = 改这个常量 + 重建索引
+   的有意决策。
+3. **构建期取件**：`tools/fetch_embed_model.py` 把快照取到 `build/embed-model/`
+   （顺序：目标已有 → 什么都不做；本机已有同 revision 缓存 → 直接复制，离线也能构建；
+   否则联网，直连失败自动换镜像）。`Mikasa.spec` **缺件直接失败**——少带模型的包
+   "看着能跑"，代价全留给用户的第一次上传（`MIKASA_ALLOW_NO_EMBED_MODEL=1` 是给
+   验证性构建留的逃生口）。模型**不进 git**（91MB 不该进版本历史），由流水线取。
+4. **运行时铺设**：构造后端前，把随包模型**按文件补齐**进数据目录的 fastembed 缓存
+   ——大小一致就跳过，用户早先下好的缓存原样保留（不重下、不覆盖）；用户显式设了
+   `FASTEMBED_CACHE_PATH` 则完全不碰。
+5. **有完整模型就只认本地**：铺好后构造 `TextEmbedding(..., local_files_only=True)`，
+   不联网解析远端（快、离线可用），也不会把远端更新过的权重混进同一个索引。
+6. **判"缓存里有模型"看证据链**：`refs/main` → `snapshots/<rev>/*.onnx`。
+   只查目录存在会把半截下载当成品——正是 limitations §八 websockets 空壳那一类
+   （**带一份坏的最糟**）。
+7. **两道哨兵**：`tools/smoke_frozen.py` 在**断网环境变量**（`HF_HUB_OFFLINE=1` +
+   端点指向不可达地址）下真启动打包产物并上传一份文档，必须 201——这是"下载即用"
+   的唯一硬证据，模型没带上会以网络错误红掉，而不是悄悄下 91MB 把冒烟骗绿；
+   发布流水线另加"载荷里有模型"的断言。
+
+**两个写这处时踩到的坑**（都写进了代码注释与回归测试）：
+
+- **缓存目录按 HF 仓库名命名，不是模型名**：配置写 `BAAI/bge-small-zh-v1.5`，
+  而 fastembed 实际拉的仓库是 `Qdrant/bge-small-zh-v1.5`。按模型名拼目录会**永远
+  查不到缓存** → 静默退回联网（不报错）。查注册表（`list_supported_models`）才对。
+- **`allow_patterns` 是过滤器、不是必需清单**：`preprocessor_config.json` 这个仓库
+  根本没有；把它当"必需"，本机明明有完整模型也会被判成"不完整"、白下一次 91MB。
+
+**代价与边界**：
+
+- 安装包 84MB → 约 170MB、zip 110MB → 约 200MB。但用户此前也要单独下这 91MB 模型
+  （且常失败），总量反而更少、且一次装完。
+- 随包的只有**向量**模型；回答用的本地大模型（Ollama + qwen3:8b，约 5.2GB）仍要用户
+  自己装——那是"下载即用"的第二期，另一份方案评估（Ollama 便携版 vs llama.cpp）。
+- 源码版（`pip install -e ".[local]"`）行为不变：第一次仍联网下载（只是开发机多半
+  已有缓存，取件工具会直接复制它）。
+- 用户想换向量模型仍可改配置（`embedding.model`）+ 重建索引；随包只是"默认那一份"。
+
+**代码**：`tools/fetch_embed_model.py`（新，构建期取件）、`packaging/Mikasa.spec`
+（收载荷 + 缺件失败）、`src/mikasa/providers/embedding.py`（`_seed_bundled_model` /
+`_cached_snapshot` / `_hf_repo_of`）、`.github/workflows/release.yml`（取件 + 断言）、
+`tools/smoke_frozen.py`（离线入库哨兵）、`tools/make_release.py`（安装说明文案）；
+测试 `tests/unit/providers/test_embed_model.py`（8 条）。

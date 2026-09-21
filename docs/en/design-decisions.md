@@ -55,6 +55,7 @@
 | ADR-0027 | Photos into notes: vision as its own config section, recognition as a draft, images anchored to the note key | Accepted |
 | ADR-0028 | Formulas are typeset locally: KaTeX is vendored into the build | Accepted |
 | ADR-0029 | The local profile uses Ollama's native API: think / num_ctx knobs plus an answer-shape contract | Accepted |
+| ADR-0030 | The embedding model ships with the app: pinned revision, fetched at build time, seeded at runtime | Accepted |
 
 ---
 
@@ -1780,3 +1781,83 @@ by the tray app) never sees it, so **the setting has to live in the config file*
 `tests/unit/providers/test_ollama_native.py`, `tests/unit/providers/test_factory.py`,
 `tests/unit/web/test_settings_api.py`. The E2E fake server learned both protocols
 (`tools/fake_llm.py`).
+
+## ADR-0030 The embedding model ships with the app: pinned revision, fetched at build
+time, seeded at runtime
+
+**Context**: on 2026-09-15 the user reported "documents won't ingest" - the log bottom was
+an `httpx.ConnectTimeout` inside `fastembed -> huggingface_hub.model_info`. The cause was
+neither Ollama nor parsing: **the first ingest has to download bge-small-zh-v1.5 (~91 MB)**,
+and direct access to huggingface.co from China times out routinely. Worse, that download
+runs *inside the upload request*, so the whole ingest path failed with an unreadable network
+error and the user assumed the app was broken.
+
+The two mitigations of that day (retry through the hf-mirror endpoint; move the cache out of
+the system Temp directory into the data directory) only lowered the odds - they never
+removed the precondition "the first attempt must reach the network". The user asked for
+"nothing external to install, download and use" (2026-09-15); this is the first piece of it.
+
+**Decision**:
+
+1. **The model ships with the release artifacts** (installer and portable zip alike):
+   payload `_internal/models/embed/`, laid out in the HuggingFace cache shape that fastembed
+   recognises (`models--Qdrant--bge-small-zh-v1.5/`).
+2. **The revision is pinned** (`46fbe35f...`, hard-coded in the fetch tool): every user's
+   vectors must come from the same weights. Tracking `main` means that the day upstream
+   moves, a new user's query vectors no longer match an older user's index - silently, as a
+   slow retrieval degradation (the single-model semantics of ADR-0014). Switching the model
+   is therefore a deliberate change of that constant plus an index rebuild.
+3. **Fetched at build time**: `tools/fetch_embed_model.py` puts the snapshot into
+   `build/embed-model/` (order: already there -> no-op; a local cache at the same revision ->
+   plain copy, so offline builds work; otherwise network, falling back to the mirror).
+   `Mikasa.spec` **fails hard when it is missing** - a package without the model "seems to
+   run" and leaves the cost to the user's first upload (`MIKASA_ALLOW_NO_EMBED_MODEL=1` is
+   the escape hatch for throwaway verification builds). The model is **not committed to
+   git** (91 MB does not belong in history); the pipeline fetches it.
+4. **Seeded at runtime**: before constructing the backend, the bundled model is copied into
+   the fastembed cache under the data directory, **file by file** - equal size means skip, so
+   a cache the user already downloaded stays untouched (no re-download, no overwrite). If
+   `FASTEMBED_CACHE_PATH` is set explicitly, we do not touch that directory at all.
+5. **A complete cache means local-only**: after seeding, `TextEmbedding(...,
+   local_files_only=True)` is used - no remote resolution (fast, works offline) and no chance
+   of mixing freshly-updated upstream weights into an existing index.
+6. **"The cache has the model" is judged on evidence**: `refs/main` -> `snapshots/<rev>/*.onnx`.
+   Checking for a directory only would accept a half-finished download - the same shape of
+   failure as the websockets stub in limitations section 8 (**shipping something broken is
+   worse than shipping nothing**).
+7. **Two sentinels**: `tools/smoke_frozen.py` launches the frozen artifact under
+   **offline environment variables** (`HF_HUB_OFFLINE=1` plus an unreachable endpoint) and
+   uploads a document, which must return 201 - the only hard evidence for the
+   "download and use" promise. A package without the model fails there with a network error
+   instead of quietly downloading 91 MB and turning the smoke green. The release workflow
+   adds a separate "the payload contains the model" assertion.
+
+**Two traps hit while writing this** (both are now in code comments and regression tests):
+
+- **Cache directories are named after the HF repo, not the model name**: the config says
+  `BAAI/bge-small-zh-v1.5` while fastembed actually pulls `Qdrant/bge-small-zh-v1.5`.
+  Building the path from the model name **never finds the cache** and silently falls back to
+  the network (no error). Asking the registry (`list_supported_models`) is the correct move.
+- **`allow_patterns` is a filter, not a manifest**: this repo has no
+  `preprocessor_config.json`; treating it as required declared a perfectly complete local
+  cache "incomplete" and burned a fresh 91 MB download.
+
+**Costs and boundaries**:
+
+- The installer grows from 84 MB to roughly 170 MB, the zip from 110 MB to roughly 200 MB.
+  But users previously had to download those same 91 MB separately (and often failed), so the
+  total is smaller and happens once, at install time.
+- Only the **embedding** model ships. The local answering model (Ollama + qwen3:8b, about
+  5.2 GB) is still the user's own install - that is phase two of "download and use", with its
+  own options paper (portable Ollama vs llama.cpp).
+- The source install (`pip install -e ".[local]"`) behaves exactly as before: the first run
+  downloads (a developer machine usually has the cache already, and the fetch tool copies
+  from it).
+- Users who want a different embedding model can still change `embedding.model` and rebuild
+  the index; the bundle is just "the default one".
+
+**Code**: `tools/fetch_embed_model.py` (new, build-time fetch), `packaging/Mikasa.spec`
+(payload + hard failure), `src/mikasa/providers/embedding.py` (`_seed_bundled_model` /
+`_cached_snapshot` / `_hf_repo_of`), `.github/workflows/release.yml` (fetch + assertion),
+`tools/smoke_frozen.py` (offline-ingest sentinel), `tools/make_release.py` (wording of the
+install notes); tests `tests/unit/providers/test_embed_model.py` (8 cases).

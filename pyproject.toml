@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mikasa"
-version = "0.1.7"
+version = "0.1.8"
 description = "Mikasa — a local-first document RAG workspace with citation tracing and automated evaluation"
 readme = "README.md"
 requires-python = ">=3.11"

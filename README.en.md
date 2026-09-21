@@ -106,7 +106,8 @@ ollama pull qwen3:8b
 # 3) Should be all green (missing deps / Ollama down / model absent are reported with fixes)
 mikasa doctor --profile local
 
-# 4) Build the index (first run downloads bge-small-zh-v1.5, ~100 MB)
+# 4) Build the index (first run downloads bge-small-zh-v1.5, ~100 MB; the packaged
+#    build ships that model, so its first ingest is offline - see ADR-0030)
 mikasa ingest --reindex --profile local
 
 # 5) Same commands, different profile

@@ -84,7 +84,8 @@ ollama pull qwen3:8b
 # 3) 体检应全绿（fastembed 缺失/Ollama 未起/模型未拉取/索引错配都会红行指引）
 mikasa doctor --profile local
 
-# 4) 首次导入或切换 profile 后重建索引（会触发一次 bge-small-zh-v1.5 下载 ~100MB）
+# 4) 首次导入或切换 profile 后重建索引（会触发一次 bge-small-zh-v1.5 下载 ~100MB；
+#    打包版随包携带该模型、首次入库不联网，见 ADR-0030）
 mikasa ingest --reindex --profile local
 
 # 5) 同一条命令换成 --profile local 即可

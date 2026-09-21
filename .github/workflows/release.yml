@@ -44,6 +44,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,local,packaging]"
 
+      # 随包向量模型（ADR-0030）：固定 revision 的快照取到 build/embed-model/，
+      # PyInstaller 会把它收进载荷（Mikasa.spec 少了它会直接失败）。
+      # 构建机大多在墙外、直连 huggingface.co 没问题，离线时工具会自动换镜像。
+      - name: Fetch the bundled embedding model
+        run: python tools/fetch_embed_model.py
+
       - name: Check the tag matches the packaged version
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
@@ -69,6 +75,11 @@ jobs:
       # 换了图标/资源而没清，就会得到"时间戳是新的、图标是旧的"的假新包。
       - name: Build the app (PyInstaller)
         run: python -m PyInstaller --clean --noconfirm packaging/Mikasa.spec --distpath dist --workpath build
+
+      # 载荷断言：spec 收模型的逻辑一旦失效（路径改了、目录名变了），
+      # 构建会悄悄出一个"少带模型"的包——这里把它拦住。
+      - name: Assert the vector model is in the payload
+        run: python tools/fetch_embed_model.py --check --dest dist/Mikasa/_internal/models/embed
 
       - name: Package the zip and the checksum manifest
         run: python tools/make_release.py

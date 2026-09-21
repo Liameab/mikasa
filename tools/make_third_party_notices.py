@@ -53,6 +53,36 @@ BUNDLED_ASSETS = [
         "license_note": "文件头部注明来源与维护者（jrsoftware.org/files/istrans，"
         "Zhenghan Yang），随 packaging/languages/ 一起分发。",
     },
+    {
+        # **它不在仓库里**（91MB 的权重不该进版本历史）：构建期由
+        # tools/fetch_embed_model.py 取到 build/embed-model/，Mikasa.spec 收进载荷。
+        # 所以这一条给的是 location（字符串）而不是 dir（路径）。
+        "name": "bge-small-zh-v1.5（ONNX 版，Qdrant 转换）",
+        "version": "46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59",
+        "license": "MIT（模型卡声明）",
+        "location": "发布包 `_internal/models/embed/`（构建期取自 HuggingFace "
+        "`Qdrant/bge-small-zh-v1.5`，上游 `BAAI/bge-small-zh-v1.5`）",
+        "purpose": "中文向量嵌入（本地档检索用；随包分发，首次入库无需联网，见 ADR-0030）",
+        "license_text": "MIT License\n\n"
+        "许可证由两个上游仓库的模型卡声明（license: mit）：BAAI/bge-small-zh-v1.5 与\n"
+        "Qdrant/bge-small-zh-v1.5；两个仓库内都**没有** LICENSE 文件，故此处的 MIT 正文\n"
+        "按标准模板给出，版权归北京智源人工智能研究院（BAAI）。\n\n"
+        "Permission is hereby granted, free of charge, to any person obtaining a copy of\n"
+        'this software and associated documentation files (the "Software"), to deal in\n'
+        "the Software without restriction, including without limitation the rights to\n"
+        "use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of\n"
+        "the Software, and to permit persons to whom the Software is furnished to do so,\n"
+        "subject to the following conditions:\n\n"
+        "The above copyright notice and this permission notice shall be included in all\n"
+        "copies or substantial portions of the Software.\n\n"
+        'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n'
+        "IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n"
+        "FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n"
+        "AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n"
+        "LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n"
+        "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n"
+        "SOFTWARE.",
+    },
 ]
 
 
@@ -211,18 +241,26 @@ def render(packages: list[dict]) -> str:
             "| --- | --- | --- | --- | --- |",
         ]
         for asset in BUNDLED_ASSETS:
-            rel = asset["dir"].relative_to(REPO_ROOT).as_posix()
+            # 位置两种写法：dir（仓库里的目录）或 location（不在仓库里的东西，
+            # 比如构建期才取来的模型权重）
+            if "dir" in asset:
+                where = f"`{asset['dir'].relative_to(REPO_ROOT).as_posix()}/`"
+            else:
+                where = asset["location"]
             lines.append(
                 f"| {asset['name']} | {asset['version']} | {asset['license']} "
-                f"| `{rel}/` | {asset['purpose']} |"
+                f"| {where} | {asset['purpose']} |"
             )
         lines += ["", "### 这些资源的许可证正文", ""]
         for asset in BUNDLED_ASSETS:
-            license_file = asset["dir"] / "LICENSE"
+            license_file = asset["dir"] / "LICENSE" if "dir" in asset else None
             body = (
                 license_file.read_text(encoding="utf-8").strip()
-                if license_file.is_file()
-                else asset.get("license_note", "(见该组件随包文件内的说明)")
+                if license_file is not None and license_file.is_file()
+                else asset.get(
+                    "license_text",
+                    asset.get("license_note", "(见该组件随包文件内的说明)"),
+                )
             )
             lines += [
                 f"#### {asset['name']} {asset['version']} — {asset['license']}",

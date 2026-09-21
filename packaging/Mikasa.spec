@@ -15,6 +15,7 @@
     %LOCALAPPDATA%\\Mikasa，与安装位置无关。
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -29,6 +30,22 @@ datas = [
     (str(ROOT / "evals"), "evals"),
     (str(ROOT / ".env.example"), "."),
 ]
+
+# ---- 随包向量模型（ADR-0030）----
+# 首次入库要用的 bge-small-zh-v1.5（约 91MB）由 tools/fetch_embed_model.py 取到
+# build/embed-model/，这里收进载荷的 models/embed/；运行时 providers/embedding.py
+# 会把它原样铺进用户数据目录的 fastembed 缓存 → **首次入库不再联网**
+# （国内直连 huggingface.co 常超时，那会以"入库失败"的样子出现，2026-09-15 实测）。
+# **缺了就构建失败**：少带模型的包"看着能跑"，代价全留给用户的第一次上传。
+# 只做验证性构建时可设 MIKASA_ALLOW_NO_EMBED_MODEL=1 放行。
+_embed_model = ROOT / "build" / "embed-model"
+if _embed_model.is_dir():
+    datas.append((str(_embed_model), "models/embed"))
+elif os.environ.get("MIKASA_ALLOW_NO_EMBED_MODEL") != "1":
+    raise SystemExit(
+        "缺少随包向量模型：先跑 python tools/fetch_embed_model.py，"
+        "或设 MIKASA_ALLOW_NO_EMBED_MODEL=1 构建不含模型的临时包"
+    )
 
 # ---- 可选依赖：延迟导入 / 数据文件，静态分析看不见，显式声明 ----
 hiddenimports = [

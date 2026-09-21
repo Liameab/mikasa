@@ -8,15 +8,19 @@ v0.1.6 的发布包双击后弹"服务启动超时"，而 925 条单测、ruff�
 WebSocket 协议实现时 ImportError，**服务器线程当场死**。源码环境里那份
 websockets 是完整的，永远复现不出来。
 
-三件只有这一环能验的事：
+四件只有这一环能验的事：
   1. **双击等效**：用 `cmd /c start` 起进程（没有 std 句柄——真实双击的形态，
      也是 2026-09-15 sys.stdout=None 那个 bug 的复现条件）；
   2. **服务真的在监听**：轮询 /api/health（端口可能顺延，试一小段范围）；
-  3. **日志干净 + 载荷里没有 WebSocket 空壳**（后者是这次事故的物证）。
+  3. **日志干净 + 载荷里没有 WebSocket 空壳**（后者是这次事故的物证）；
+  4. **离线入库**：进程带着"断网"的环境变量启动（HF_HUB_OFFLINE=1 + 端点指向
+     不可达地址），上传一份文本必须成功——证明随包向量模型真的铺得到、用得
+     上（ADR-0030）。模型没打进包或铺设坏了，这一步会以网络错误失败，而不是
+     悄悄下 91MB 把冒烟骗绿。
 
 用法：
   python tools/smoke_frozen.py [--exe dist/Mikasa/Mikasa.exe] [--timeout 75]
-退出码：0 = 通过；1 = 启动失败/超时/日志里有 traceback/载荷含 websockets。
+退出码：0 = 通过；1 = 启动失败/超时/日志有 traceback/载荷缺件/离线入库失败。
 """
 
 import argparse
@@ -90,6 +94,41 @@ def _existing_mikasa() -> int | None:
     return None
 
 
+def _upload_text_offline(port: int, data_dir: Path) -> str | None:
+    """往冻结实例传一份 txt（离线环境下）——返回错误说明，成功返回 None。
+
+    这是"下载即用"承诺的**唯一硬证据**：入库会真的构造 fastembed 后端、加载
+    ONNX 权重、算出向量。进程的环境变量已经把网断掉（见调用处），所以这一步
+    成功 = 模型确实随包带到了、并且没走网络。手写 multipart：不为冒烟引入
+    新的第三方依赖（httpx 在发布环境的 venv 里有，但工具要保持零依赖习惯）。
+    """
+    sample = data_dir / "smoke-embed.txt"
+    sample.write_text("冒烟文本：验证随包向量模型能在断网环境下完成入库。", encoding="utf-8")
+    boundary = "----mikasa-smoke-frozen"
+    head = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{sample.name}"\r\n'
+        "Content-Type: text/plain\r\n\r\n"
+    ).encode()
+    body = head + sample.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/documents",
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            if resp.status == 201:
+                return None
+            return f"离线入库返回了 {resp.status}（期望 201）"
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:400]
+        return f"离线入库失败（HTTP {exc.code}）：{detail}"
+    except (urllib.error.URLError, OSError) as exc:
+        return f"离线入库失败：{exc}"
+
+
 def _listening_pid(port: int) -> str | None:
     """该端口上 LISTENING 的进程 PID（netstat -ano）。
 
@@ -149,7 +188,22 @@ def main() -> int:
                 "一份不完整的 websockets 会把服务器线程打崩（见 limitations §四）"
             )
 
+        # 载荷体检（二）：随包向量模型必须在（ADR-0030）。少了它，新用户第一次
+        # 上传文档要联网下 91MB——国内直连 huggingface.co 常超时，整条入库链以
+        # 网络异常的样子失败（2026-09-15 实测）。
+        embed_root = exe.parent / "_internal" / "models" / "embed"
+        if not embed_root.is_dir() or not any(embed_root.rglob("*.onnx")):
+            bad.append(
+                f"载荷里没有随包向量模型（{embed_root}）："
+                "先跑 python tools/fetch_embed_model.py 再打包"
+            )
+
         env = dict(os.environ, MIKASA_DATA_DIR=str(data_dir))
+        # **把网断掉**再启动：随包模型若没铺上/铺坏了，入库会以网络错误失败——
+        # 而不是悄悄联网下 91MB、把"离线可用"这件事验成绿的（ADR-0030）。
+        env["HF_HUB_OFFLINE"] = "1"
+        env["HF_ENDPOINT"] = "http://127.0.0.1:1"  # 不可达：真去调就立刻失败
+        env["HF_HUB_DISABLE_XET"] = "1"
         # 双击等效：cmd /c start 起进程 = **没有 std 句柄**，与用户双击 exe 同形
         subprocess.run(["cmd", "/c", "start", "", str(exe)], env=env, check=False, timeout=30)
         time.sleep(2.0)
@@ -182,6 +236,12 @@ def main() -> int:
                 f"健康检查：端口 {port_hit} · profile={health.get('profile')} · "
                 f"LLM={health.get('llm_model')} · 文档 {health.get('documents')} 篇"
             )
+            # 离线入库（ADR-0030）：模型随包 + 不联网 = 新用户传完文档就能问
+            err = _upload_text_offline(port_hit, data_dir)
+            if err is None:
+                log("离线入库：通过（随包向量模型可用，全程未联网）")
+            else:
+                bad.append(err)
 
         # 日志体检：启动期任何 traceback 都是"服务线程死过"的痕迹，
         # 哪怕某个端口恰好在应答（比如旧进程）。

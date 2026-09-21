@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
@@ -134,21 +136,107 @@ def _download_hint(model: str, exc: Exception) -> ProviderError:
     )
 
 
-def _configure_cache_dir() -> None:
-    """把 fastembed 的模型缓存放进数据目录（默认在系统临时目录）。
+def _configure_cache_dir() -> Path:
+    """把 fastembed 的模型缓存放进数据目录，并把随包携带的模型铺进去。
 
     默认位置 `%TEMP%/fastembed_cache` 会被磁盘清理/存储感知清掉，清掉后
     下一次入库又要重下 100MB 模型——网络一抖就又是"入不进去"（2026-09-15
     用户实测的坑）。放进数据目录后模型与库同生共死，整目录备份一并带走。
-    显式设过 FASTEMBED_CACHE_PATH 就不动（把自管缓存的自由留给高级用户）。
+    显式设过 FASTEMBED_CACHE_PATH 就不动（把自管缓存的自由留给高级用户，
+    也**不往人家的目录里铺东西**）。
+
+    返回本档实际会用的缓存目录（铺设与否都以它为准）。
     """
-    if os.environ.get("FASTEMBED_CACHE_PATH"):
-        return
+    configured = os.environ.get("FASTEMBED_CACHE_PATH")
+    if configured:
+        return Path(configured)
     from mikasa.config.settings import user_data_root
 
     cache = user_data_root() / "models" / "fastembed"
     cache.mkdir(parents=True, exist_ok=True)
     os.environ["FASTEMBED_CACHE_PATH"] = str(cache)
+    _seed_bundled_model(cache)
+    return cache
+
+
+# 随包携带的向量模型在资源根下的位置：构建时 tools/fetch_embed_model.py 把它
+# 取到 build/embed-model/，Mikasa.spec 再收进载荷的 models/embed/。
+_BUNDLED_MODEL_DIR = ("models", "embed")
+
+
+def _hf_repo_of(factory: Any, model: str) -> str | None:
+    """该模型在 HuggingFace 上的仓库名（查 fastembed 注册表）。
+
+    **不能用模型名直接拼缓存目录**：配置里写的是 `BAAI/bge-small-zh-v1.5`，
+    而 fastembed 实际拉的仓库是 `Qdrant/bge-small-zh-v1.5`——缓存目录按
+    **仓库名**命名（model_management.py 的 `models--{hf_source_repo}`）。
+    拼错的表现是"永远查不到缓存"→ 退回联网，而这个坑不会报错（2026-09-21
+    写这处时踩到过）。
+    """
+    try:
+        entries = factory.list_supported_models()
+    except Exception:  # noqa: BLE001 - 注册表读不到就当不知道（退回旧行为）
+        return None
+    for entry in entries:
+        if entry.get("model") == model:
+            sources = entry.get("sources") or {}
+            hf = sources.get("hf")
+            return str(hf) if hf else None
+    return None
+
+
+def _cached_snapshot(cache: Path, hf_repo: str) -> Path | None:
+    """缓存里该模型是否**完整**：完整返回 snapshot 目录，缺件返回 None。
+
+    判据 = refs/main 指到的 snapshot 目录里真有 .onnx 权重。只查"目录在不在"
+    会把半截下载当成品——那正是最坏的一种"看着有模型"（见 limitations §八
+    的 websockets 空壳：**带一份坏的最糟**）。
+    """
+    repo_dir = cache / ("models--" + hf_repo.replace("/", "--"))
+    ref = repo_dir / "refs" / "main"
+    if not ref.is_file():
+        return None
+    revision = ref.read_text(encoding="utf-8").strip()
+    if not revision:
+        return None
+    snapshot = repo_dir / "snapshots" / revision
+    if not snapshot.is_dir() or not any(snapshot.glob("*.onnx")):
+        return None
+    return snapshot
+
+
+def _seed_bundled_model(cache: Path) -> int:
+    """把随包携带的向量模型铺进缓存目录，返回铺设的文件数（幂等）。
+
+    为什么要有它（ADR-0030）：首次入库要下 ~91MB 的 bge-small-zh-v1.5，而
+    下载发生在**上传文档的请求里**——国内直连 huggingface.co 常超时，用户
+    看到的是一句看不懂的网络异常、整条入库链路失败（2026-09-15 实测）。
+    模型随包分发后首次使用不再联网。**只补缺失/大小不符的文件**：用户早先
+    下好的缓存原样保留（不重下、不覆盖）；开发环境没有随包模型时静默跳过。
+    """
+    from mikasa.config.settings import resource_root
+
+    src = resource_root().joinpath(*_BUNDLED_MODEL_DIR)
+    if not src.is_dir():
+        return 0
+    copied = 0
+    for path in sorted(src.rglob("*")):
+        if not path.is_file():
+            continue
+        dest = cache / path.relative_to(src)
+        try:
+            if dest.is_file() and dest.stat().st_size == path.stat().st_size:
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            # copyfile：只要内容（大小一致即视为同一份），不搬权限/时间戳
+            shutil.copyfile(path, dest)
+            copied += 1
+        except OSError as exc:
+            # 铺不动（盘满/被占）不算致命：留日志，fastembed 自己会去下
+            logger.warning("随包向量模型铺设失败（%s）：%s", path.relative_to(src), exc)
+    if copied:
+        logger.info("已从随包资源铺设向量模型：%d 个文件 → %s", copied, cache)
+    return copied
 
 
 class LocalFastEmbed:
@@ -170,11 +258,17 @@ class LocalFastEmbed:
         except ImportError as exc:
             raise ConfigError(
                 '本地嵌入需要 fastembed：pip install -e ".[local]"'
-                "（首次运行会自动下载 bge-small-zh-v1.5，需联网一次）"
+                "（打包版随包携带向量模型；源码版首次运行会自动下载 bge-small-zh-v1.5）"
             ) from exc
         try:
-            _configure_cache_dir()  # 缓存落数据目录（构造时才读取，能在这里设）
-            self._backend = TextEmbedding(self.model)
+            cache = _configure_cache_dir()  # 缓存落数据目录（构造时才读取，能在这里设）
+            # 缓存里已有完整模型（随包铺设的、或用户早先下好的）→ **只认本地**：
+            # 不联网解析远端（国内常超时），也不会把远端更新过的权重混进同一个
+            # 索引——模型版本与库里的向量永远同源（ADR-0030）。
+            hf_repo = _hf_repo_of(TextEmbedding, self.model)
+            local_only = hf_repo is not None and _cached_snapshot(cache, hf_repo) is not None
+            kwargs: dict[str, Any] = {"local_files_only": True} if local_only else {}
+            self._backend = TextEmbedding(self.model, **kwargs)
         except Exception as exc:  # 首次下载失败（网络）：换国内镜像再试一次
             if not _switch_hf_to_mirror():
                 raise _download_hint(self.model, exc) from exc

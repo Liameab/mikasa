@@ -2,7 +2,7 @@
 
 Mikasa 的发布包内含下列第三方组件。本文件由 `tools/make_third_party_notices.py` 从**实际打进包的模块**反查生成，不是照 pyproject 抄的（pyproject 只列直接依赖，会漏掉全部传递依赖）。
 
-组件总数：**21**（另有 2 个随包非 Python 资源）
+组件总数：**20**（另有 3 个随包非 Python 资源）
 
 ## ⚠ 带 copyleft 条款的组件（分发前请确认义务）
 
@@ -38,7 +38,6 @@ Mikasa 自身以 MIT 发布，与之存在冲突。
 | PyYAML | 6.0.3 | MIT |
 | setuptools | 81.0.0 | MIT |
 | tokenizers | 0.23.2 | Apache Software License |
-| websockets | 17.1 | BSD-3-Clause |
 
 ## 许可证正文
 
@@ -46,7 +45,7 @@ Mikasa 自身以 MIT 发布，与之存在冲突。
 
 ### (未归属发行版) - — 见说明
 
-以下顶层模块存在于打包产物中，但无法映射到具体发行版：_asyncio、_bz2、_cffi_backend.cp313-win_amd64、_ctypes、_decimal、_elementtree、_hashlib、_lzma、_multiprocessing、_overlapped、_queue、_socket、_sqlite3、_ssl、_uuid、_wmi、_zoneinfo、config、evals、mikasa、mmh3.cp313-win_amd64、numpy.libs、pyexpat、sample-corpus、select、unicodedata。它们多为 Python 内置扩展或本项目自身代码；若其中混有第三方模块，说明本清单有漏报，需人工核对。
+以下顶层模块存在于打包产物中，但无法映射到具体发行版：_asyncio、_bz2、_cffi_backend.cp313-win_amd64、_ctypes、_decimal、_elementtree、_hashlib、_lzma、_multiprocessing、_overlapped、_queue、_socket、_sqlite3、_ssl、_uuid、_wmi、_zoneinfo、config、evals、mikasa、mmh3.cp313-win_amd64、models、numpy.libs、pyexpat、sample-corpus、select、unicodedata。它们多为 Python 内置扩展或本项目自身代码；若其中混有第三方模块，说明本清单有漏报，需人工核对。
 
 ### certifi 2026.7.22 — MPL-2.0
 
@@ -3985,37 +3984,6 @@ The following files include code from opensource projects
       You can obtain one at https://mozilla.org/MPL/2.0/.
 ```
 
-### websockets 17.1 — BSD-3-Clause
-
-#### LICENSE
-
-```
-Copyright (c) Aymeric Augustin and contributors
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-    * Redistributions of source code must retain the above copyright notice,
-      this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright notice,
-      this list of conditions and the following disclaimer in the documentation
-      and/or other materials provided with the distribution.
-    * Neither the name of the copyright holder nor the names of its contributors
-      may be used to endorse or promote products derived from this software
-      without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-```
-
 ## 随包内置的非 Python 资源
 
 这些不是 Python 包（扫描反查看不到），因此**手工维护**：新增 vendor 资源或随包第三方文件必须在此补一行，否则清单会漏报。
@@ -4024,6 +3992,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 | --- | --- | --- | --- | --- |
 | KaTeX | 0.18.7 | MIT | `src/mikasa/web/static/vendor/katex/` | 数学公式渲染（renderToString 纯字符串渲染，离线，无运行时依赖） |
 | Inno Setup 简体中文翻译（ChineseSimplified.isl） | 6.5.0+ | Inno Setup License（社区翻译，随 Inno Setup 分发） | `packaging/languages/` | 安装向导的中文界面：Inno 不自带非官方翻译，CI 上那份 6.7.1 就没有 |
+| bge-small-zh-v1.5（ONNX 版，Qdrant 转换） | 46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59 | MIT（模型卡声明） | 发布包 `_internal/models/embed/`（构建期取自 HuggingFace `Qdrant/bge-small-zh-v1.5`，上游 `BAAI/bge-small-zh-v1.5`） | 中文向量嵌入（本地档检索用；随包分发，首次入库无需联网，见 ADR-0030） |
 
 ### 这些资源的许可证正文
 
@@ -4054,4 +4023,30 @@ SOFTWARE.
 #### Inno Setup 简体中文翻译（ChineseSimplified.isl） 6.5.0+ — Inno Setup License（社区翻译，随 Inno Setup 分发）
 
 文件头部注明来源与维护者（jrsoftware.org/files/istrans，Zhenghan Yang），随 packaging/languages/ 一起分发。
+
+#### bge-small-zh-v1.5（ONNX 版，Qdrant 转换） 46fbe35fd4374a00fee7de77dfddaeb6dd6a2c59 — MIT（模型卡声明）
+
+MIT License
+
+许可证由两个上游仓库的模型卡声明（license: mit）：BAAI/bge-small-zh-v1.5 与
+Qdrant/bge-small-zh-v1.5；两个仓库内都**没有** LICENSE 文件，故此处的 MIT 正文
+按标准模板给出，版权归北京智源人工智能研究院（BAAI）。
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
