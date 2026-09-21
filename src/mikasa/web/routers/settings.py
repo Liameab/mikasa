@@ -83,6 +83,8 @@ def _model_payload(settings: Settings) -> dict[str, Any]:
         # local 档的两个旋钮（api 档为 None）：前端据此回填「思考模式 / 上下文长度」
         "think": settings.llm.think,
         "num_ctx": settings.llm.num_ctx,
+        # 回答长度上限（两档通用）：面板留空 = 跟随档位默认
+        "max_tokens": settings.llm.max_tokens,
         "profile": settings.profile,
         "embedding_model": settings.embedding.model,
         # locked：配置来自 --config / config.yaml 时面板不可写（PUT 会 400），
@@ -125,9 +127,13 @@ def _key_env_name(body: ModelSettingsIn) -> str:
 def _validated_llm_fields(body: ModelSettingsIn) -> dict[str, Any]:
     """校验并组装要写进覆盖层的 llm 字段。
 
-    temperature/max_tokens/timeout 不在面板里，写回时**不带**这三个键——
-    覆盖层是增量合并，没写的键继续取 profile 的值（带上的话就把档位
-    调优过的数字固化了，将来改档位默认值会被这份旧快照压住）。
+    temperature/timeout **不在面板里**，写回时不带这两个键——覆盖层是增量
+    合并，没写的键继续取 profile 的值（带上的话就把档位调优过的数字固化了，
+    将来改档位默认值会被这份旧快照压住）。
+
+    `max_tokens` 是**例外**（2026-09-21 起）：用户可以抱怨"回答太短"，而档位
+    默认值只对档位负责。面板里"留空"= None = 仍然不带（跟随默认），填了数字
+    才写进覆盖层——同一套"没配置 ≠ 关掉"的语义（同 think/num_ctx）。
     """
     model = body.model.strip()
     base_url = body.base_url.strip()
@@ -146,6 +152,9 @@ def _validated_llm_fields(body: ModelSettingsIn) -> dict[str, Any]:
         # api 档不写——省得给云端也塞两个没有意义的键。
         fields["think"] = body.think
         fields["num_ctx"] = body.num_ctx
+    if body.max_tokens is not None:
+        # 两档通用；None（面板留空）时**不写**，继续跟档位默认
+        fields["max_tokens"] = body.max_tokens
     try:
         LLMConfig(**fields)
     except ValidationError as exc:

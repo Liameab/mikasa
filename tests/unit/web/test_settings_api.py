@@ -183,6 +183,58 @@ def test_put_local_persists_think_and_num_ctx(client):
     assert "num_ctx: 8192" in overlay
 
 
+def test_put_max_tokens_writes_overlay_only_when_set(client):
+    """回答上限：填了才写进覆盖层，留空（None）继续跟档位默认。
+
+    与 think/num_ctx 同一套"没配置 ≠ 关掉"的语义。为什么这一条两档通用：
+    用户抱怨过"本机答得比云端少"，而档位默认值只对档位负责。
+    """
+    c, _settings = client
+    resp = c.put(
+        "/api/settings/model",
+        json={
+            "backend": "local",
+            "base_url": "http://127.0.0.1:11434/v1",
+            "model": "qwen3:8b",
+            "max_tokens": 8192,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["max_tokens"] == 8192
+    overlay = user_config_path().read_text(encoding="utf-8")
+    assert "max_tokens: 8192" in overlay
+
+    # 留空 = 不写这个键（覆盖层里旧的 8192 被清掉，回到档位默认）
+    resp = c.put(
+        "/api/settings/model",
+        json={
+            "backend": "local",
+            "base_url": "http://127.0.0.1:11434/v1",
+            "model": "qwen3:8b",
+            "max_tokens": None,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    overlay = user_config_path().read_text(encoding="utf-8")
+    assert "max_tokens" not in overlay
+
+
+def test_put_max_tokens_rejects_out_of_range(client):
+    """越界值由 schema 拦下（256..32768），不让它写进配置。"""
+    c, _settings = client
+    for bad in (100, 999999):
+        resp = c.put(
+            "/api/settings/model",
+            json={
+                "backend": "local",
+                "base_url": "http://127.0.0.1:11434/v1",
+                "model": "qwen3:8b",
+                "max_tokens": bad,
+            },
+        )
+        assert resp.status_code == 422, bad
+
+
 def test_put_local_can_follow_model_defaults(client):
     """两个旋钮传 null = 跟随默认（"没配置"与"关掉"是两件事）。"""
     c, _settings = client

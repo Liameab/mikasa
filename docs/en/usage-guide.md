@@ -246,6 +246,16 @@ directory), **Chat appearance** lives in the browser (localStorage, this browser
 - If the configuration came from an explicit `--config` or a `config.yaml`, the panel is
   read-only and tells you which file to edit instead.
 
+- **Choosing the context length (local profile)**: measured on this machine's 8 GB card with
+  qwen3:8b - `4096` uses 5.6 GB, all on the GPU; `8192` uses 6.2 GB, still all on the GPU;
+  `16384` needs 7.8 GB, exceeds the card, and **20% spills to the CPU**, taking the same
+  question from 1.0 s to 1.4 s on the second ask (worse on longer answers). But **the prompt
+  itself is about 9000 tokens** (system prompt plus 14 retrieved chunks), so dropping to 8192
+  truncates part of the material - hence the default stays at 16384: **complete material first,
+  speed second**. A card with more memory can go higher safely.
+- **Answer limit**: the token cap for a single answer; empty follows the profile default (4096).
+  If answers feel short, raise it to 8192/16384 (longer answers are slower and eat context).
+
 ### 8.2 Chat appearance (local to this browser)
 
 - **My nickname**: re-signs past message bubbles instantly (a local display-layer feature, and the stand-in until accounts exist);
