@@ -1428,7 +1428,7 @@ KaTeX）。而且必须在 `esc()` **之前**抽：放到之后，交给 KaTeX �
 `config/settings.py`（`LLMConfig.think` / `num_ctx`）、`config/profiles/local.yaml`（默认值）、
 `pipeline/prompts.py`（`OUTPUT_FORMAT_CONTRACT`）、`web/routers/settings.py` +
 `web/schemas.py`（面板字段与探测走同一条通道）、`web/static/{index.html,js/model-settings.js}`
-（「本机选项」两个下拉）；测试 `tests/unit/providers/test_ollama_native.py`、
+（「本机选项」两个下拉）；**真机复现** `tools/smoke_ollama_native.py`（2026-09-21 实测：同一问题 think 关 **1.6s / 32 字**、开 **28.3s / 51 字**）；测试 `tests/unit/providers/test_ollama_native.py`、
 `tests/unit/providers/test_factory.py`、`tests/unit/web/test_settings_api.py`。
 E2E 的假服务同步学会两种协议（`tools/fake_llm.py`）。
 

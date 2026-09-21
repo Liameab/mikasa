@@ -1779,7 +1779,7 @@ by the tray app) never sees it, so **the setting has to live in the config file*
 `pipeline/prompts.py` (`OUTPUT_FORMAT_CONTRACT`), `web/routers/settings.py` + `web/schemas.py`
 (panel fields, and the probe travels the same channel as real questions),
 `web/static/{index.html,js/model-settings.js}` (the two "this machine" dropdowns); tests
-`tests/unit/providers/test_ollama_native.py`, `tests/unit/providers/test_factory.py`,
+**live reproduction** via `tools/smoke_ollama_native.py` (measured 2026-09-21: the same question takes **1.6 s / 32 characters** with thinking off and **28.3 s / 51 characters** with it on); `tests/unit/providers/test_ollama_native.py`, `tests/unit/providers/test_factory.py`,
 `tests/unit/web/test_settings_api.py`. The E2E fake server learned both protocols
 (`tools/fake_llm.py`).
 
