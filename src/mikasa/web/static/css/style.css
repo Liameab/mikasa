@@ -2185,6 +2185,39 @@ a.pd-title:hover { color: var(--accent); }
 /* 公式（KaTeX，随包内置；渲染入口见 js/common.js 的"公式渲染"段）      */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* 「识别本页」结果框（A 档 d，2026-09-21；逻辑见 reader.js）           */
+/* ------------------------------------------------------------------ */
+
+.rd-ocr {
+  flex: none;
+  margin: 0 14px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-inset);
+  overflow: hidden; /* 圆角裁住头部底色 */
+}
+
+.rd-ocr-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.rd-ocr-title { font-weight: 600; }
+
+/* 整页文字可能很长：让它自己滚，别把页图挤出视野 */
+.rd-ocr-body {
+  max-height: 32vh;
+  overflow: auto;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
 /* 行内公式跟正文基线、略放大一档（KaTeX 自带字号偏小，中文正文里会显得扁） */
 .katex { font-size: 1.05em; }
 

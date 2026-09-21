@@ -7,8 +7,10 @@
      - 内嵌（知识库页）：传 host → 把同一套头部/正文/状态栏挂进右栏，
        常驻显示、不遮挡，读文档就在这一栏里读，不再弹浮层。
 
-   安全：正文与标题全来自用户语料，**本模块不出现 innerHTML**——一律走
-   el() 的文本子节点；iframe 的 src 只由 Number() 化的 id 与页码拼成。
+   安全：正文与标题全来自用户语料，一律走 el() 的文本子节点；iframe 的 src
+   只由 Number() 化的 id 与页码拼成。**唯一例外**是「识别本页」的结果——
+   那是视觉模型的输出（不可信文本），走共享渲染器 renderAnswer（它内部先整体
+   转义再做受控替换，与问答页同一条路），公式顺带按 KaTeX 排版。
 
    两个视图：
      - **文本**：`/api/documents/{id}/content` 的 {text, chunks} → buildPlan
@@ -20,7 +22,8 @@
        28MB 的 PDF 不该常驻内存。
    ========================================================================= */
 
-import { apiFetch, el, toast } from "./common.js";
+import { apiFetch, el, errorMessage, renderAnswer, toast } from "./common.js";
+import { compressImage } from "./image-util.js";
 import { buildPlan, pageMax } from "./reader-view.js";
 
 let root = null; // 浮层的面板根 / 内嵌的容器根
@@ -169,6 +172,16 @@ export function initReader(host = null, { onClose = null } = {}) {
     "切换为连续滚动"
   );
   const pageLabel = el("span", { class: "rd-page-label" }, "");
+  // 「识别本页」（A 档 d，2026-09-21）：把当前页图交给识图端点认成文字。
+  // 复用两条**现成**链路——页图 `/api/documents/{id}/page/{n}.png`（同源，浏览器
+  // 本来就在显示它）+ `/api/notes/ocr`（收 multipart、验魔数、12MB 上限、未接入
+  // 视觉模型时回一句可照做的 400）。所以这是纯前端新功能，不新增服务端代码。
+  const ocrBtn = el(
+    "button",
+    { class: "btn", type: "button", id: "rd-ocr", title: "把这一页认成文字（需先接入视觉模型）" },
+    "识别本页"
+  );
+  const ocrBox = el("div", { class: "rd-ocr hidden" });
   const pageView = el(
     "div",
     { class: "rd-page-view hidden" },
@@ -177,8 +190,10 @@ export function initReader(host = null, { onClose = null } = {}) {
       { class: "rd-page-bar" },
       el("div", { class: "rd-pager" }, pagePrev, pageNext),
       pageLabel,
-      pageModeBtn
+      pageModeBtn,
+      ocrBtn
     ),
+    ocrBox,
     pageCanvas
   );
   const body = el("div", { class: "rd-body" }, text, orig, pageView);
@@ -214,6 +229,8 @@ export function initReader(host = null, { onClose = null } = {}) {
     pageNext,
     pageModeBtn,
     pageLabel,
+    ocrBtn,
+    ocrBox,
     zoomOut,
     zoomIn,
     zoomRange,
@@ -231,6 +248,7 @@ export function initReader(host = null, { onClose = null } = {}) {
   });
   pagePrev.addEventListener("click", () => showPage(currentPage - 1));
   pageNext.addEventListener("click", () => showPage(currentPage + 1));
+  ocrBtn.addEventListener("click", () => void ocrCurrentPage());
   pageModeBtn.addEventListener("click", () =>
     setPageMode(pageMode === "single" ? "scroll" : "single")
   );
@@ -626,12 +644,94 @@ function makeHighlights(rects) {
  * 连续模式一次建全部页节点，但图片是 `loading="lazy"`：滚到哪儿才加载哪儿，
  * 不会把 301 页全拉下来。
  */
+/**
+ * 「识别本页」（A 档 d）：把**当前这一页**的页图交给识图端点，认成文字/LaTeX。
+ *
+ * 为什么是纯前端：两条链路都已存在——页图 `/api/documents/{id}/page/{n}.png`
+ * （同源，阅读器本来就在显示它）与识图端点 `/api/notes/ocr`（收 multipart、
+ * 按魔数验图、12MB 上限、未接入视觉模型时回一句可照做的 400）。复用它们意味着
+ * 这条新入口**不引入任何新的服务端面**。
+ *
+ * 失败一律如实显示（含"还没接入视觉模型"那句指引）：识别是辅助，不该挡住阅读。
+ */
+async function ocrCurrentPage() {
+  if (!cache || !refs || !isPdf) return;
+  const page = currentPage;
+  const btn = refs.ocrBtn;
+  btn.disabled = true;
+  btn.textContent = "识别中…";
+  try {
+    const shot = await fetch(`/api/documents/${cache.docId}/page/${page}.png`);
+    if (!shot.ok) throw new Error(`取页面图失败（HTTP ${shot.status}）`);
+    // 页图是 PNG（可能几 MB 甚至十几 MB，端点上限 12MB），先压成长边 1600 的 JPEG
+    // ——与笔记编辑器识图走同一个 compressImage，识别效果一样、上传体积小一个量级。
+    const jpeg = await compressImage(await shot.blob());
+    const form = new FormData();
+    form.append("file", jpeg, `page-${page}.jpeg`);
+    const resp = await fetch("/api/notes/ocr", { method: "POST", body: form });
+    const body = await resp.json().catch(() => null);
+    if (!resp.ok) throw new Error(errorMessage(body, null, resp.status));
+    const text = (body?.text || "").trim();
+    if (!text) throw new Error("识别结果是空的（这一页可能是纯图，或字太小）");
+    showOcrResult(page, text);
+  } catch (err) {
+    toast(`识别失败：${err.message || err}`, "error");
+  } finally {
+    if (refs && refs.ocrBtn) {
+      refs.ocrBtn.disabled = false;
+      refs.ocrBtn.textContent = "识别本页";
+    }
+  }
+}
+
+/**
+ * 展示识别结果：一行说明 + 「复制」（复制**原文**，方便贴进笔记）+ 正文。
+ *
+ * 正文走 renderAnswer：它先整体转义再做受控替换（与本模块其它地方同一条安全
+ * 口径），顺带把公式按 KaTeX 排版——OCR 出来的 LaTeX 直接肉眼可读。
+ */
+function showOcrResult(page, text) {
+  if (!refs) return;
+  const copy = el("button", { class: "btn-copy", type: "button", title: "复制识别原文" }, "复制");
+  copy.addEventListener("click", () => {
+    const write = navigator.clipboard?.writeText?.(text);
+    if (!write) {
+      toast("复制失败：当前环境不给剪贴板权限", "warn");
+      return;
+    }
+    void write.then(
+      () => toast("识别原文已复制", "ok"),
+      () => toast("复制失败：浏览器没给剪贴板权限", "warn")
+    );
+  });
+  const body = el("div", { class: "rd-ocr-body" });
+  // 唯一的 innerHTML：内容来自 renderAnswer（内部整体转义 + 受控替换），
+  // 见模块头那条"安全"说明。
+  body.innerHTML = renderAnswer(text, [], false);
+  const close = el("button", { class: "btn-copy", type: "button", title: "收起" }, "收起");
+  close.addEventListener("click", () => refs.ocrBox.classList.add("hidden"));
+  refs.ocrBox.replaceChildren(
+    el(
+      "div",
+      { class: "rd-ocr-head" },
+      el("span", { class: "rd-ocr-title" }, `识别结果 · 第 ${page} 页`),
+      el("span", { class: "grow" }),
+      copy,
+      close
+    ),
+    body
+  );
+  refs.ocrBox.classList.remove("hidden");
+}
+
 async function showPage(n, rects = null) {
   if (!cache || !isPdf) return;
   const total = cache.data.file_pages ?? 0;
   const page = Math.min(Math.max(1, Number(n) || 1), total || 1);
   currentPage = page;
   updatePageBar(total);
+  // 识别结果属于"某一页"：换页就收起来，免得看错页（重开一次很便宜）
+  refs.ocrBox.classList.add("hidden");
 
   // 换页/换模式前先断开旧文字层的尺寸观察者（否则观察者会一直持有已移除的节点）
   refs.pageCanvas.querySelectorAll(".rd-textlayer").forEach((l) => l._ro?.disconnect());

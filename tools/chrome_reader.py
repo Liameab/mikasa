@@ -257,6 +257,72 @@ async def run(args):
             if pdf_state["labels"]:
                 bad.append(f"缩放控件不该再有字号钮：{pdf_state['labels']!r}")
 
+            # ---- 可选：把面板的 DOM 结构抄下来（--dump-dom）----
+            # 为什么需要：写 E2E 断言的人（或另一个 agent）未必跑得起来浏览器
+            # （沙箱里 CDP 会被拦），而"猜选择器"是这类测试最常见的返工来源。
+            # 这里输出的是**真实渲染后**的树：tag#id.class + 短文本，够写断言。
+            if args.dump_dom is not None:
+                tree = await cdp.evaluate(
+                    # r-string：里面的正则与 \n 要原样交给 JS（普通字符串会把
+                    # \n 提前变成真换行，JS 侧直接语法错误——这里踩过一次）
+                    r"""(() => {
+                      // 两种形态都要认：知识库页是内嵌（#reader-inline），
+                      // 问答页是浮层（#reader-panel）——只写一个会抄到空
+                      const root = document.querySelector('#reader-panel')
+                        || document.querySelector('#reader-inline')
+                        || document.querySelector('#reading-card');
+                      if (!root) return '(这一页没有阅读器容器)';
+                      const lines = [];
+                      const SHOW_TEXT = new Set(['BUTTON','SPAN','LABEL','H3','H4','DIV','P']);
+                      const walk = (node, depth) => {
+                        if (depth > 6 || lines.length > 220) return;
+                        for (const child of node.children) {
+                          const id = child.id ? '#' + child.id : '';
+                          const cls = child.className && typeof child.className === 'string'
+                            ? '.' + child.className.trim().split(/\s+/).join('.') : '';
+                          let text = '';
+                          if (SHOW_TEXT.has(child.tagName)) {
+                            text = (child.childElementCount === 0 ? child.textContent : '')
+                              .trim().slice(0, 28);
+                          }
+                          lines.push('  '.repeat(depth) + child.tagName.toLowerCase() + id + cls
+                            + (text ? '  «' + text + '»' : '')
+                            + (child.classList.contains('hidden') ? '  [hidden]' : ''));
+                          walk(child, depth + 1);
+                        }
+                      };
+                      walk(root, 0);
+                      return lines.join('\n');
+                    })()"""
+                )
+                if args.dump_dom:
+                    Path(args.dump_dom).write_text(tree, encoding="utf-8")
+                    log(f"DOM 结构已写入：{args.dump_dom}")
+                else:
+                    print(tree)
+
+            # ---- 2.6) 「识别本页」（A 档 d，2026-09-21）----
+            # 隔离服务器跑的是 offline 档（没有任何视觉模型）→ 识图端点回 400 与
+            # 那句可照做的指引。所以这条断言验的是**按钮接上了、点了会如实说话**：
+            # 真识图效果由 tools/smoke_ollama_vision.py（真机 + 真模型）覆盖，
+            # 这里不引入外部服务（E2E 的纪律：不发真请求到第三方）。
+            ocr_label = await cdp.evaluate(
+                "document.querySelector('#rd-ocr')?.textContent?.trim() || ''"
+            )
+            if ocr_label != "识别本页":
+                bad.append(f"页面视图缺少「识别本页」按钮：{ocr_label!r}")
+            await cdp.evaluate("document.querySelector('#rd-ocr')?.click()")
+            await wait_until(
+                cdp,
+                "(() => { const t = document.querySelector('#toast')?.textContent || '';"
+                " return t.includes('视觉模型') || t.includes('识别失败'); })()",
+                "点「识别本页」后的提示",
+            )
+            ocr_hint = await cdp.evaluate("document.querySelector('#toast')?.textContent || ''")
+            if "视觉模型" not in ocr_hint:
+                # 未接入视觉模型时必须给出"怎么接"的原话，而不是一句"识别失败"了事
+                bad.append(f"未接入视觉模型时应给出可照做的提示，实得：{ocr_hint!r}")
+
             # ---- 3) 切回 md 文档，再切"原文件"标签：md 原文含 # 标题行 ----
             # 注意：**不能**用 `#rd-tab-file` 文案判断"有没有切回 md"——PDF 的第二
             # 个标签文案同样是「原文件」，切失败也照样通过，于是错误被推迟到几步之后
@@ -360,7 +426,14 @@ async def run(args):
                 "Esc 关闭面板",
             )
 
-            errors = cdp.errors
+            # console 体检：**预期内的 4xx 要精确豁免，别的一律不放过**。
+            # 2.6 段点「识别本页」时，隔离服务器是 offline 档（没有视觉模型）→
+            # /api/notes/ocr 如实回 400 → 浏览器在 console 记一条 "Failed to load
+            # resource … 400"。那条 400 正是那一段在断言的行为（"点了会如实说话"），
+            # 不豁免的话 E2E 会因为"验的东西本身"而红（2026-09-21 实测到）。
+            # 豁免只按 URL + 状态码匹配，其他任何 console 错误照旧判失败。
+            allowed = [e for e in cdp.errors if "/api/notes/ocr" in e and "400" in e]
+            errors = [e for e in cdp.errors if e not in allowed]
             if errors:
                 bad.append(f"console 有 {len(errors)} 条错误：{errors[:3]}")
     finally:
@@ -381,6 +454,13 @@ async def run(args):
 def main():
     parser = argparse.ArgumentParser(description="无头 Chrome 阅读面板 E2E 验收")
     parser.add_argument("--out-shot", default=None, help="截图输出路径（PNG）")
+    parser.add_argument(
+        "--dump-dom",
+        nargs="?",
+        const="",
+        default=None,
+        help="把阅读器面板的 DOM 结构打到 stdout（或指定文件）——写断言前先看结构用",
+    )
     parser.add_argument("--server-port", type=int, default=None)
     parser.add_argument("--cdp-port", type=int, default=None)
     parser.add_argument(
