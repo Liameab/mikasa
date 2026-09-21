@@ -373,10 +373,23 @@ def main() -> int:
     parser.add_argument("--out-shot", default="")
     parser.add_argument(
         "--chrome",
-        default=os.environ.get("CHROME_PATH", "chrome"),
-        help="Chrome 可执行文件（默认 PATH 里的 chrome）",
+        default=os.environ.get(
+            "CHROME_PATH", r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        ),
+        help="Chrome 可执行文件（缺失时自动试 %LOCALAPPDATA% 下的安装）",
     )
     args = parser.parse_args()
+    # 与 chrome_probe 同款兜底：个人机器上 Chrome 常装在用户目录而不是 Program Files
+    if not Path(args.chrome).exists():
+        alt = (
+            Path(os.environ.get("LOCALAPPDATA", ""))
+            / "Google"
+            / "Chrome"
+            / "Application"
+            / "chrome.exe"
+        )
+        if alt.exists():
+            args.chrome = str(alt)
     return asyncio.run(_run(args))
 
 
