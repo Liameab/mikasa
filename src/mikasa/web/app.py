@@ -28,8 +28,10 @@ from mikasa import __version__
 from mikasa.config.settings import Settings
 from mikasa.errors import ProviderError, ZhiwenError, strip_paths
 from mikasa.utils.logging import get_logger
+from mikasa.web import auth
 from mikasa.web.limits import BodySizeLimit, body_limit_bytes
 from mikasa.web.origin_guard import CrossSiteWriteGuard
+from mikasa.web.routers import auth as auth_router
 from mikasa.web.routers import documents, eval, health, images, qa, sessions
 from mikasa.web.routers.papers import router as papers_router
 from mikasa.web.routers.settings import router as settings_router
@@ -92,6 +94,13 @@ def create_app(settings: Settings) -> FastAPI:
     app.add_middleware(BodySizeLimit, max_bytes=body_limit_bytes(settings.web.upload_max_mb))
     # ---- 跨站写请求闸门：任何网页都能对本机服务发简单请求（见 origin_guard 模块头） ----
     app.add_middleware(CrossSiteWriteGuard)
+    # 访问口令门（ADR-0033）：**最后加 = 最外层**——未授权的请求在解析请求体
+    # 之前就被挡回去。只在绑定了非回环地址时生效，本机自用与既有测试零影响。
+    app.add_middleware(
+        auth.AuthGate,
+        data_dir=settings.data_dir,
+        enabled=not auth.is_loopback_host(settings.web.host),
+    )
 
     # ---- 页面与静态资源（演示时浏览器直开 / 即首页） ----
     # 字体类型要先注册：Windows 的注册表里查不到 .woff2/.woff/.ttf（实测
@@ -112,6 +121,7 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(settings_router)
     app.include_router(papers_router)
     app.include_router(images.router)
+    app.include_router(auth_router.router)
     app.include_router(update_router)
 
     # ---- 异常 → 统一错误 JSON（路由内不散落 try/except） ----

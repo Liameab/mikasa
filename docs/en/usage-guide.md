@@ -30,6 +30,47 @@ Three profiles: `api` (DeepSeek generation + SiliconFlow embeddings/reranking, b
 
 ---
 
+## 2b. Opening it from a phone or another computer (LAN access and a password)
+
+Mikasa is a web app - the desktop build just wraps it in a window. So on the **same WiFi**,
+a phone, tablet or another computer can use it straight from a browser (see ADR-0033).
+
+**Four commands cover it**:
+
+```bash
+# 1) Set an access password (stored only in the local data directory, salted hash,
+#    never plaintext; at least 6 characters)
+mikasa auth set-password
+
+# 2) Open it to the network (without --host it binds 127.0.0.1 only, reachable
+#    from this machine alone)
+mikasa serve --host 0.0.0.0
+
+# 3) Note the address the banner prints (like http://192.168.1.23:8000/) and open it
+#    on the phone: the first visit shows a login page - type that password
+
+# 4) Change or remove it
+mikasa auth set-password      # setting it again rotates it (**every signed-in device is kicked out**)
+mikasa auth clear-password    # after this, a 0.0.0.0 bind is refused again
+```
+
+**Worth being explicit about**:
+
+- **This machine never needs the password**: anyone who can reach `127.0.0.1` is already
+  sitting in front of the computer; making yourself log in daily would buy nothing.
+- **Without a password the LAN bind refuses to start**: `--host 0.0.0.0` exits and tells you
+  what to run. That is deliberate - otherwise anyone on the same WiFi could read your
+  documents, delete them, and spend your model quota (the key lives in the server config).
+- **The data still lives only on your computer**: the phone is a remote control, nothing is
+  uploaded anywhere and there is no third-party server. Someone who downloads Mikasa onto
+  their own machine sees **their own** empty library - everyone's data is separate by
+  construction.
+- **Inside the LAN the traffic is plain http**: fine on a network you trust (home, your own
+  phone hotspot); do not do it on one you do not.
+- **The installed build works the same**: put `web.host: 0.0.0.0` in
+  `%LOCALAPPDATA%\Mikasa\config.yaml` (and set the password with
+  `Mikasa.exe auth set-password`).
+
 ## 3. Page Tour
 
 Three pages in the top bar: **Chat** (home) / **Library** / **Evaluation**; the status pill in the top right shows the current model and the live connection state.

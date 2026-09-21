@@ -671,6 +671,65 @@ def eval_list(
 
 
 # ---- index 子命令组（index stats / index rebuild 由 ingest --reindex 覆盖） ----
+_auth_app = typer.Typer(
+    help="访问口令（开给局域网/公网前必须设；见 ADR-0033）", no_args_is_help=True
+)
+app.add_typer(_auth_app, name="auth")
+
+
+@_auth_app.command(name="set-password")
+def auth_set_password(
+    profile: PROFILE_OPT = "api",
+    config: CONFIG_OPT = None,
+) -> None:
+    """设置（或更换）访问口令：换一次即让所有旧会话立刻失效。
+
+    口令写在数据目录的 auth.json（PBKDF2-HMAC-SHA256 加盐哈希，不存明文）。
+    **绑定了非回环地址（--host 0.0.0.0）时没设口令会拒绝启动**——局域网里
+    任何人都能读你的资料、花你的额度，这道门是必须的。
+    """
+    import getpass
+
+    from mikasa.web import auth
+
+    settings = load_settings(profile, config)
+    console = Console()
+    console.print("[bold]设置 Mikasa 访问口令[/]（只存本机数据目录，不存明文）")
+    first = getpass.getpass("输入口令：")
+    if not first:
+        console.print("[red]口令不能为空。[/]")
+        raise typer.Exit(code=1)
+    if len(first) < 6:
+        console.print("[red]口令太短[/]：局域网里这是唯一一道门，至少 6 位。")
+        raise typer.Exit(code=1)
+    again = getpass.getpass("再输一次：")
+    if first != again:
+        console.print("[red]两次输入不一致，未改动。[/]")
+        raise typer.Exit(code=1)
+    auth.set_password(settings.data_dir, first)
+    console.print(
+        f"[green]已设置[/]（{auth.auth_file(settings.data_dir)}）\n"
+        "现在可以： [bold]mikasa serve --host 0.0.0.0[/]，"
+        "同网络的手机/电脑用浏览器打开服务地址，输入这道口令即可使用。"
+    )
+
+
+@_auth_app.command(name="clear-password")
+def auth_clear_password(
+    profile: PROFILE_OPT = "api",
+    config: CONFIG_OPT = None,
+) -> None:
+    """删掉访问口令（之后非回环绑定会被拒绝启动；本机自用不受影响）。"""
+    from mikasa.web import auth
+
+    settings = load_settings(profile, config)
+    console = Console()
+    if auth.clear_password(settings.data_dir):
+        console.print("[green]已删除访问口令。[/]本机自用不受影响。")
+    else:
+        console.print("本来就没有设过口令。")
+
+
 _index_app = typer.Typer(
     help="索引状态与维护（stats 查看；重建用 ingest --reindex）", no_args_is_help=True
 )
@@ -789,6 +848,32 @@ def serve(
     settings = load_settings(profile or "api", config)
     listen_host = host or settings.web.host
     listen_port = port or settings.web.port
+    # **把生效的监听地址写回 settings**：口令门（ADR-0033）与横幅都读
+    # `settings.web.host`，而 --host 只在本地变量里——不写回就会出现
+    # "命令行开了 0.0.0.0、门却以为还在本机"的空门（2026-09-21 实测踩到）。
+    if listen_host != settings.web.host or listen_port != settings.web.port:
+        settings = settings.model_copy(
+            update={
+                "web": settings.web.model_copy(update={"host": listen_host, "port": listen_port})
+            }
+        )
+
+    # ---- 口令闸门（ADR-0033）：**没设口令就不许开给局域网** ----
+    # 理由：这类绑定之后，同一网络里任何人都能读/删你的资料、花你的 API 额度
+    # （密钥就在服务端配置里）。宁可拒绝启动、给一条能照做的命令，也不默认裸奔。
+    from mikasa.web import auth as auth_module
+
+    if not auth_module.is_loopback_host(listen_host) and not auth_module.is_configured(
+        settings.data_dir
+    ):
+        console.print(
+            "[red]绑定了非本机地址，但还没有设置访问口令[/]——\n"
+            "  这样同一网络里的任何人都能读你的知识库、删你的文档，"
+            "还能用你配置的模型额度。\n\n"
+            "  先设口令再启动： [bold]mikasa auth set-password[/]\n"
+            "  只想本机自用：去掉 --host（默认 127.0.0.1，不需要口令）。"
+        )
+        raise typer.Exit(code=1)
 
     # ---- 横幅：配置实况 + 访问地址（uvicorn 日志前的第一屏） ----
     with open_db(settings.db_path) as conn:

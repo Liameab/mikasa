@@ -573,8 +573,16 @@ def test_serve_reload_rejects_explicit_profile(tmp_path, monkeypatch):
 
 
 def test_serve_host_port_override(tmp_path, monkeypatch):
-    """--host/--port 覆盖配置默认值。"""
+    """--host/--port 覆盖配置默认值。
+
+    注意：`--host 0.0.0.0` 现在还要过口令闸门（ADR-0033），所以这里先设一个
+    口令——这条测的是"覆盖生效"，闸门本身另有专门用例。
+    """
     calls = _serve_args_capture(monkeypatch, tmp_path)
+    from mikasa.web import auth
+
+    # 口令要写进 **CLI 实际会读的那个** data_dir（_isolate 已把它换成 tmp_path/data）
+    auth.set_password(cli.load_settings().data_dir, "a-secret-password")
     result = runner.invoke(
         app, ["serve", "--profile", "offline", "--host", "0.0.0.0", "--port", "9000"]
     )
@@ -664,3 +672,33 @@ def test_print_answer_keeps_bracket_text():
     assert "arr[i]" in out, "正文里的方括号被 markup 吞掉了"
     assert "[x]" in out
     assert "paper[2024]notes.md" in out, "引用标题里的方括号被吞掉了"
+
+
+def test_serve_refuses_lan_bind_without_password(tmp_path, monkeypatch):
+    """绑非回环地址但没设口令 → 拒绝启动（ADR-0033 的 fail-closed）。
+
+    这条闸门是"开给局域网"与"我的资料谁都看得见"之间的第一道防线：
+    serve 直接退出，并给出一条能照做的命令。
+    """
+    from typer.testing import CliRunner
+
+    import mikasa.cli as cli_mod
+
+    monkeypatch.setenv("MIKASA_DATA_DIR", str(tmp_path / "data"))
+    result = CliRunner().invoke(cli_mod.app, ["serve", "--profile", "offline", "--host", "0.0.0.0"])
+
+    assert result.exit_code == 1
+    assert "还没有设置访问口令" in result.output
+    assert "mikasa auth set-password" in result.output
+
+
+def test_auth_set_password_then_serve_gate_opens(tmp_path, monkeypatch):
+    """设过口令之后，闸门放行（不再拦）——证明两条路的判据是同一个。"""
+    from mikasa.config.settings import load_settings
+    from mikasa.web import auth
+
+    monkeypatch.setenv("MIKASA_DATA_DIR", str(tmp_path / "data"))
+    settings = load_settings("offline")
+    assert auth.is_configured(settings.data_dir) is False
+    auth.set_password(settings.data_dir, "a-secret-password")
+    assert auth.is_configured(settings.data_dir) is True

@@ -58,6 +58,7 @@
 | ADR-0030 | The embedding model ships with the app: pinned revision, fetched at build time, seeded at runtime | Accepted |
 | ADR-0031 | Text-to-image: a separate section, bytes on disk, same-origin images only | Accepted |
 | ADR-0032 | Model sources: cloud presets (Claude / OpenAI) and an in-app local-model pull | Accepted |
+| ADR-0033 | Browser access and a shared password: exposing the service requires a password (fail closed) | Accepted |
 
 ---
 
@@ -2006,3 +2007,80 @@ legs: make the cloud one click away, and turn the two-step local setup into one.
 `index.html`, `style.css`; tests `tests/unit/web/test_ollama_pull_api.py` (11 cases), E2E
 `tools/chrome_ollama_pull.py` (its own fake Ollama; asserts that progress really advances and
 that the model name really reaches /api/pull).
+
+## ADR-0033 Browser access and a shared password: exposing the service requires a password (fail closed)
+
+**Context**: on 2026-09-21 the user asked for a "browser version" (*"the browser and the app
+should both work; the browser updates in real time, which is more convenient"*) and stated the
+boundary just as clearly: *"I want everyone's data to be independent after they download it -
+not that anyone can see my materials"*.
+
+Together those point at one thing: **Mikasa has always been a web app** (the desktop build is
+just a pywebview shell), and "one data set per person" already holds in the **local install**
+shape (data lives in each user's own `%LOCALAPPDATA%\Mikasa`). The risk appears the moment the
+service is **opened to the network**: with `--host 0.0.0.0`, **anyone** on the same WiFi can
+read your documents, delete them, and spend your model quota (the key lives in the server-side
+config).
+
+**Decision**:
+
+1. **Browser/LAN access is a first-class entry point**: `mikasa serve --host 0.0.0.0` (or
+   `web.host` in the config), then open the address from a phone, tablet or another computer -
+   all three pages, asking, the library and the papers page work (the UI was always
+   responsive).
+2. **A non-loopback bind requires a password; without one the server refuses to start**
+   (fail closed): `serve --host 0.0.0.0` exits and prints the command that fixes it
+   (`mikasa auth set-password`). Better to refuse than to run wide open by default.
+3. **Password and session** (standard library only, no new dependencies):
+   - password: PBKDF2-HMAC-SHA256 (200k iterations, 16-byte salt) written to
+     `<data dir>/auth.json` - **no plaintext anywhere**;
+   - session: an **HMAC-signed expiry timestamp** (30 days by default) - no server state, no
+     database table; **changing the password rotates the signing key, so every old session
+     dies immediately** (no invalidation list needed);
+   - **loopback sources are exempt**: the local browser and the desktop shell keep working with
+     no friction - anyone who can reach 127.0.0.1 is already sitting at your machine.
+4. **One criterion for the gate**: is the source address loopback? Page requests get a 302 to
+   `/login` (carrying `next` for the way back); API requests get 401 JSON. The login page is
+   self-contained HTML (it pulls no static assets - those are behind the gate too).
+5. **No account system**: this solves "others cannot see it". Multi-user (per-user data
+   directories, sign-up/sign-in) and cloud hosting are a separate milestone; the "independent
+   data per person" the user asked for already holds in the "each person installs their own"
+   shape.
+
+**Field notes and a real trap** (2026-09-21):
+
+- **An empty gate**: the gate's on/off switch read `settings.web.host`, while `--host` was only
+  a local variable inside serve - so the command line said `0.0.0.0` and the gate still
+  believed it was loopback, and a request to the LAN address came back **200** (measured). The
+  fix is for serve to **write the effective address back into settings** so the banner, the
+  gate and uvicorn all see one value. Lesson: when a second consumer appears for a fact ("where
+  is this bound right now"), both must read it from the same place.
+- **Connecting from this machine to its own LAN IP is correctly seen as non-loopback** (not
+  127.0.0.1), which is what lets the E2E simulate a LAN client honestly by using the NIC
+  address; `TestClient(client=(host, port))` impersonates any source address in unit tests.
+- **Real-browser E2E** (`tools/chrome_lan_login.py`): bind 0.0.0.0, open the LAN address, land
+  on the login page (deep link keeps `next`), a wrong password gives 401 with a message, the
+  right one returns to the original deep link, an authenticated API call goes through, opening
+  the root while signed in skips the login page, console clean.
+
+**Costs and boundaries**:
+
+- The cookie is **not `Secure`**: LAN runs over plain http, and a Secure cookie would simply not
+  be sent. To face the public internet, put it behind an **HTTPS reverse proxy** - and note the
+  one thing that must change first: **the current criterion is the TCP source address**, and
+  behind a proxy every request comes from the proxy (loopback/internal), so it would be treated
+  as exempt. A hosted version must read `X-Forwarded-For` (and trust only its own proxy).
+- The password is **one shared key** (whoever has it is in), not a per-person identity; distinct
+  people with distinct permissions wait for the account milestone.
+- Traffic inside the LAN is still **plain http**: a sniffer on the same segment can read
+  everything. Fine on a network you trust (home, phone hotspot); use cloud hosting with HTTPS
+  otherwise.
+- The gate guards the HTTP layer only: **binding a non-loopback address exposes the port** - do
+  not do that on a network you do not trust.
+
+**Code**: `web/auth.py` (password/session/`AuthGate`/login page), `web/routers/auth.py` (three
+endpoints), `web/app.py` (installs the gate last, i.e. outermost), `cli/__init__.py`
+(`mikasa auth set-password` / `clear-password`, the fail-closed serve gate, and writing the
+effective address back), `tests/unit/web/test_auth_gate.py` (15 cases),
+`tests/unit/cli/test_cli.py` (two gate cases), E2E `tools/chrome_lan_login.py` (with a login
+page screenshot).
