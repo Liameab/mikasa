@@ -139,30 +139,51 @@ def payload_bytes(dest: Path) -> int:
     return sum(p.stat().st_size for p in dest.rglob("*") if p.is_file())
 
 
+def _rmtree_force(path: Path) -> None:
+    """删目录：先清只读位（Windows 上 HF 写的 blob 可能是只读的），删不掉留痕。"""
+    for item in sorted(path.rglob("*"), reverse=True):
+        try:
+            if item.is_file():
+                item.chmod(0o666)
+        except OSError:
+            pass
+    shutil.rmtree(path, ignore_errors=True)
+    if path.exists():
+        log(f"  警告：{path} 没能删干净（可能有句柄占用），载荷可能仍带重复副本")
+
+
 def _drop_blob_duplicates(dest: Path) -> int:
     """删掉 `blobs/`：snapshots 里已是真文件时，blobs 就是同一份数据的第二副本。
 
     为什么必须做：**HF 的传输后端不同，缓存形状不同**——走 Xet（CI 直连时的
-    默认）会写 `blobs/<etag>` 真文件 + `snapshots/<rev>/文件` 副本；走普通
-    HTTP（镜像、或关了 Xet）只写 snapshots（本机缓存就是这样，blobs 是空的）。
-    而 PyInstaller 会把两份都收进载荷：同一个 91MB 模型在包里出现两次
-    （2026-09-21 CI 实测：zip 263.6MB 而不是预期的 165MB、安装包 204MB 而不是
+    默认）会额外写一份真数据到 blobs；走普通 HTTP（镜像、或关了 Xet）只写
+    snapshots。而 PyInstaller 会把两份都收进载荷：同一个 91MB 模型在包里出现
+    两次（2026-09-21 CI 实测：zip 263.6MB 而不是 165MB、安装包 204MB 而不是
     127MB——差值正是那 91MB）。
+
+    **blobs 有两种落点，两种都要清**（第一版只看仓库级，结果什么都没删掉、
+    载荷仍是 181.2MB，靠 `--check` 才拦住）：
+      - 仓库级 `models--ORG--NAME/blobs/`（普通 HTTP 下载、本机缓存是这个形状）；
+      - **缓存根级** `blobs/`（Xet 传输；CI 现场实测 3 个文件 90.4MB）。
 
     删之前逐个确认 snapshots 里都是**真文件**（不是指向 blobs 的符号链接）：
     是链接就先落成真文件再删，否则会把数据删没。返回释放的字节数。
     """
-    repo = repo_dir(dest)
-    blobs = repo / "blobs"
-    if not blobs.is_dir():
-        return 0
-    for path in sorted(repo.joinpath("snapshots").rglob("*")):
-        if path.is_symlink():
-            data = path.read_bytes()  # 顺着链接读真数据
-            path.unlink()
-            path.write_bytes(data)
-    freed = sum(p.stat().st_size for p in blobs.rglob("*") if p.is_file())
-    shutil.rmtree(blobs, ignore_errors=True)
+    freed = 0
+    # 所有仓库目录（正常只有一个；通配是为了将来多模型时也不漏）
+    repos = [d for d in dest.glob("models--*") if d.is_dir()]
+    for repo in repos:
+        snapshots = repo / "snapshots"
+        for path in sorted(snapshots.rglob("*")) if snapshots.is_dir() else []:
+            if path.is_symlink():
+                data = path.read_bytes()  # 顺着链接读真数据
+                path.unlink()
+                path.write_bytes(data)
+    for blobs in [*(d / "blobs" for d in repos), dest / "blobs"]:
+        if not blobs.is_dir():
+            continue
+        freed += sum(p.stat().st_size for p in blobs.rglob("*") if p.is_file())
+        _rmtree_force(blobs)
     if freed:
         log(f"  清理 blobs/ 重复副本：{freed / 1048576:.1f} MB")
     return freed
