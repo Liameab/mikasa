@@ -44,12 +44,17 @@ ollamamodels/
 # ===== 内部工作文档（不进公开仓库） =====
 # 项目私人总账：含个人进度、待办与协作记录，非项目文档
 docs/ideas-and-backlog.md
+# Codex 会话的交接文档：给下一个会话读的"我这摊还差什么"，同属内部工作文档
+docs/codex-handover.md
 
 # ===== 本地工具产物与配置 =====
 # 无头 Chrome 验收截图
 tools/shots/
 # 本地 AI 工具配置
 .claude/
+# 本机实验产物：npm 缓存（数百 MB）与 Remotion 图表草稿——与产品无关
+.npm-cache/
+remotion-chart/
 # 桌面快捷方式（含本机绝对路径，对他人无意义）
 Mikasa.lnk
 
