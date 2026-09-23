@@ -50,16 +50,20 @@ class Generator:
         hits: list[RetrievedChunk],
         titles: dict[int, str],
         history_summary: str | None = None,
+        context: str | None = None,
     ) -> tuple[Answer, Completion]:
         """生成一次回答。
 
         参数：
             hits: 检索命中（行序即注入顺序，marker = 位次 + 1）
             titles: document_id -> 文档标题（引用展示）
+            context: 阅读器里用户选中的原文（可空；进提示词，不参与引用编号）
         返回：
             (Answer, Completion)：Answer 供展示/落库，Completion 供评测取用量。
         """
-        messages = self._build_messages(question, hits, titles, history_summary=history_summary)
+        messages = self._build_messages(
+            question, hits, titles, history_summary=history_summary, context=context
+        )
         completion = self._llm.complete(
             messages,
             temperature=self.settings.llm.temperature,
@@ -85,12 +89,15 @@ class Generator:
         hits: list[RetrievedChunk],
         titles: dict[int, str],
         history_summary: str | None = None,
+        context: str | None = None,
     ) -> list[dict[str, str]]:
         """证据注入的提示词组装：generate / stream_text 共用同一构造。"""
         sources = [
             (i + 1, self._describe(hit, titles), hit.chunk.content) for i, hit in enumerate(hits)
         ]
-        user_message = build_user_message(question, sources, history_summary=history_summary)
+        user_message = build_user_message(
+            question, sources, history_summary=history_summary, context=context
+        )
         return [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_message},
@@ -102,6 +109,7 @@ class Generator:
         hits: list[RetrievedChunk],
         titles: dict[int, str],
         history_summary: str | None = None,
+        context: str | None = None,
     ) -> Iterator[str]:
         """流式补全：按 LLM 的增量逐段产出正文文本（Web SSE 的数据源）。
 
@@ -109,7 +117,9 @@ class Generator:
         用量（AskService.ask_stream 的 done 事件里两字段为 None）；
         CLI / 评测的非流式 generate 不受影响。
         """
-        messages = self._build_messages(question, hits, titles, history_summary=history_summary)
+        messages = self._build_messages(
+            question, hits, titles, history_summary=history_summary, context=context
+        )
         yield from self._llm.stream(
             messages,
             temperature=self.settings.llm.temperature,

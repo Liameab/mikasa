@@ -113,3 +113,44 @@ def test_build_translate_to_zh_messages_structure():
     assert "【译文N】" in TRANSLATE_TO_ZH_SYSTEM_PROMPT
     assert "[n]" in TRANSLATE_TO_ZH_SYSTEM_PROMPT
     assert "不要解释" in TRANSLATE_TO_ZH_SYSTEM_PROMPT
+
+
+def test_context_section_precedes_sources():
+    """阅读器选中段（A 档 c）必须排在【资料片段】之前——顺序是硬约束。
+
+    MockLLM 的解析器只认【资料N】之后的行（之前的整段丢弃、之后的并入
+    上一个来源）：选中段放前面 → 离线档行为与不带上下文逐字相同；放后面
+    → 会被吞进最后一个来源，答案变味、拒答判定漂移。
+    """
+    from mikasa.pipeline.prompts import SECTION_READING
+
+    msg = build_user_message(
+        "这里说的 μ 是什么意思？", [(1, "《A》", "内容")], context="摩擦系数 μ"
+    )
+    assert msg.index(SECTION_READING) < msg.index(SECTION_SOURCES)
+    assert msg.index("摩擦系数 μ") < msg.index(SECTION_SOURCES)
+    assert msg.endswith("这里说的 μ 是什么意思？")
+
+    # 不带上下文时一个字符都不多（既有测试锁的提示词字符串不受影响）
+    plain = build_user_message("这里说的 μ 是什么意思？", [(1, "《A》", "内容")])
+    assert SECTION_READING not in plain
+
+    # mock 解析器对带上下文的输入与不带上下文**等价**（选中段被整段忽略）
+    from mikasa.providers.llm import MockLLM
+
+    def _answer(user_message: str) -> str:
+        return (
+            MockLLM()
+            .complete([{"role": "user", "content": user_message}], temperature=0.0, max_tokens=256)
+            .text
+        )
+
+    with_ctx = _answer(
+        build_user_message(
+            "什么是反向传播？", [(1, "笔记", "反向传播是链式法则。")], context="选中段"
+        )
+    )
+    without_ctx = _answer(
+        build_user_message("什么是反向传播？", [(1, "笔记", "反向传播是链式法则。")])
+    )
+    assert with_ctx == without_ctx

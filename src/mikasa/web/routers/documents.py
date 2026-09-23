@@ -37,7 +37,9 @@ import hashlib
 import os
 import re
 import shutil
+from collections.abc import Iterator
 from pathlib import Path, PureWindowsPath
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile
@@ -55,8 +57,16 @@ from mikasa.utils.hashing import sha256_file
 from mikasa.utils.logging import get_logger
 from mikasa.utils.text import decode_text
 from mikasa.web.deps import get_services, get_settings
-from mikasa.web.schemas import DocumentPatchIn, FolderIn, FolderPatchIn, NoteIn, NoteUpdateIn
+from mikasa.web.schemas import (
+    DocumentPatchIn,
+    FolderIn,
+    FolderPatchIn,
+    NoteIn,
+    NoteUpdateIn,
+    ReaderAskIn,
+)
 from mikasa.web.services import AppServices
+from mikasa.web.sse import sse_event, sse_response
 
 router = APIRouter(tags=["documents"])
 
@@ -460,6 +470,87 @@ def locate_chunk(
     }
 
 
+# ---------------------------------------------------------------------------
+# 阅读器「边看边问」（A 档 c，2026-09-22）
+# ---------------------------------------------------------------------------
+
+
+def _reader_frames(
+    services: AppServices,
+    doc_id: int,
+    title: str,
+    question: str,
+    *,
+    scope: Literal["doc", "all"],
+    context: str | None,
+) -> Iterator[str]:
+    """阅读器提问的事件流 → SSE 帧流（与 qa._to_frames 同构，形状不同故不共用）。
+
+    与问答页那条链路的差别：**没有会话**（不建、不落库、也就没有 finally
+    清理空会话那一套），多一个 `sources`（相关片段）载荷——meta 帧先给一遍
+    （前端可"先铺片段、答案再流出来"），done 帧给回填了引用标记的版本。
+    异常就地转 error 帧收尾：流已开始，全局异常处理器不生效（同 qa.py）。
+    """
+    try:
+        for ev in services.ask.ask_doc_stream(doc_id, question, scope=scope, context=context):
+            if ev.kind == "meta":
+                yield sse_event(
+                    "meta",
+                    {
+                        "document_id": doc_id,
+                        "scope": scope,
+                        "title": title,
+                        "sources": [s.model_dump(mode="json") for s in (ev.sources or [])],
+                    },
+                )
+            elif ev.kind == "delta":
+                yield sse_event("delta", {"text": ev.text})
+            else:  # done：完整 Answer + 回填后的相关片段
+                yield sse_event(
+                    "done",
+                    {
+                        "answer": ev.answer.model_dump(mode="json") if ev.answer else None,
+                        "sources": [s.model_dump(mode="json") for s in (ev.sources or [])],
+                    },
+                )
+    except Exception as exc:  # noqa: BLE001 - 流已开始，异常处理器不生效
+        # 业务错误（空库/空问题/上游失败）消息本就脱敏可回显；未预期异常
+        # 不回显细节（与 qa._to_frames 同口径）
+        message = str(exc) if isinstance(exc, ZhiwenError) else "生成中断：服务器内部错误"
+        yield sse_event("error", {"message": message})
+
+
+@router.post("/api/documents/{doc_id}/ask/stream")
+def ask_in_reader(
+    doc_id: int,
+    body: ReaderAskIn,
+    services: AppServices = Depends(get_services),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    """阅读器「边看边问」：就这篇文档提问，流式回答 + 相关片段一并回来。
+
+    **不建会话、不落库**（用户 2026-09-22 拍板：即问即散；问答页那条每问
+    必建会话的路绝不走）。scope="all" 是用户主动切的全库口径；scope="doc"
+    时文档必须有可检索的正文，否则检索本身无意义 → 400 可照做的文案。
+    两种失败都在流开始**之前**判定（流一旦开始就只能用 error 帧表达）。
+    """
+    with open_db(settings.db_path) as conn:
+        doc = repo.get_document(conn, doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="文档不存在（可能已被删除）")
+    if body.scope == "doc" and not doc.chunk_count:
+        raise HTTPException(
+            status_code=400,
+            detail="这篇文档还没有可检索的正文（可能入库未完成，或扫描件没做 OCR）"
+            "——可以先切「全库」提问，或到知识库页看它的识别状态",
+        )
+    return sse_response(
+        _reader_frames(
+            services, doc_id, doc.title, body.question, scope=body.scope, context=body.context
+        )
+    )
+
+
 @router.post("/api/documents", status_code=201)
 def upload_document(
     file: UploadFile,
@@ -655,6 +746,9 @@ def delete_document(
             if doc is None:
                 raise HTTPException(status_code=404, detail="文档不存在")
             repo.delete_document(conn, doc_id)
+            # 知识链（M6 ③）：两个方向一起清。不清的话关联列表里会留下指向
+            # 已删除文档的死链（点进去只有 404）——2026-09-20 删除链路评审的口径。
+            repo.delete_doc_links(conn, doc_id)
         # 删 uploads 副本：否则 reindex 会扫到它"复活"成新文档。
         # 必须先过容器校验——file_path 可能是历史脏值（项目改名前的
         # D:\Code\MyProject1\... 路径，实测 23 行里 21 行如此），无条件 unlink

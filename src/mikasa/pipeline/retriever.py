@@ -75,6 +75,7 @@ class Retriever:
         question: str,
         *,
         second_query: str | None = None,
+        document_id: int | None = None,
     ) -> tuple[list[RetrievedChunk], dict[str, float]]:
         """检索主流程；返回 (命中列表, 分段延迟毫秒)。延迟分段供评测统计 p95。
 
@@ -82,6 +83,17 @@ class Retriever:
         与主查询各跑一套 bm25+dense → 两路融合结果再 RRF 合流。英文路
         只在英文块上有分（中文块对它零命中），不会挤占主路中文结果；
         语义上天然按文档语言分流。None = 纯单路，行为与旧版一致。
+
+        document_id（阅读器「边看边问」的「只看本篇」，2026-09-22）：
+        限定只在某一篇文档的块里检索；None = 全库（默认，与旧版逐字节一致）。
+        做法是**行号 allow-list**：先按 `Chunk.document_id` 算出允许的行集合，
+        两条路都全取（`top_k=0`）后过滤，再走原来的 RRF/重排。
+
+        为什么是 allow-list 而不是 `Corpus.scoped(document_id)`：后者要重建
+        BM25，IDF/avgdl 变成"只在这篇里统计"——同一个问题在「本篇」与「全库」
+        两种范围下就不是"同一套检索的窄化"而是换了一套打分口径，用户切范围
+        看到的排序会莫名跳变；且还要复制向量子矩阵。allow-list 只改候选集、
+        不改任何分数，其余链路（RRF/重排/引用解析）原封不动。
         """
         lat: dict[str, float] = {}
 
@@ -91,17 +103,48 @@ class Retriever:
         store = self._dense_store
         dense_on = cfg.dense_enabled and store is not None
 
+        # 限定文档时的允许行集合（一次算好，两条路共用）
+        allowed_rows: set[int] | None = None
+        if document_id is not None:
+            allowed_rows = {
+                row for row, chunk in enumerate(corpus.chunks) if chunk.document_id == document_id
+            }
+            if not allowed_rows:
+                # 该文档不在快照里（已删/未入库）或没有块：空手而归。
+                # 不能退化成全库检索（那不是用户要的），也不让 dense 白跑一次全排序。
+                # 延迟键仍给全（调用方按固定键集取用，见 test_retriever 的断言）。
+                return [], {"retrieve": 0.0, "rerank": 0.0}
+
         def oneside(
             query: str,
         ) -> tuple[list[tuple[int, float]], list[tuple[int, float]], list[tuple[int, float]]]:
-            """单查询双路召回 + RRF：返回 (bm25_hits, dense_hits, fused)。"""
-            bm25_hits = corpus.bm25.search(query, top_k=cfg.bm25_top_k)
+            """单查询双路召回 + RRF：返回 (bm25_hits, dense_hits, fused)。
+
+            限定文档时必须**全取再过滤**：截断发生在 search 内部
+            （bm25_top_k/dense_top_k），先取全库 top-20 再过滤会把"本篇里
+            排名靠后的块"整批丢掉，小文档直接空结果。`top_k<=0` = 返回全部
+            是两个引擎**既有**的语义（bm25.py 的 `scores[:top_k] if top_k > 0
+            else scores`、vector_store.py 的 `top_k <= 0 or top_k >= scores.size`）。
+
+            过滤还必须发生在 `rrf_fuse` **之前**：RRF 只吃名次，若用全库名次
+            融合、再过滤，两路之间的区分度会被 k=60 压平（偏移几名几乎无差别），
+            排序质量静默变差——不报错，只是答案变味。
+            """
+            bm25_hits = corpus.bm25.search(
+                query, top_k=cfg.bm25_top_k if allowed_rows is None else 0
+            )
+            if allowed_rows is not None:
+                bm25_hits = [hit for hit in bm25_hits if hit[0] in allowed_rows]
             runs: list[list[int]] = [[row for row, _ in bm25_hits]]
             dense_hits: list[tuple[int, float]] = []
             if store is not None and dense_on:
                 query_vec = self._embedding.embed_query(query)
                 if query_vec.shape[0] > 0:
-                    dense_hits = store.search(query_vec, top_k=cfg.dense_top_k)
+                    dense_hits = store.search(
+                        query_vec, top_k=cfg.dense_top_k if allowed_rows is None else 0
+                    )
+                    if allowed_rows is not None:
+                        dense_hits = [hit for hit in dense_hits if hit[0] in allowed_rows]
                     runs.append([row for row, _ in dense_hits])
             return bm25_hits, dense_hits, rrf_fuse(runs, k=cfg.fusion_k)
 

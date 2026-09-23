@@ -29,6 +29,38 @@ class QuestionIn(BaseModel):
     mode: AnswerMode = Field(default="kb", description="kb=知识库检索；free=自由问答")
 
 
+# 阅读器选中原文的长度上限：够一整段（比问题宽一倍），又挡住"把整篇贴进去"
+# （提示词会被撑爆，检索查询也只截前 500 字用）。前端 normalizeSelection
+# 截在同一量级上，这条是服务端的兜底。
+READER_CONTEXT_MAX = 1000
+
+
+class ReaderAskIn(BaseModel):
+    """阅读器「边看边问」请求体（POST /api/documents/{id}/ask/stream）。
+
+    固定 kb 模式，**没有 mode 字段**（阅读器不复用自由问答的旁路）；
+    也**没有 session_id**——这条路不建会话、不落库（用户 2026-09-22 拍板）。
+    scope：doc=只在这篇文档里检索（默认）；all=全库。
+    context：用户在正文里选中的原文（可空），既进提示词也并进检索查询。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    question: str = Field(min_length=1, max_length=2000, description="问题正文")
+    scope: Literal["doc", "all"] = Field(default="doc", description="doc=只看本篇；all=全库")
+    context: str | None = Field(default=None, description="选中的原文（见长度校验）")
+
+    @field_validator("context")
+    @classmethod
+    def _context_within_limit(cls, value: str | None) -> str | None:
+        """选中段长度上限走校验器而不是 Field(max_length=…)：默认文案是英文
+        （会原样弹到中文界面），且会把整段选中文字回显进 422 响应体。
+        上限比问题宽（选中一整段很正常），但仍要挡住"整篇正文都塞进来"。"""
+        if value is not None and len(value) > READER_CONTEXT_MAX:
+            raise ValueError(f"选中的文字过长（上限 {READER_CONTEXT_MAX} 字符）")
+        return value
+
+
 class FolderIn(BaseModel):
     """新建文件夹请求体（POST /api/folders）。
 

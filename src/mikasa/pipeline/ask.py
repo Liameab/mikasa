@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Literal
 from mikasa.config.settings import Settings
 from mikasa.errors import ConfigError, StorageError
 from mikasa.index.manager import IndexManager
-from mikasa.models.answer import Answer
+from mikasa.models.answer import Answer, ReaderSource
 from mikasa.models.retrieval import RetrievedChunk
 from mikasa.pipeline.generator import Generator
 from mikasa.pipeline.prompts import (
@@ -85,6 +85,28 @@ def _neutralize_cite_markers(text: str) -> str:
     return _CITE_MARKER_RE.sub(lambda m: f"［{m.group(1)}］", text)
 
 
+# 阅读器主查询里上下文（用户选中的原文）的长度上限。与 _BILINGUAL_ORIGINAL_CAP
+# 同口径：本地 bge-small-zh-v1.5 的输入上限是 512 token，1000 字的选中段 +
+# 问题会被 embedding **静默截断**（截断发生在末尾）。所以拼查询时问题放最前、
+# 上下文截到这里为止——被砍掉的永远是上下文尾巴，问题永远不会被吃掉。
+_READER_QUERY_CONTEXT_CAP = 500
+
+
+def _reader_query(question: str, context: str | None) -> str:
+    """阅读器主查询 = 问题 + 选中原文（问题在前；无上下文时逐字返回问题）。
+
+    纯空白的 context（用户选中了空白、或前端传了空串）必须与"没有 context"
+    完全等价——否则会拼出一个只有换行的尾巴，白给 BM25 一个多余词条、
+    也让提示词多出空段。归一化后再判空，就是这一处的全部职责。
+    """
+    tail = " ".join(context.split()) if context else ""
+    if not tail:
+        return question
+    if len(tail) > _READER_QUERY_CONTEXT_CAP:
+        tail = tail[:_READER_QUERY_CONTEXT_CAP]
+    return f"{question}\n{tail}"
+
+
 def _translate_query(llm, question: str) -> str | None:
     """把含汉字的问题译成英文查询；失败/空/仍含汉字 → None（回退单路）。
 
@@ -128,6 +150,10 @@ class StreamEvent:
     text: str = ""  # delta 事件的增量文本
     answer: Answer | None = None  # done 事件携带的完整答案
     message: str = ""  # error 事件的说明
+    # 阅读器「相关片段」（A 档 c）：只在阅读器提问（with_sources）时非 None，
+    # meta 帧先给一遍（引用标记未回填），done 帧给回填后的版本。问答页那条
+    # 链路的帧里**没有这个键**（Answer 契约与落库载荷一个字都不动）。
+    sources: list[ReaderSource] | None = None
 
 
 class AskService:
@@ -199,29 +225,14 @@ class AskService:
             return
 
         history = self._history_summary(session_id)
-        hits, latency, t0 = self._retrieve(question)
-        with open_db(self.settings.db_path) as conn:
-            titles = repo.document_title_map(conn)
-
-        generator = Generator(self.settings, self._llm)
-        yield StreamEvent(kind="meta", session_id=session_id)
-
-        parts: list[str] = []
-        for piece in generator.stream_text(question, hits, titles, history_summary=history):
-            parts.append(piece)
-            yield StreamEvent(kind="delta", text=piece)
-
-        answer = generator.build_answer("".join(parts), question, hits, titles)
-        answer = answer.model_copy(update={"latency_ms": self._finalize_latency(latency, t0)})
-        # 双语块作为额外 delta 在 done 前流出：保证 delta 拼接 === done.text
-        # （流式契约测试锁定），且落库 content 已是含块的终态
-        block = self._maybe_bilingual_block(answer, hits)
-        if block:
-            answer = answer.model_copy(update={"text": answer.text + block})
-            yield StreamEvent(kind="delta", text=block)
-        self._log(answer, question, hits)
-        self._record(session_id, question, answer)
-        yield StreamEvent(kind="done", session_id=session_id, answer=answer)
+        for event in self._kb_stream(question, history, session_id=session_id):
+            if event.kind == "done" and event.answer is not None:
+                # 落库必须发生在 done 帧**之前**：qa 页收到 done 就刷新会话列表，
+                # 晚一步会偶发缺行（前端与既有测试都依赖这个时序）。
+                # 阅读器的「边看边问」走 ask_doc_stream、不经过这里——即问即散
+                # 就是靠"不落库的那条路根本不进这段"实现的。
+                self._record(session_id, question, event.answer)
+            yield event
 
     def chat(
         self,
@@ -252,6 +263,38 @@ class AskService:
     ) -> Iterator[StreamEvent]:
         """会话内提问的流式版本：多轮续问复用会话（历史按 mode 分路）。"""
         yield from self.ask_stream(question, session_id=session_id, mode=mode)
+
+    def ask_doc_stream(
+        self,
+        document_id: int,
+        question: str,
+        *,
+        scope: Literal["doc", "all"] = "doc",
+        context: str | None = None,
+    ) -> Iterator[StreamEvent]:
+        """阅读器「边看边问」（A 档 c，2026-09-22）：**不建会话、不落库、不进历史**。
+
+        与 ask_stream 的差别只有两点（其余帧序列完全同构，含"delta 拼接 ===
+        done.text"与双语块末帧 delta 的契约）：
+          - 走 `_kb_stream`（不落库的核心），会话相关的分支一个都不进；
+          - meta/done 帧额外携带 `sources`（全部检索命中的「相关片段」）。
+
+        scope="doc" 只在这篇文档的块里检索（默认）；"all" 是用户主动切的
+        全库口径——此时 `focus_document_id` 仍是他正在读的那篇，用于给片段
+        标「本篇/另一篇」。固定 kb 模式，没有 mode 参数（不做 free 开关）。
+        文档不存在/无正文由路由层预检（与 chat_stream 的会话校验同款分工）。
+        """
+        question = question.strip()
+        if not question:
+            raise StorageError("问题为空")
+        yield from self._kb_stream(
+            question,
+            None,
+            document_id=document_id if scope == "doc" else None,
+            context=context,
+            with_sources=True,
+            focus_document_id=document_id,
+        )
 
     def suggest_title(self, session_id: int, *, apply: bool = True) -> tuple[str, bool]:
         """为会话提炼标题；返回 (标题, 是否落库)。
@@ -313,6 +356,104 @@ class AskService:
     # 内部
     # ------------------------------------------------------------------
 
+    def _kb_stream(
+        self,
+        question: str,
+        history_summary: str | None,
+        *,
+        session_id: int | None = None,
+        document_id: int | None = None,
+        context: str | None = None,
+        with_sources: bool = False,
+        focus_document_id: int | None = None,
+    ) -> Iterator[StreamEvent]:
+        """kb 链路的流式核心（ask_stream 与阅读器 ask_doc_stream 共用）。
+
+        **本方法不建会话、不落库**——落库是调用方 ask_stream 的职责（它在
+        收到 done 事件后、放行 done 帧之前 `_record`）。阅读器那条路走这里
+        而不走 ask_stream，就是"即问即散"的全部机制。
+
+        参数：
+            document_id: 限定只在该文档的块里检索（None = 全库）
+            context: 阅读器里用户选中的原文（进提示词 + 并进检索查询）
+            with_sources: meta/done 帧携带全部命中（ReaderSource）
+            focus_document_id: 阅读器正在读的文档（给片段标 current_doc）
+        帧序与旧版逐字一致：meta → delta×n（双语块是末帧 delta）→ done；
+        任何异常从迭代中抛出（Web 层转 error 帧）。
+        """
+        hits, latency, t0 = self._retrieve(question, document_id=document_id, context=context)
+        with open_db(self.settings.db_path) as conn:
+            titles = repo.document_title_map(conn)
+
+        # 相关片段在 meta 帧就发一遍：前端能"先铺片段、答案再流出来"
+        # （cited 此刻全 False，done 帧给回填后的版本）
+        sources = self._sources(hits, titles, focus_document_id) if with_sources else None
+        generator = Generator(self.settings, self._llm)
+        yield StreamEvent(kind="meta", session_id=session_id, sources=sources)
+
+        parts: list[str] = []
+        for piece in generator.stream_text(
+            question, hits, titles, history_summary=history_summary, context=context
+        ):
+            parts.append(piece)
+            yield StreamEvent(kind="delta", text=piece)
+
+        answer = generator.build_answer("".join(parts), question, hits, titles)
+        answer = answer.model_copy(update={"latency_ms": self._finalize_latency(latency, t0)})
+        # 双语块作为额外 delta 在 done 前流出：保证 delta 拼接 === done.text
+        # （流式契约测试锁定），且落库 content 已是含块的终态
+        block = self._maybe_bilingual_block(answer, hits)
+        if block:
+            answer = answer.model_copy(update={"text": answer.text + block})
+            yield StreamEvent(kind="delta", text=block)
+        self._log(answer, question, hits)
+        if sources is not None:
+            sources = self._mark_cited(sources, answer)
+        yield StreamEvent(kind="done", session_id=session_id, answer=answer, sources=sources)
+
+    @staticmethod
+    def _sources(
+        hits: list[RetrievedChunk],
+        titles: dict[int, str],
+        focus_document_id: int | None,
+    ) -> list[ReaderSource]:
+        """检索命中 → 「相关片段」列表（阅读器专用，不落库）。
+
+        全量给，不做服务端截断：上限本来就只有 fusion_top_k（8~14 条），
+        而"答案引用了 [12]、列表里却没有第 12 张卡"看起来就像 bug。
+        """
+        out: list[ReaderSource] = []
+        for hit in hits:
+            chunk = hit.chunk
+            if chunk.id is None:
+                continue  # 快照里的块必然有 id；这里只是给类型收窄
+            out.append(
+                ReaderSource(
+                    chunk_id=chunk.id,
+                    document_id=chunk.document_id,
+                    document_title=titles.get(chunk.document_id, "未知文档"),
+                    section=chunk.heading_path,
+                    page=chunk.page_number,
+                    snippet=chunk.snippet,
+                    rank=hit.rank,
+                    current_doc=chunk.document_id == focus_document_id,
+                )
+            )
+        return out
+
+    @staticmethod
+    def _mark_cited(sources: list[ReaderSource], answer: Answer) -> list[ReaderSource]:
+        """done 前回填"哪些片段被答案引用了"（marker 与正文 [n] 对齐）。"""
+        markers = {c.chunk_id: c.marker for c in answer.citations}
+        out: list[ReaderSource] = []
+        for source in sources:
+            marker = markers.get(source.chunk_id)
+            if marker is None:
+                out.append(source)
+            else:
+                out.append(source.model_copy(update={"cited": True, "marker": marker}))
+        return out
+
     def _answer(self, question: str, history_summary: str | None) -> Answer:
         """检索 + 生成核心（不落库，评测可直接调用）。"""
         hits, latency, t0 = self._retrieve(question)
@@ -330,11 +471,22 @@ class AskService:
         self._log(answer, question, hits)
         return answer
 
-    def _retrieve(self, question: str) -> tuple[list[RetrievedChunk], dict[str, float], float]:
-        """检索段（ask / ask_stream 共用）：命中、延迟分段、计时起点。
+    def _retrieve(
+        self,
+        question: str,
+        *,
+        document_id: int | None = None,
+        context: str | None = None,
+    ) -> tuple[list[RetrievedChunk], dict[str, float], float]:
+        """检索段（ask / ask_stream / 阅读器共用）：命中、延迟分段、计时起点。
 
         计时起点在检索前取——generate 分段口径 = 检索起全程耗时，
         与 M2 报告里的延迟定义一致。
+
+        context（阅读器选中的原文）与问题拼成**主查询**：像"这里说的 μ
+        是什么意思"这种指代型问题，光靠问题本身检索会跑空，选中段才是唯一
+        的检索信号。跨语言翻译仍只翻**问题本身**（翻译器的输入协议是一个
+        问题；塞整段话又贵又慢，且译文会模糊掉上下文里的术语）。
         """
         corpus = self._manager.corpus()
         if corpus.empty:
@@ -350,7 +502,11 @@ class AskService:
             t1 = time.perf_counter()
             second_query = _translate_query(self._llm, question)
             translate_ms = (time.perf_counter() - t1) * 1000.0
-        hits, latency = retriever.retrieve(question, second_query=second_query)
+        hits, latency = retriever.retrieve(
+            _reader_query(question, context),
+            second_query=second_query,
+            document_id=document_id,
+        )
         latency["retrieve"] = round(latency.get("retrieve", 0.0), 1)
         latency["rerank"] = round(latency.get("rerank", 0.0), 1)
         if second_query is not None:

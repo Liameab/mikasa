@@ -12,7 +12,7 @@ import pytest
 
 from mikasa.errors import ConfigError, ProviderError, StorageError
 from mikasa.ingest.service import IngestService
-from mikasa.pipeline.ask import AskService, _translate_query
+from mikasa.pipeline.ask import AskService, _reader_query, _translate_query
 from mikasa.providers.llm import Completion
 from mikasa.storage import repo
 from mikasa.storage.db import open_db
@@ -969,3 +969,94 @@ def test_rerank_indices_are_sanitized():
     assert _sanitize_indices([0, 1, 2], 3) == [0, 1, 2]
     # 全非法 → 空（宁可没有候选，也不要 500）
     assert _sanitize_indices([], 3) == []
+
+
+# ---------------------------------------------------------------------------
+# 阅读器「边看边问」（A 档 c，2026-09-22）：无状态 + 相关片段
+# ---------------------------------------------------------------------------
+
+NOTE_OTHER = """# 螺旋锚笔记
+
+## 承载力
+
+循环荷载作用下螺旋锚的承载力随加载次数下降，位移逐渐累积。
+"""
+
+
+def _doc_id(offline_settings, needle: str) -> int:
+    """按块内容反查 document_id。"""
+    with open_db(offline_settings.db_path) as conn:
+        row = conn.execute(
+            "SELECT document_id FROM chunks WHERE content LIKE ? LIMIT 1",
+            (f"%{needle}%",),
+        ).fetchone()
+    assert row is not None, f"库里找不到含 {needle!r} 的块"
+    return int(row[0])
+
+
+def test_ask_doc_stream_is_stateless_and_carries_sources(tmp_path, offline_settings):
+    """阅读器提问：不建会话、不落库；meta/done 帧带「相关片段」。"""
+    _seed(tmp_path, offline_settings)
+    doc_id = _doc_id(offline_settings, "缩放点积注意力")
+    events = list(
+        AskService(offline_settings).ask_doc_stream(doc_id, "缩放点积注意力除以根号 dk 是为了什么")
+    )
+
+    assert events[0].kind == "meta"
+    assert events[-1].kind == "done"
+    assert all(e.kind == "delta" for e in events[1:-1])
+    assert events[0].session_id is None  # 不建会话
+
+    meta_sources = events[0].sources or []
+    assert meta_sources, "meta 帧就该带上相关片段（前端先铺片段、答案再流出来）"
+    assert all(s.current_doc for s in meta_sources)
+    assert all(not s.cited for s in meta_sources)  # 这一帧还没回填引用标记
+
+    answer = events[-1].answer
+    assert answer is not None
+    assert "".join(e.text for e in events) == answer.text  # 流式契约不变
+
+    cited = [s for s in (events[-1].sources or []) if s.cited]
+    assert cited, "答案引用了资料，done 帧必须标出哪几段被引用"
+    assert {s.marker for s in cited} == {c.marker for c in answer.citations}
+    assert all(s.snippet for s in (events[-1].sources or []))
+
+    # 即问即散：一条会话、一条消息都不许留
+    assert _count(offline_settings, "qa_sessions") == 0
+    assert _count(offline_settings, "qa_messages") == 0
+
+
+def test_ask_doc_stream_scope_all_marks_other_documents(tmp_path, offline_settings):
+    """切「全库」：别的文档的命中要进来并标 current_doc=False；本篇口径不带它们。"""
+    _seed(tmp_path, offline_settings)
+    (tmp_path / "other.md").write_text(NOTE_OTHER, encoding="utf-8")
+    IngestService(offline_settings).ingest_paths([tmp_path])
+    doc_id = _doc_id(offline_settings, "缩放点积注意力")
+    question = "循环荷载作用下螺旋锚的承载力如何变化？"
+
+    service = AskService(offline_settings)
+    wide = list(service.ask_doc_stream(doc_id, question, scope="all"))[0].sources or []
+    others = [s for s in wide if not s.current_doc]
+    assert others, "全库口径应带回别的文档的片段"
+    assert all(s.document_id != doc_id for s in others)
+    assert all(s.current_doc for s in wide if s.document_id == doc_id)
+
+    narrow = list(service.ask_doc_stream(doc_id, question))[0].sources or []
+    assert all(s.current_doc for s in narrow), "本篇口径不许带别的文档的片段"
+    assert _count(offline_settings, "qa_sessions") == 0
+
+
+def test_ask_doc_stream_blank_question_raises(tmp_path, offline_settings):
+    """空问题与问答页同口径：抛 StorageError（Web 层转恰一帧 error）。"""
+    _seed(tmp_path, offline_settings)
+    with pytest.raises(StorageError):
+        list(AskService(offline_settings).ask_doc_stream(1, "   "))
+
+
+def test_reader_query_identity_and_truncation():
+    """阅读器主查询：无上下文逐字等同；有上下文问题在前、上下文截尾。"""
+    assert _reader_query("问题", None) == "问题"
+    assert _reader_query("问题", "   ") == "问题"
+    assert _reader_query("问题", "  选中 \n 的原文 ") == "问题\n选中 的原文"
+    tail = _reader_query("问题", "正" * 800).split("\n", 1)[1]
+    assert len(tail) == 500, "上下文截断上限：问题之后最多 500 字"

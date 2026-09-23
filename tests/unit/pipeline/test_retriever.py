@@ -12,6 +12,7 @@ from mikasa.index.manager import IndexManager
 from mikasa.ingest.service import IngestService
 from mikasa.pipeline.retriever import Retriever
 from mikasa.providers import get_embedding
+from mikasa.storage.db import open_db
 
 NOTE = """# 量子计算笔记
 
@@ -133,3 +134,150 @@ def test_second_query_bridges_cross_language(tmp_path, offline_settings):
     assert any("基态" in h.chunk.content for h in hits_both), "主路中文块不因合流消失"
     fused = [h.fused_score for h in hits_both]
     assert fused == sorted(fused, reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# 文档内检索（阅读器「边看边问」的「只看本篇」，2026-09-22）
+# ---------------------------------------------------------------------------
+
+NOTE_SCOPE_A = """# 正则化长文
+
+## L2 正则化
+
+L2 正则化在损失函数里加入权重平方和的惩罚项，鼓励小而分散的权重，让模型
+不再依赖某一个特征，从而缓和训练集噪声带来的过拟合。惩罚强度由系数控制，
+系数越大，权重被压得越狠，模型越保守。
+
+## 权重衰减
+
+权重衰减是 L2 正则化在梯度下降里的等价实现：每一步都把权重按比例缩小一点，
+缩放系数由学习率与惩罚强度共同决定，最终收敛到同样的小权重解。它实现简单，
+几乎所有优化器都内置了这个选项，工程上比直接改损失函数更常用。
+
+## L1 正则化
+
+L1 正则化在损失函数里加入权重绝对值之和，它的梯度是常数，会把一部分权重
+恰好压到零，于是得到稀疏解，常被用来做特征选择。稀疏解的可解释性更好：
+被压到零的特征等于被模型主动丢弃。
+
+## 弹性网络
+
+弹性网络把 L1 与 L2 两个正则化项按比例混合，既能像 L1 那样产生稀疏解，
+又保留 L2 的稳定性与分组效应，适合特征之间存在强相关的场景。
+"""
+
+NOTE_SCOPE_B = """# 注意力机制笔记
+
+## 缩放点积注意力
+
+缩放点积注意力除以根号 dk，防止点积随着维度增大而方差过大，
+使 softmax 的梯度保持稳定。
+"""
+
+
+def _doc_id_of(settings, needle: str) -> int:
+    """按块内容反查 document_id（不依赖文档标题的推断规则）。"""
+    with open_db(settings.db_path) as conn:
+        row = conn.execute(
+            "SELECT document_id FROM chunks WHERE content LIKE ? LIMIT 1",
+            (f"%{needle}%",),
+        ).fetchone()
+    assert row is not None, f"库里找不到含 {needle!r} 的块"
+    return int(row[0])
+
+
+def _scope_retriever(tmp_path, offline_settings) -> tuple[Retriever, int, int]:
+    """两篇文档（A 正则化长文 / B 注意力）→ (检索器, A 的 id, B 的 id)。"""
+    (tmp_path / "a.md").write_text(NOTE_SCOPE_A, encoding="utf-8")
+    (tmp_path / "b.md").write_text(NOTE_SCOPE_B, encoding="utf-8")
+    IngestService(offline_settings).ingest_paths([tmp_path])
+    corpus = IndexManager(offline_settings).corpus()
+    retriever = Retriever(offline_settings, corpus, get_embedding(offline_settings.embedding))
+    return (
+        retriever,
+        _doc_id_of(offline_settings, "稀疏解的可解释性"),
+        _doc_id_of(offline_settings, "缩放点积注意力"),
+    )
+
+
+def test_document_scope_restricts_hits_to_that_doc(tmp_path, offline_settings):
+    retriever, _doc_a, doc_b = _scope_retriever(tmp_path, offline_settings)
+    question = "缩放点积注意力除以根号 dk 是为了什么"
+
+    hits_all, _ = retriever.retrieve(question)
+    assert any(h.chunk.document_id == doc_b for h in hits_all), "全库口径应命中 B 篇"
+
+    hits_b, latency = retriever.retrieve(question, document_id=doc_b)
+    assert hits_b, "限定 B 篇后仍应有命中"
+    assert all(h.chunk.document_id == doc_b for h in hits_b)
+    assert [h.rank for h in hits_b] == list(range(1, len(hits_b) + 1))
+    assert set(latency) == {"retrieve", "rerank"}
+
+
+def test_document_scope_bypasses_global_top_k_truncation(tmp_path, offline_settings):
+    """bm25_top_k=1 时全库只能取到 1 条，文档内必须仍取到该文档的全部命中。
+
+    这条守的是"先全库 top-k 再过滤"的错法：截断发生在 search 内部，
+    本篇的块在全局排名里可能都在截断线之外，过滤后就成空结果（静默变空，
+    用户只会看到"这篇里没有相关内容"）。
+    """
+    retriever, doc_a, _doc_b = _scope_retriever(tmp_path, offline_settings)
+    clipped = offline_settings.model_copy(
+        update={"retrieval": offline_settings.retrieval.model_copy(update={"bm25_top_k": 1})}
+    )
+    corpus = IndexManager(offline_settings).corpus()
+    narrow = Retriever(clipped, corpus, get_embedding(offline_settings.embedding))
+
+    question = "正则化"
+    assert len(narrow.retrieve(question)[0]) == 1, "全库口径被 top_k=1 截断"
+
+    hits_a, _ = narrow.retrieve(question, document_id=doc_a)
+    assert len(hits_a) >= 2, f"文档内检索不该被全局 top_k 截断，实得 {len(hits_a)}"
+    assert all(h.chunk.document_id == doc_a for h in hits_a)
+
+
+def test_document_scope_never_leaks_other_documents(tmp_path, offline_settings):
+    """B 篇的主题，限定在 A 篇问：结果里绝不能出现 B 篇的块。
+
+    注意**不断言"结果必为空"**：BM25 在中文上按词与字匹配，A 篇偶然共享
+    几个常用词是正常的（实测 "缩放点积注意力除以根号 dk" 会命中 A 篇里
+    "缩小一点"之类的词）。要守的不变量是"跨文档不泄漏"。
+    """
+    retriever, doc_a, doc_b = _scope_retriever(tmp_path, offline_settings)
+    hits, latency = retriever.retrieve("缩放点积注意力除以根号 dk 是为了什么", document_id=doc_a)
+    assert all(h.chunk.document_id == doc_a for h in hits)
+    assert not any(h.chunk.document_id == doc_b for h in hits)
+    assert set(latency) == {"retrieve", "rerank"}
+
+
+def test_document_scope_zero_token_overlap_returns_empty(tmp_path, offline_settings):
+    """与 A 篇词面零交集的查询：限定文档后如实为空，且延迟键给全。
+
+    查询特意用**单个不存在的词**（不带空格）：分词器把空格也当成一个词条
+    （实测 query tokens = ['spiral', ' ', 'anchor', …]），而每个块的 tokens
+    里都有空格——任何多词查询都会靠这个空格词条拿到非零 BM25 分，"零交集"
+    反而造不出来。这是分词器的既有行为，不是本功能的坑。
+    """
+    retriever, doc_a, _doc_b = _scope_retriever(tmp_path, offline_settings)
+    hits, latency = retriever.retrieve("zzzznonexistenttoken", document_id=doc_a)
+    assert hits == []
+    assert set(latency) == {"retrieve", "rerank"}, "空结果的延迟键也要给全"
+
+
+def test_document_scope_unknown_id_returns_empty(tmp_path, offline_settings):
+    retriever, _doc_a, _doc_b = _scope_retriever(tmp_path, offline_settings)
+    hits, latency = retriever.retrieve("正则化", document_id=9999)
+    assert hits == [], "文档不在快照里（已删/未入库）→ 空，不许退化成全库检索"
+    assert set(latency) == {"retrieve", "rerank"}
+
+
+def test_document_scope_applies_to_second_query(tmp_path, offline_settings):
+    """限定文档时第二路（跨语言）同样被过滤——否则别的文档会从英文路漏进来。"""
+    retriever, doc_a, doc_b = _scope_retriever(tmp_path, offline_settings)
+    hits, _ = retriever.retrieve(
+        "缩放点积注意力除以根号 dk",
+        second_query="scaled dot product attention divided by square root dk",
+        document_id=doc_a,
+    )
+    assert all(h.chunk.document_id == doc_a for h in hits)
+    assert not any(h.chunk.document_id == doc_b for h in hits), "第二路不许把 B 篇带进来"

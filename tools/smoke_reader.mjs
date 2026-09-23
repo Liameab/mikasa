@@ -19,7 +19,7 @@ const source = fs.readFileSync(
   "utf8"
 );
 const mod = await import("data:text/javascript;base64," + Buffer.from(source).toString("base64"));
-const { buildPlan, headingLabel, pageMax } = mod;
+const { buildPlan, headingLabel, normalizeSelection, pageMax } = mod;
 
 let passed = 0;
 const assert = (cond, msg) => {
@@ -105,6 +105,23 @@ const mdChunks = [
     { chunk_id: 1, seq: 0, start: 0, end: evil.length, heading_path: null, page_number: null },
   ]);
   assert(plan[0].text === evil, "计划层不做转义也不拼 HTML（渲染侧用文本节点）");
+}
+
+/* ---- 选中文字归一化（「边看边问」的上下文，A 档 c）---- */
+{
+  assert(normalizeSelection("", 100) === "", "空选区 → 空串（调用方按没选中处理）");
+  assert(normalizeSelection("   \n\t ", 100) === "", "纯空白选区与没选中完全等价");
+  assert(normalizeSelection(null, 100) === "" && normalizeSelection(undefined, 100) === "", "null/undefined 不炸");
+  assert(
+    normalizeSelection("  摩擦系数 μ\n描述  接触面的\t粗糙程度 ", 100) === "摩擦系数 μ 描述 接触面的 粗糙程度",
+    "跨段落的选区折叠成单行（进提示词不浪费 token）"
+  );
+  const long = "正".repeat(1200);
+  const cut = normalizeSelection(long, 1000);
+  assert(cut.length === 1000, `超长选区截到上限（含省略号），实得 ${cut.length}`);
+  assert(cut.endsWith("…"), "截断要补省略号（让模型与用户都知道后面还有）");
+  assert(normalizeSelection("短", 1000) === "短", "未超限原样返回");
+  assert(normalizeSelection("正".repeat(10), 0) === "正".repeat(10), "limit 非法时不截断");
 }
 
 console.log(`✓ smoke_reader：${passed} 条断言全部通过`);

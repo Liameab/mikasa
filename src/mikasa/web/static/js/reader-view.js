@@ -65,3 +65,26 @@ export function pageMax(chunks) {
   }
   return max;
 }
+
+/**
+ * 用户在正文里选中的文字 → 可当上下文的单行文本（「边看边问」，A 档 c）。
+ *
+ * 三步：折叠所有空白（选区跨段落时会带一堆换行缩进，进提示词只会浪费
+ * token）、trim、超长截断补省略号。结果为空串 = 没有可用上下文，调用方
+ * 按"没选中"处理——**纯空白选区必须与没选中完全等价**（否则会带一个
+ * 空上下文进请求，服务端 `_reader_query` 里也是同样的判空口径）。
+ *
+ * limit 由调用方给（与服务端 `READER_CONTEXT_MAX` 对齐）：这里是纯函数，
+ * 不知道服务端上限，也不该知道。
+ */
+export function normalizeSelection(raw, limit) {
+  const text = String(raw ?? "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(" ");
+  if (!text) return "";
+  const cap = Number(limit) > 0 ? Number(limit) : text.length;
+  if (text.length <= cap) return text;
+  // 省略号也要占位：截到 cap 个**字符**再补省略号就会超上限（服务端 422）
+  return text.slice(0, Math.max(1, cap - 1)) + "…";
+}

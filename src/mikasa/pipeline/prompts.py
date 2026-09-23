@@ -16,6 +16,8 @@ REFUSAL_TEXT = "根据已有资料，我无法回答这个问题。"
 SECTION_SOURCES = "【资料片段】"
 SECTION_QUESTION = "【问题】"
 SECTION_HISTORY = "【历史对话摘要】"
+# 阅读器「边看边问」带上用户选中的原文（A 档 c，2026-09-22）。
+SECTION_READING = "【正在阅读的段落】"
 
 # 每个来源的包装模板：模型可见的编号、文档名与章节名（用于解释性引用）
 SOURCE_TEMPLATE = "【资料{marker}】来源：{source_desc}\n{content}"
@@ -151,6 +153,7 @@ def build_user_message(
     question: str,
     sources: list[tuple[int, str, str]],
     history_summary: str | None = None,
+    context: str | None = None,
 ) -> str:
     """组装用户消息。
 
@@ -158,8 +161,20 @@ def build_user_message(
         question: 当前问题
         sources:  [(编号, 来源描述(文档+章节), 内容), ...] 与注入顺序一致
         history_summary: 多轮对话的历史摘要（可空）
+        context: 阅读器里用户选中的原文（可空；A 档 c）
+
+    **顺序是硬约束**（改这里先读这段）：`【正在阅读的段落】` 必须排在
+    `【资料片段】` **之前**。测试替身 MockLLM 的提示词解析器
+    （providers/llm.py）只认 `【资料N】` 之后的行、把它们归到当前来源，
+    且忽略第一行标记之前的全部内容——选中段放最前面会被它整段忽略
+    （离线档行为与不带 context 时逐字相同，可断言），放在资料片段之后
+    则会被吞进最后一个 `【资料N】`，答案变味、拒答判定漂移。
     """
-    parts: list[str] = [SECTION_SOURCES]
+    parts: list[str] = []
+    if context:
+        parts.append(SECTION_READING)
+        parts.append(context)
+    parts.append(SECTION_SOURCES)
     for marker, desc, content in sources:
         parts.append(SOURCE_TEMPLATE.format(marker=marker, source_desc=desc, content=content))
     if history_summary:

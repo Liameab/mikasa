@@ -2221,6 +2221,106 @@ a.pd-title:hover { color: var(--accent); }
 /* 行内公式跟正文基线、略放大一档（KaTeX 自带字号偏小，中文正文里会显得扁） */
 .katex { font-size: 1.05em; }
 
+/* ------------------------------------------------------------------ */
+/* 「边看边问」（A 档 c，2026-09-22；逻辑见 reader.js）                */
+/* 底部常驻提问栏 + 结果区。布局范式抄 .rd-ocr：整块 flex:none 钉在     */
+/* 底部，结果区自己滚（max-height），不把正文/页图挤出视野。           */
+/* ------------------------------------------------------------------ */
+
+.rd-ask {
+  flex: none;
+  border-top: 1px solid var(--border);
+  padding: 8px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rd-ask.hidden { display: none; }
+
+.rd-ask-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rd-ask-bar .rd-tabs .btn { font-size: 12px; padding: 3px 12px; }
+
+/* 选中文字 chip：复用 .s-chip 的胶囊语言（内容 + ✕ 一键去掉） */
+.rd-ask-sel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 4px 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-inset);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rd-ask-sel.hidden { display: none; }
+.rd-ask-sel-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.rd-ask-sel-x {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+
+.rd-ask-sel-x:hover { color: var(--danger); background: rgba(198, 69, 69, 0.1); }
+
+.rd-ask-row { display: flex; align-items: flex-end; gap: 8px; }
+
+.rd-ask-input {
+  flex: 1;
+  resize: none;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 9px;
+}
+
+.rd-ask-input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.rd-ask-input:disabled { color: var(--muted); }
+
+.rd-ask-out {
+  max-height: min(46vh, 420px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-inset);
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.rd-ask-out.hidden { display: none; }
+.rd-ask-who { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.rd-ask-body { line-height: 1.75; }
+.rd-ask-cites { margin-top: 8px; }
+
+.rd-src-head { font-size: 12px; color: var(--muted); margin: 10px 0 2px; }
+
+.rd-src {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  padding: 6px 9px;
+  margin-top: 6px;
+  cursor: pointer;
+}
+
+.rd-src:hover { border-color: var(--accent); }
+.rd-src.cited { box-shadow: inset 3px 0 0 var(--accent); } /* 被引用：左侧珊瑚条 */
+.rd-src-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+.rd-src-snippet { color: var(--muted); font-size: 12px; line-height: 1.6; }
+
 /* 块级公式独立成行；**长公式横向可滚**——窄栏里一条 8 项的展开式
    （用户 2026-09-20 那份泰勒展开就是这样）撑破气泡是最常见的排版事故 */
 .katex-display {

@@ -640,7 +640,9 @@ Note editor (M6 ①)：`.note-backdrop` · `.note-box` / `.note-head` / `.note-t
 Reader：`.reader-panel` / `.reader-inline` · `.rd-head`（`.rd-title` / `.rd-tabs` / `.rd-zoom`）·
 `.rd-body` / `.rd-text` / `.rd-orig` / `.rd-frame` · `.rd-chunk`（`.lit`）· `.rd-page-*`
 （`.rd-page-view` / `.rd-page-img` / `.rd-page-layer` / `.rd-page-mark` / `.rd-page-jump`）·
-`.rd-foot`
+`.rd-ocr`（`.rd-ocr-head` / `.rd-ocr-body`）· `.rd-ask`（`.rd-ask-bar` / `.rd-ask-sel` /
+`.rd-ask-input` / `.rd-ask-out` / `.rd-ask-who` / `.rd-ask-body` / `.rd-ask-cites`）·
+`.rd-src`（`.cited` / `.rd-src-meta` / `.rd-src-snippet`）· `.rd-foot`
 
 Misc：`.empty`（空态，`◌` 前缀）· `.muted` / `.small` / `.nowrap` / `.grow` / `.hidden` ·
 `.drag-over` / `.dragging` · `.to-bottom` · `.clip-ghost` · `table.list`（`.num` / `.clickable`）

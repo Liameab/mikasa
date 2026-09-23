@@ -8,9 +8,10 @@
        常驻显示、不遮挡，读文档就在这一栏里读，不再弹浮层。
 
    安全：正文与标题全来自用户语料，一律走 el() 的文本子节点；iframe 的 src
-   只由 Number() 化的 id 与页码拼成。**唯一例外**是「识别本页」的结果——
-   那是视觉模型的输出（不可信文本），走共享渲染器 renderAnswer（它内部先整体
-   转义再做受控替换，与问答页同一条路），公式顺带按 KaTeX 排版。
+   只由 Number() 化的 id 与页码拼成。**只有两处 innerHTML**，且都走共享渲染器：
+   「识别本页」的结果（视觉模型的输出）与「边看边问」的答案/引用卡
+   （renderAnswer / renderCitations，内部先整体转义再做受控替换，与问答页
+   同一条路），公式顺带按 KaTeX 排版；相关片段的原文一律走 el() 文本子节点。
 
    两个视图：
      - **文本**：`/api/documents/{id}/content` 的 {text, chunks} → buildPlan
@@ -22,9 +23,24 @@
        28MB 的 PDF 不该常驻内存。
    ========================================================================= */
 
-import { apiFetch, el, errorMessage, renderAnswer, toast } from "./common.js";
+import {
+  apiFetch,
+  attachCopyButtons,
+  el,
+  errorMessage,
+  fmtLatency,
+  fmtSeconds,
+  renderAnswer,
+  renderCitations,
+  ssePost,
+  toast,
+} from "./common.js";
 import { compressImage } from "./image-util.js";
-import { buildPlan, pageMax } from "./reader-view.js";
+import { buildPlan, normalizeSelection, pageMax } from "./reader-view.js";
+
+// 选中文字当上下文时的长度上限：与服务端 READER_CONTEXT_MAX 同值
+// （schemas.py；前端先截，服务端那条是兜底，撞上就是 422）
+const ASK_CONTEXT_LIMIT = 1000;
 
 let root = null; // 浮层的面板根 / 内嵌的容器根
 let refs = null; // 内部节点引用
@@ -49,6 +65,15 @@ const ZOOM_MIN = 50;
 const ZOOM_MAX = 300;
 const ZOOM_STEP = 10; // − / ＋ 按钮的步进
 let zoomPercent = 100;
+
+// 「边看边问」（A 档 c，2026-09-22）：阅读器内的即问即散问答——不建会话、
+// 不落库、不进历史（用户拍板）。状态一律 ask 前缀，避开 body/head/text/
+// currentMode 等已占名（重名会整页静默死，见 qa.js 的 const card 事故）。
+let askSeq = 0; // 本次提问的序号：发送时 `++askSeq`（**绝不用 loadSeq**，见 openChunk 的教训）
+let askBusy = false; // 流式中：防连点、禁发送钮
+let askScope = "doc"; // doc=只看本篇（默认）；all=全库。**不叫 currentMode**（那是视图名）
+let askContext = null; // 用户在正文里选中的原文（string|null）
+let askTimer = null; // 等待计时器句柄（closeReader 必须清，否则关掉面板还在跑）
 
 function setZoom(percent) {
   const anchor = currentPage; // 缩放前读到哪一页——缩放后要回到这一页
@@ -198,15 +223,61 @@ export function initReader(host = null, { onClose = null } = {}) {
   );
   const body = el("div", { class: "rd-body" }, text, orig, pageView);
 
+  // 「边看边问」（A 档 c）：底部常驻提问栏 + 结果区。
+  // **挂在根节点**而不是 .rd-body 里：.rd-body 是**横排** flex（左正文右页面），
+  // 塞进去会变成右侧栏；这里与 .rd-foot 同款（两种形态的根都是列向 flex）。
+  // 也不能挂进 .rd-text：页面/原文件标签下它是 display:none，结果就看不见了。
+  const askDocBtn = el(
+    "button",
+    { class: "btn ghost active", type: "button", id: "rd-ask-doc" },
+    "本篇"
+  );
+  const askAllBtn = el("button", { class: "btn ghost", type: "button", id: "rd-ask-all" }, "全库");
+  const askScopeBox = el(
+    "div",
+    { class: "rd-tabs", id: "rd-ask-scope", role: "group", "aria-label": "检索范围" },
+    askDocBtn,
+    askAllBtn
+  );
+  const askSelText = el("span", { class: "rd-ask-sel-text" }, "");
+  const askSelClose = el(
+    "button",
+    { class: "rd-ask-sel-x", type: "button", title: "去掉选中的文字" },
+    "✕"
+  );
+  const askSel = el(
+    "div",
+    { class: "rd-ask-sel hidden", id: "rd-ask-sel" },
+    askSelText,
+    askSelClose
+  );
+  const askInput = el("textarea", {
+    class: "rd-ask-input",
+    id: "rd-ask-input",
+    rows: "1",
+    placeholder: "就这篇文档提问（Enter 发送，Shift+Enter 换行）",
+    "aria-label": "就当前文档提问",
+  });
+  const askSend = el("button", { class: "btn primary", type: "button", id: "rd-ask-send" }, "问");
+  const askOut = el("div", { class: "rd-ask-out hidden", id: "rd-ask-out" });
+  const askBox = el(
+    "div",
+    { class: "rd-ask hidden", id: "rd-ask" },
+    el("div", { class: "rd-ask-bar" }, askScopeBox, askSel),
+    el("div", { class: "rd-ask-row" }, askInput, askSend),
+    askOut
+  );
+
   if (inline) {
-    root = el("div", { class: "reader-inline", id: "reader-inline" }, head, body, foot);
+    root = el("div", { class: "reader-inline", id: "reader-inline" }, head, body, askBox, foot);
     host.append(root);
   } else {
     root = el(
       "div",
       { class: "reader-panel hidden", id: "reader-panel", role: "dialog", "aria-label": "文档阅读" },
       head,
-      body
+      body,
+      askBox
     );
     document.body.append(root);
   }
@@ -236,6 +307,15 @@ export function initReader(host = null, { onClose = null } = {}) {
     zoomRange,
     zoomLabel,
     zoomReset,
+    askBox,
+    askDocBtn,
+    askAllBtn,
+    askSel,
+    askSelText,
+    askSelClose,
+    askInput,
+    askSend,
+    askOut,
   };
 
   close.addEventListener("click", () => closeReader());
@@ -249,6 +329,29 @@ export function initReader(host = null, { onClose = null } = {}) {
   pagePrev.addEventListener("click", () => showPage(currentPage - 1));
   pageNext.addEventListener("click", () => showPage(currentPage + 1));
   ocrBtn.addEventListener("click", () => void ocrCurrentPage());
+  askDocBtn.addEventListener("click", () => setAskScope("doc"));
+  askAllBtn.addEventListener("click", () => setAskScope("all"));
+  askSelClose.addEventListener("click", () => clearAskContext());
+  askSend.addEventListener("click", () => void sendReaderQuestion());
+  askInput.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && !ev.shiftKey) {
+      ev.preventDefault(); // 默认行为是换行，这里要的是发送
+      void sendReaderQuestion();
+    }
+  });
+  askInput.addEventListener("input", autosizeAskInput);
+  // 结果区里的引用角标 / 引用卡：点一下跳回原文。**委托挂在自己容器上**，
+  // 不用 import qa.js 的 attachBubbleActions（那个模块顶层就有页面级 DOM
+  // 查询，在知识库页会炸），也不挂 document（避免与其它模块的委托互相干扰）。
+  askOut.addEventListener("click", (ev) => {
+    const hit = ev.target.closest?.(".cite:not(.bad), .cite-card");
+    if (!hit || !hit.dataset.chunkId) return;
+    void jumpToChunk(Number(hit.dataset.chunkId));
+  });
+  // 选中正文 → 带上"正在读的这段"当上下文。mouseup 覆盖鼠标选区，keyup 覆盖
+  // 键盘选区（Shift+方向键）；判定在函数里用**宿主包含**，不写选择器白名单。
+  root.addEventListener("mouseup", captureAskSelection);
+  root.addEventListener("keyup", captureAskSelection);
   pageModeBtn.addEventListener("click", () =>
     setPageMode(pageMode === "single" ? "scroll" : "single")
   );
@@ -361,12 +464,14 @@ export async function openDocument(docId, { chunkId = null, mode = null, locatio
 
   if (!cache || cache.docId !== id) {
     refs.title.textContent = "加载中…";
+    askReset(); // 换文档：作废在途提问、清空结果与选中上下文（问的是另一篇了）
     // 加载中/失败/无正文的文案都写在文本视图里——页面/原文件标签下
     // refs.text 是 display:none，不先切过来用户只会看到上一篇的残留内容
     // （2026-09-11 修复：读取失败要能看见，不然像"点开没反应"）
     forceTextMode();
     refs.text.replaceChildren(el("div", { class: "empty" }, "正在读取文档…"));
     refs.foot.classList.add("hidden");
+    refs.askBox.classList.add("hidden"); // 读取期间不摆提问栏（还没正文可问）
     try {
       const data = await apiFetch(`/api/documents/${id}/content`);
       if (seq !== loadSeq) return; // 过期响应：用户已点开别的文档，丢弃
@@ -412,14 +517,25 @@ export async function openDocument(docId, { chunkId = null, mode = null, locatio
 
   renderText(data);
   void renderMediaStrip(id, seq); // 笔记原图（M6 ②）：有就贴在正文上方
+  refs.askBox.classList.remove("hidden"); // 有正文可读了，提问栏登场
   currentPage = 1;
   // PDF 默认开"页面"视图：那里是原样渲染 + 可高亮（用户要的"合并"）
   setMode(mode ?? (isPdf ? "page" : "text"));
-  if (chunkId !== null) {
-    // 引用跳转：PDF 走页面高亮；定位不到（或非 PDF）退回文本视图高亮
-    if (isPdf && (await locateAndShow(chunkId))) return;
-    highlightChunk(chunkId);
-  }
+  if (chunkId !== null) await revealChunk(chunkId);
+}
+
+/**
+ * 定位到一个块并高亮（不重新打开文档、不重置阅读位置）。
+ *
+ * 从 openDocument 里抽出来的（2026-09-22）：引用跳转与「边看边问」的
+ * "点相关片段跳回原文"要做同一件事，但后者**必须**走这条——走 openChunk
+ * 会重新 openDocument，把 cache 冲掉、阅读位置重置（正是"丢位置"的来源）。
+ * PDF 走页面高亮（定位不到就退回文本），其余走文本高亮。
+ */
+async function revealChunk(chunkId) {
+  const id = Number(chunkId);
+  if (isPdf && (await locateAndShow(id))) return;
+  highlightChunk(id);
 }
 
 /** 引用跳转入口：chunk_id → 所属文档 + 定位（Citation 不带 document_id）。 */
@@ -496,6 +612,8 @@ export function closeReader() {
   refs.pageCanvas?.querySelectorAll(".rd-textlayer").forEach((l) => l._ro?.disconnect());
   refs.pageCanvas?.replaceChildren();
   refs.foot.classList.add("hidden");
+  askReset(); // 提问栏：作废在途流、停计时器、清结果/输入/选中（见函数注释）
+  refs.askBox.classList.add("hidden");
   cache = null; // 语料可能已重新入库，下次重新拉
   if (inline) onCloseHook?.();
   else root.classList.add("hidden");
@@ -960,4 +1078,238 @@ function highlightChunk(chunkId) {
   for (const lit of refs.text.querySelectorAll(".rd-chunk.lit")) lit.classList.remove("lit");
   node.classList.add("lit");
   node.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+/* ---------------------- 「边看边问」（A 档 c） ---------------------- */
+
+/**
+ * 清空提问区（换文档 / 关面板都调它）。
+ *
+ * 四项清理缺一不可，漏掉的表现分别是：① 计时器还在跑（关掉面板几秒后
+ * 界面还在"12.3s"地跳）；② 在途流的回调把上一题的答案写进新文档的结果区；
+ * ③ 再打开时看到上一篇的回答；④ 选中片段跟着换文档带过去（问的是另一篇）。
+ * `askSeq += 1` 就是②的做法：在途回调每帧都比对序号，对不上就整帧丢弃。
+ */
+function askReset() {
+  askSeq += 1;
+  askBusy = false;
+  if (askTimer !== null) {
+    clearInterval(askTimer);
+    askTimer = null;
+  }
+  clearAskContext();
+  if (!refs) return;
+  refs.askInput.value = "";
+  autosizeAskInput();
+  refs.askOut.classList.add("hidden");
+  refs.askOut.replaceChildren();
+  refs.askSend.disabled = false;
+  refs.askSend.textContent = "问";
+}
+
+function setAskScope(scope) {
+  askScope = scope === "all" ? "all" : "doc";
+  if (!refs) return;
+  refs.askDocBtn.classList.toggle("active", askScope === "doc");
+  refs.askAllBtn.classList.toggle("active", askScope === "all");
+}
+
+/** 收起选中上下文（chip 的 ✕ / 换文档 / 关面板）。 */
+function clearAskContext() {
+  askContext = null;
+  if (!refs) return;
+  refs.askSel.classList.add("hidden");
+  refs.askSelText.textContent = "";
+  refs.askSelText.removeAttribute("title");
+}
+
+/**
+ * 捕捉正文里的选区当作上下文（mouseup / keyup 都挂）。
+ *
+ * 判定用**宿主包含**（选区落在 .rd-text 或页面文字层里），不写选择器白名单：
+ * 白名单要跟着 DOM 变，而"这段文字属于正文吗"本质上就是祖先关系。
+ * 已知边界：**原文件标签里的 PDF 选不中**——那是浏览器自带的阅读器（iframe），
+ * 选区在它的文档里，这里看不见；那个标签下没有 chip 是正确行为，不是 bug。
+ */
+function captureAskSelection() {
+  if (!refs || !cache) return;
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+  const node = sel.anchorNode;
+  const host = node && (node.nodeType === 1 ? node : node.parentElement);
+  if (!host) return;
+  const inText = refs.text.contains(host);
+  const inPage = Boolean(refs.pageCanvas && refs.pageCanvas.contains(host));
+  if (!inText && !inPage) return; // 提问栏、识别结果、答案区里的选区都不算
+  const text = normalizeSelection(sel.toString(), ASK_CONTEXT_LIMIT);
+  if (!text) return;
+  askContext = text;
+  refs.askSelText.textContent = `已选中 ${text.length} 字：${text.slice(0, 24)}…`;
+  refs.askSelText.title = text; // 全文挂在 title 上，鼠标一悬停就能核对
+  refs.askSel.classList.remove("hidden");
+}
+
+/** 输入框随内容长高（上限 5 行；再长就让它自己滚）。 */
+function autosizeAskInput() {
+  if (!refs) return;
+  const node = refs.askInput;
+  node.style.height = "auto";
+  const line = Number.parseFloat(getComputedStyle(node).lineHeight) || 18;
+  node.style.height = `${Math.min(node.scrollHeight, Math.round(line * 5 + 12))}px`;
+}
+
+/**
+ * 就当前文档提问（流式）。
+ *
+ * 端点 `/api/documents/{id}/ask/stream` 专为这条路开：**不建会话、不落库**
+ * （问答页那条每问必建会话的路绝不走，否则会话树会被"边看边问"灌满）。
+ * 帧序与问答页同构：meta（带相关片段，先铺出来）→ delta×n → done | error。
+ *
+ * 序号（askSeq）在**发送时**自增：每帧回调先比对，换文档/关面板/再问一次都会
+ * 让旧流整帧作废——这是"点 B 看到 A"那类竞态的唯一防线（openChunk 的教训）。
+ * URL 用发送那一刻的 docId：流中途换文档也不影响"这条回答属于哪篇"。
+ */
+async function sendReaderQuestion() {
+  if (!refs || !cache || askBusy) return;
+  const question = refs.askInput.value.trim();
+  if (!question) {
+    toast("先写下问题再问", "warn");
+    return;
+  }
+  const docId = cache.docId;
+  const seq = ++askSeq;
+  askBusy = true;
+  refs.askSend.disabled = true;
+  refs.askSend.textContent = "问答中…";
+
+  const out = refs.askOut;
+  out.replaceChildren();
+  const who = el("div", { class: "rd-ask-who" }, "");
+  const answerBox = el("div", { class: "rd-ask-body" });
+  const srcsBox = el("div", { class: "rd-ask-srcs" });
+  const citesBox = el("div", { class: "rd-ask-cites" });
+  out.append(who, answerBox, srcsBox, citesBox);
+  out.classList.remove("hidden");
+
+  // 等待要有回声（与问答页同款）：每 100ms 刷一次已经等了多少秒
+  const startedAt = performance.now();
+  const tick = () => {
+    who.textContent = `正在检索并作答… ${fmtSeconds(performance.now() - startedAt)}`;
+  };
+  tick();
+  if (askTimer !== null) clearInterval(askTimer);
+  askTimer = setInterval(tick, 100);
+
+  let buf = "";
+  const fresh = () => seq === askSeq && refs && refs.askOut === out;
+  try {
+    await ssePost(
+      `/api/documents/${Number(docId)}/ask/stream`,
+      {
+        question,
+        scope: askScope,
+        ...(askContext ? { context: askContext } : {}),
+      },
+      (kind, data) => {
+        if (!fresh()) return; // 过期流：换文档/关面板/又问了新的一题
+        if (kind === "meta") {
+          who.textContent = `关于《${data.title}》· ${data.scope === "doc" ? "本篇" : "全库"}${
+            askContext ? " · 含选中片段" : ""
+          } · 正在作答…`;
+          renderAskSources(srcsBox, data.sources || []);
+        } else if (kind === "delta") {
+          buf += data.text || "";
+          answerBox.textContent = buf; // 流式阶段只给纯文本，收尾才渲染
+        } else if (kind === "done") {
+          finishAsk(who, answerBox, srcsBox, citesBox, buf, data, startedAt);
+        } else if (kind === "error") {
+          who.replaceChildren(el("span", { class: "rd-error" }, `✗ ${data.message}`));
+        }
+      }
+    );
+  } catch (err) {
+    if (fresh()) {
+      who.replaceChildren(el("span", { class: "rd-error" }, `✗ ${err.message || err}`));
+    }
+  } finally {
+    if (askTimer !== null) {
+      clearInterval(askTimer);
+      askTimer = null;
+    }
+    if (fresh()) {
+      askBusy = false;
+      refs.askSend.disabled = false;
+      refs.askSend.textContent = "问";
+    }
+  }
+}
+
+/** done 帧：把纯文本换成渲染后的答案 + 引用卡 + 回填了引用标记的相关片段。 */
+function finishAsk(who, answerBox, srcsBox, citesBox, buf, data, startedAt) {
+  const answer = data.answer || {};
+  const wall = (performance.now() - startedAt) / 1000;
+  const citations = answer.citations || [];
+  who.textContent = fmtLatency(answer.latency_ms, wall);
+  // 答案正文走 renderAnswer（内部先整体转义；拒答轮只给标记文案）
+  answerBox.innerHTML = renderAnswer(buf || answer.text || "", citations, true);
+  attachCopyButtons(answerBox); // 代码块复制钮：每次重建容器都要挂一次
+  citesBox.innerHTML = citations.length ? renderCitations(citations) : "";
+  renderAskSources(srcsBox, data.sources || []);
+}
+
+/**
+ * 相关片段列表：每段一张卡（来源 · 页码 · 章节 + 原文摘要），点一下跳回原文。
+ *
+ * 被答案引用的加 `.cited`（左侧珊瑚条）并显示 `[n]`——与正文角标同一个编号，
+ * 用户能对上；跨文档的标「另一篇」，点它会切到那篇（openChunk）。
+ * 片段文字一律走 el() 文本子节点，**不进 innerHTML**（它是语料原文，不可信）。
+ */
+function renderAskSources(box, sources) {
+  box.replaceChildren();
+  if (!sources.length) {
+    box.append(
+      el("div", { class: "empty" }, "这篇里没有检索到相关片段——可以切「全库」再问一次")
+    );
+    return;
+  }
+  const head = el("div", { class: "rd-src-head" }, `相关片段（${sources.length}）`);
+  box.append(head);
+  for (const s of sources) {
+    const meta = [s.current_doc ? "本篇" : "另一篇", s.document_title];
+    if (s.section) meta.push(s.section);
+    if (s.page) meta.push(`第 ${s.page} 页`);
+    const card = el(
+      "div",
+      {
+        class: `rd-src${s.cited ? " cited" : ""}`,
+        "data-chunk-id": String(s.chunk_id),
+        title: s.cited ? `点一下跳到原文（答案里的 [${s.marker}]）` : "点一下跳到原文",
+      },
+      el(
+        "div",
+        { class: "rd-src-meta" },
+        s.cited ? el("span", { class: "pill" }, `[${s.marker}]`) : "",
+        el("span", { class: "small" }, meta.join(" · "))
+      ),
+      el("div", { class: "rd-src-snippet" }, s.snippet)
+    );
+    card.addEventListener("click", () => void jumpToChunk(s.chunk_id));
+    box.append(card);
+  }
+}
+
+/**
+ * 点片段/角标 → 跳到那段原文。
+ *
+ * 本篇的片段**就地定位**（revealChunk：不重载文档、不丢阅读位置）；
+ * 别的文档才走 openChunk（那一跳本来就要换文档）。
+ */
+async function jumpToChunk(chunkId) {
+  const id = Number(chunkId);
+  const inThisDoc = Boolean(cache?.data?.chunks?.some((c) => c.chunk_id === id));
+  if (inThisDoc) {
+    await revealChunk(id);
+    return;
+  }
+  await openChunk(id, { mode: isPdf ? "page" : "text" });
 }
