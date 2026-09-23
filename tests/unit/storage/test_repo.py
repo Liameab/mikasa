@@ -181,3 +181,100 @@ def test_corpus_fingerprint_on_empty_db(offline_settings):
     """空库也要有确定的指纹（MAX(id) 为 NULL，COALESCE 兜住成 0）。"""
     with open_db(offline_settings.db_path) as conn:
         assert repo.corpus_fingerprint(conn) == (0, 0)
+
+
+# ---------------------------------------------------------------------------
+# 文档知识链（M6 ③，schema v5 的 doc_links）
+# ---------------------------------------------------------------------------
+
+
+def _two_docs(conn) -> tuple[int, int]:
+    """两篇最小文档（甲、乙）——知识链的测试样例。"""
+    from mikasa.models.document import Document
+
+    a = repo.insert_document(
+        conn,
+        Document(title="甲", file_path="a.md", file_type="md", file_sha256="a", char_count=1),
+    )
+    b = repo.insert_document(
+        conn,
+        Document(title="乙", file_path="b.md", file_type="md", file_sha256="b", char_count=1),
+    )
+    return a, b
+
+
+def test_replace_doc_links_replaces_llm_edges_and_keeps_manual(offline_settings):
+    """重跑抽取：llm 边按**本次结果替换**，人工边原样留着（③ 的核心口径）。"""
+    with open_db(offline_settings.db_path) as conn:
+        a, b = _two_docs(conn)
+        added = repo.replace_doc_links(
+            conn,
+            a,
+            [
+                {
+                    "dst_doc_id": b,
+                    "relation": "同一主题",
+                    "evidence": "都在讲正则化",
+                    "confidence": 0.8,
+                },
+                {
+                    "dst_doc_id": b,
+                    "relation": "方法被借鉴",
+                    "evidence": "乙借用了甲的做法",
+                    "confidence": 0.6,
+                },
+            ],
+        )
+        assert added == 2
+        # 人工确认过的一条（源端是 a）
+        conn.execute(
+            """INSERT INTO doc_links (src_doc_id, dst_doc_id, relation, source)
+               VALUES (?, ?, '老师指定', 'manual')""",
+            (a, b),
+        )
+        # 重跑：这次只抽出一条、且关系不同 → llm 边被替换，manual 留着
+        assert (
+            repo.replace_doc_links(
+                conn,
+                a,
+                [
+                    {
+                        "dst_doc_id": b,
+                        "relation": "前置知识",
+                        "evidence": "先读乙",
+                        "confidence": 0.9,
+                    }
+                ],
+            )
+            == 1
+        )
+        got = {(r["relation"], r["source"]) for r in repo.links_for_document(conn, a)}
+        assert got == {("前置知识", "llm"), ("老师指定", "manual")}
+
+        # 同一 (src,dst,relation) 重复写入不会翻倍（UNIQUE + OR IGNORE 兜住）
+        repo.replace_doc_links(conn, a, [{"dst_doc_id": b, "relation": "前置知识"}])
+        rows = [r for r in repo.links_for_document(conn, a) if r["relation"] == "前置知识"]
+        assert len(rows) == 1
+
+
+def test_links_for_document_covers_both_directions_with_titles(offline_settings):
+    """列表要同时给出"我指向谁"与"谁指向我"，并带另一端文档名（④ 的图也吃它）。"""
+    with open_db(offline_settings.db_path) as conn:
+        a, b = _two_docs(conn)
+        repo.replace_doc_links(
+            conn, a, [{"dst_doc_id": b, "relation": "同一主题", "confidence": 0.7}]
+        )
+        out = repo.links_for_document(conn, a)
+        assert [(r["direction"], r["other_title"]) for r in out] == [("out", "乙")]
+        back = repo.links_for_document(conn, b)
+        assert [(r["direction"], r["other_title"]) for r in back] == [("in", "甲")]
+
+
+def test_delete_doc_links_clears_both_directions(offline_settings):
+    """删文档时连带清两个方向，否则列表里会出现指向已删文档的死链。"""
+    with open_db(offline_settings.db_path) as conn:
+        a, b = _two_docs(conn)
+        repo.replace_doc_links(conn, a, [{"dst_doc_id": b, "relation": "同一主题"}])
+        repo.replace_doc_links(conn, b, [{"dst_doc_id": a, "relation": "前置知识"}])
+        repo.delete_doc_links(conn, a)
+        assert repo.links_for_document(conn, b) == []

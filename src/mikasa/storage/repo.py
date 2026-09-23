@@ -709,3 +709,72 @@ def get_eval_run(conn: sqlite3.Connection, run_id: int) -> dict | None:
 def update_eval_run_report(conn: sqlite3.Connection, run_id: int, report_md: str) -> None:
     """评测完成后回填 report_md（先插占位行、跑完再写，Web 轮询可区分状态）。"""
     conn.execute("UPDATE eval_runs SET report_md = ? WHERE id = ?", (report_md, run_id))
+
+
+# ---------------------------------------------------------------------------
+# 文档知识链（M6 ③：schema v5 的 doc_links）
+# ---------------------------------------------------------------------------
+#
+# 这一层只做存取；**抽取**（LLM 读两篇文档判关系）与界面是它上一层的事。
+# 本模块的写入函数都不自己 commit——事务由调用方（open_db 的 with 块）持有。
+
+
+def replace_doc_links(conn: sqlite3.Connection, src_doc_id: int, links: list[dict]) -> int:
+    """用一次抽取的结果**替换**某篇文档的出边，返回真正写进去的条数。
+
+    三个口径都不是随手定的：
+      1. **替换而非追加**——整篇重跑，第二次 3 条、上次 5 条时，追加会留下 8 条，
+         其中 2 条已不再有任何证据支持；
+      2. **只删出边**——入边是**别人**抽取的结果，不归这次任务管；
+      3. **manual 不删**——人工确认过的关系不该被模型重跑顺手抹掉。
+    """
+    conn.execute("DELETE FROM doc_links WHERE src_doc_id = ? AND source <> 'manual'", (src_doc_id,))
+    added = 0
+    for link in links:
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO doc_links
+                 (src_doc_id, dst_doc_id, relation, evidence, confidence, source)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                src_doc_id,
+                int(link["dst_doc_id"]),
+                str(link["relation"])[:80],
+                str(link.get("evidence") or "")[:400],
+                float(link.get("confidence") or 0.0),
+                str(link.get("source") or "llm"),
+            ),
+        )
+        added += cur.rowcount
+    return added
+
+
+def links_for_document(conn: sqlite3.Connection, doc_id: int, *, limit: int = 50) -> list[dict]:
+    """某篇文档的关联（出边 + 入边），带另一端标题。
+
+    `direction` 区分"我指向它"（out）与"它指向我"（in）——④ 的关联列表要按这个
+    分开呈现（"这篇引出的" / "引到这篇的"读感完全不同）。按置信度倒序：低置信的
+    关系排在后面，用户扫两眼就知道该不该信。
+    """
+    rows = conn.execute(
+        """SELECT l.id, l.relation, l.evidence, l.confidence, l.source, l.created_at,
+                  CASE WHEN l.src_doc_id = ? THEN 'out' ELSE 'in' END AS direction,
+                  CASE WHEN l.src_doc_id = ? THEN l.dst_doc_id ELSE l.src_doc_id END AS other_id,
+                  d.title AS other_title
+             FROM doc_links l
+             JOIN documents d
+               ON d.id = CASE WHEN l.src_doc_id = ? THEN l.dst_doc_id ELSE l.src_doc_id END
+            WHERE l.src_doc_id = ? OR l.dst_doc_id = ?
+            ORDER BY l.confidence DESC, l.id DESC
+            LIMIT ?""",
+        (doc_id, doc_id, doc_id, doc_id, doc_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_doc_links(conn: sqlite3.Connection, doc_id: int) -> None:
+    """删文档时连带清关系（**两个方向都清**）。
+
+    不清的后果不是"多几行垃圾"，而是关联列表里出现指向"已删除文档"的死链——
+    用户点进去只会得到 404（2026-09-20 删除链路评审时定下的口径）。
+    """
+    conn.execute("DELETE FROM doc_links WHERE src_doc_id = ? OR dst_doc_id = ?", (doc_id, doc_id))

@@ -27,7 +27,7 @@ from mikasa.utils.text import fold_title
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # 初始化串行化锁（见 open_db 的说明）
 _INIT_LOCK = threading.Lock()
@@ -211,6 +211,34 @@ _SCHEMA_V3_SQL = (
 # 与 init_db 里那两条走 _ensure_column 的 ALTER 覆层）。
 _SCHEMA_SQL = _SCHEMA_V3_SQL
 
+# v5 新增：文档之间的"知识链"（M6 ③ 自动关系抽取的落点）。
+#
+# 为什么**文档级**而不是分块级：这张表的用途是"读完一篇，知道该接着看哪几篇"
+# （M6 ④ 的关联列表/导图都吃它）。分块级关系是另一件事（做精细引用追溯时才有用），
+# 现在存进来只会让表膨胀、而没有任何消费方。
+#
+# 为什么 `relation` + `UNIQUE(src, dst, relation)`：同一对文档可以同时是"同一主题"
+# 又"方法被借鉴"，两个关系都该各留一条；但同一对同一关系只留一条（重跑抽取幂等，
+# 靠 INSERT OR IGNORE 兜住）。
+#
+# `source` 区分 llm 自动抽取与人工添加：将来"人工确认过的关系优先"要有据可依，
+# 不能等到需要时已经分不清哪些是模型猜的。
+_SCHEMA_DOC_LINKS_DDL = """
+CREATE TABLE IF NOT EXISTS doc_links (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    src_doc_id  INTEGER NOT NULL,
+    dst_doc_id  INTEGER NOT NULL,
+    relation    TEXT    NOT NULL,
+    evidence    TEXT    NOT NULL DEFAULT '',
+    confidence  REAL    NOT NULL DEFAULT 0.0,
+    source      TEXT    NOT NULL DEFAULT 'llm',
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (src_doc_id, dst_doc_id, relation)
+);
+CREATE INDEX IF NOT EXISTS idx_doc_links_src ON doc_links (src_doc_id);
+CREATE INDEX IF NOT EXISTS idx_doc_links_dst ON doc_links (dst_doc_id);
+"""
+
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
     """幂等补列：列已存在就跳过（SQLite 的 ADD COLUMN 没有 IF NOT EXISTS）。
@@ -294,6 +322,8 @@ def init_db(conn: sqlite3.Connection) -> None:
         # 逐版累加：新库要补齐**所有**历史版本的补列，终态才与迁移库一致。
         _ensure_column(conn, "documents", "folder_id", _SCHEMA_DOC_FOLDER_ALTER)
         _ensure_column(conn, "documents", "source_ref", _SCHEMA_DOC_SOURCE_ALTER)
+        # v5 的新表：新库直建（老库走 _migrate_v4_to_v5）
+        conn.executescript(_SCHEMA_DOC_LINKS_DDL)
         # **幂等写入**：并发首次建库时两个连接都会走到这里（都看到"没有版本行"），
         # 一个先插入，另一个撞 UNIQUE constraint failed: schema_version.version
         # ——原本是 500（2026-09-11 并发首连测试暴露）。OR IGNORE 让后来者静默成为
@@ -428,12 +458,24 @@ def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
+    """v4 → v5：新增 doc_links（M6 ③ 知识链的落点）。
+
+    纯建表、**不回填**：关系要靠 LLM 抽取（下一步的抽取任务），迁移阶段没有
+    任何可用的关系数据，凭空生成只会是噪声。表的 DDL 自带 IF NOT EXISTS，
+    所以这一级天然幂等——崩溃重跑不会撞表。
+    """
+    conn.executescript(_SCHEMA_DOC_LINKS_DDL)
+    conn.commit()
+
+
 # 迁移表：{目标版本: 迁移函数}。版本断层（缺 key）= 硬报错，不留半迁移状态。
 # 定义在迁移函数之后（模块级 dict 求值时函数须已定义）。
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     2: _migrate_v1_to_v2,
     3: _migrate_v2_to_v3,
     4: _migrate_v3_to_v4,
+    5: _migrate_v4_to_v5,
 }
 
 
