@@ -1,7 +1,8 @@
 """模型配置端点（设置面板的"模型"段，见 ADR-0018）。
 
 四件事：
-  GET  /api/settings/model          当前模型配置（**密钥只回有无，绝不回值**）
+  GET  /api/settings/model          当前模型配置（**密钥只回有无，绝不回值**；
+                                    另附 saved_key_envs = 哪些密钥槽已存了密钥）
   PUT  /api/settings/model          保存：写覆盖层 + 密钥写 .env + 热生效
   POST /api/settings/model/test     测试连接（一次性客户端，不落盘不碰状态）
   GET  /api/settings/ollama/models  本机 Ollama 模型列表（模型下拉）
@@ -74,6 +75,33 @@ _TEST_KEY_ENV = "MIKASA_SETTINGS_TEST_KEY"
 # api 后端没给 api_key_env 时的兜底存储槽（前端隐藏该字段，预设自带变量名）
 _DEFAULT_KEY_ENV = "MIKASA_LLM_API_KEY"
 
+# 「模型」段用得到的全部密钥槽（与前端 PRESETS 的 keyEnv 一一对应）。
+# GET 要回一份"哪个槽上已经存了密钥"，前端切来源时才能如实显示"已保存"：
+# has_api_key 只描述**当前生效的那个槽**，用户切去别的来源再切回来，它会
+# 说"没密钥"——面板于是显示"粘贴密钥"，用户以为密钥丢了，每次切换都重粘
+# 一遍（2026-09-23 报障）。范围限于这几个已知槽 + 当前生效槽，**不做任意
+# 环境变量的存在性探针**（那是白送出去的信息泄露面）。
+_KNOWN_LLM_KEY_ENVS = (
+    "DEEPSEEK_API_KEY",
+    "SILICONFLOW_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    _DEFAULT_KEY_ENV,  # custom 预设的槽
+)
+
+
+def _saved_key_envs(settings: Settings) -> list[str]:
+    """已经存了密钥的槽（变量名列表，永不回值）。
+
+    判空口径与 `_secret_from_env` 一致：空串 = 未配置。系统环境里 export 的
+    同名变量也算"有"——那同样意味着这个来源不用再粘密钥（探测端点也是这么找
+    密钥的，两边不能各说各话）。
+    """
+    names = set(_KNOWN_LLM_KEY_ENVS)
+    if settings.llm.api_key_env:
+        names.add(settings.llm.api_key_env)  # 手改过槽名的用户也要能查到自己
+    return sorted(name for name in names if os.environ.get(name))
+
 
 def _model_payload(settings: Settings) -> dict[str, Any]:
     """当前模型配置的展示体。密钥只有 has_api_key 布尔，永不回值。"""
@@ -83,6 +111,8 @@ def _model_payload(settings: Settings) -> dict[str, Any]:
         "model": settings.llm.model,
         "api_key_env": settings.llm.api_key_env or "",
         "has_api_key": settings.llm.api_key is not None,
+        # 各密钥槽的"有没有"（前端切来源时的"已保存"提示；只回变量名，永不回值）
+        "saved_key_envs": _saved_key_envs(settings),
         # local 档的两个旋钮（api 档为 None）：前端据此回填「思考模式 / 上下文长度」
         "think": settings.llm.think,
         "num_ctx": settings.llm.num_ctx,

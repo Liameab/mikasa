@@ -33,6 +33,23 @@ def _put_body(**overrides) -> dict:
 
 
 @pytest.fixture()
+def known_slots_cleared(monkeypatch):
+    """把已知密钥槽清干净。
+
+    开发机上真 export 过的密钥会顺着环境钻进测试进程，"这个槽有没有密钥"
+    的断言就不由测试自己说了算（monkeypatch 退出时会把原值放回去）。
+    """
+    for name in (
+        "DEEPSEEK_API_KEY",
+        "SILICONFLOW_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "MIKASA_LLM_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture()
 def fake_probe(monkeypatch):
     """替换探测用的 LLM 客户端：记录构造参数与"调用时能看到的密钥"。"""
     created: list = []
@@ -68,6 +85,60 @@ def test_get_model_settings_hides_key(client):
     assert body["profile"] == "offline"
     assert body["locked"] is False
     assert body["model"] == settings.llm.model
+
+
+def test_get_reports_which_key_slots_are_saved(client, monkeypatch, known_slots_cleared):
+    """GET 附一份"哪些密钥槽已存了密钥"：切来源时前端靠它显示"已保存"。
+
+    只回变量名（值永不下发），且**只覆盖已知槽**——不做任意环境变量的存在性
+    探针（那是白送出去的信息泄露面）。
+    """
+    c, _settings = client
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek-0001")
+    monkeypatch.setenv("MIKASA_TEST_OTHER_SECRET", "sk-not-ours")  # 不在已知槽里
+    resp = c.get("/api/settings/model")
+    body = resp.json()
+    assert body["saved_key_envs"] == ["DEEPSEEK_API_KEY"]
+    assert "MIKASA_TEST_OTHER_SECRET" not in body["saved_key_envs"]
+    assert "sk-deepseek-0001" not in resp.text  # 值永不回显（只有变量名）
+
+
+def test_key_slot_survives_switching_away_and_back(client, known_slots_cleared):
+    """切去别的来源再切回来，那个槽上仍是"已存"（2026-09-23 报障的核心）。
+
+    后端从来不删密钥；坏在"有没有密钥"只有一个答案 has_api_key，而它描述的是
+    **当前生效的那个槽**——切回 DeepSeek 的那一刻生效的是 local，面板据此显示
+    "粘贴密钥"，用户以为密钥丢了，每次切换都重粘一遍。
+    saved_key_envs 让每个槽各答各的：切回来 = 已保存 = 直接保存就好。
+    """
+    c, _settings = client
+    put = c.put(
+        "/api/settings/model",
+        json=_put_body(api_key_env="DEEPSEEK_API_KEY", api_key="sk-keep-me"),
+    )
+    assert put.json()["saved_key_envs"] == ["DEEPSEEK_API_KEY"]
+
+    # 切去本机 Ollama（免密钥）：生效槽上没密钥了，但 DeepSeek 那个槽还在
+    assert (
+        c.put(
+            "/api/settings/model",
+            json={
+                "backend": "local",
+                "base_url": "http://localhost:11434/v1",
+                "model": "qwen3:8b",
+            },
+        ).status_code
+        == 200
+    )
+    body = c.get("/api/settings/model").json()
+    assert body["has_api_key"] is False
+    assert body["saved_key_envs"] == ["DEEPSEEK_API_KEY"]
+    assert "sk-keep-me" in user_env_path().read_text(encoding="utf-8")  # 全程没被删
+
+    # 切回 DeepSeek（keyDirty=false，密钥框没被碰过）：密钥原样还在
+    back = c.put("/api/settings/model", json=_put_body(api_key_env="DEEPSEEK_API_KEY"))
+    assert back.json()["has_api_key"] is True
+    assert back.json()["saved_key_envs"] == ["DEEPSEEK_API_KEY"]
 
 
 # ---------------------------------------------------------------------------

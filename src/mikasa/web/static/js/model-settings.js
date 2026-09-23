@@ -7,7 +7,9 @@
    三条关键约定：
    1. **密钥永不回显**：GET 只回 has_api_key。输入框平时是空的，只有用户
       真的输入过（keyDirty）才随保存提交——否则一次普通的"改模型名"会把
-      空值当"清除密钥"，顺手把已存密钥删掉。
+      空值当"清除密钥"，顺手把已存密钥删掉。**每个来源的密钥槽各存各的**
+      （GET 的 saved_key_envs）：切走再切回来，密钥还在那个槽上，"已保存"
+      提示必须跟着槽走——只看当前生效槽的话，用户每次切换都会重粘一遍。
    2. **切来源只填表不保存**：填好地址/模型/密钥再点「保存并生效」，避免
       点了预设就把配置切到半成品（如密钥还没填就开始计费）。
    3. **只写当前来源的密钥槽**：服务端也一样——api 档的 SILICONFLOW_API_KEY
@@ -69,6 +71,8 @@ const PRESETS = {
 
 // 当前服务端配置（GET 的响应）与密钥脏标记
 let current = null;
+// 已存密钥的槽（变量名集合，服务端给；切来源时的"已保存"提示靠它说真话）
+let keySlots = new Set();
 let keyDirty = false;
 let activePreset = null;
 // 过期响应守卫（同 qa.js 的 sessionSeq）：面板打开时会异步拉一次服务端配置，
@@ -79,6 +83,21 @@ let loadSeq = 0;
 function serverKeyEnv() {
   if (!current) return "";
   return current.api_key_env || "";
+}
+
+/** 同步"已存密钥的槽"（GET/PUT 的响应都带这份表）。 */
+function syncKeySlots(body) {
+  keySlots = new Set(body.saved_key_envs || []);
+}
+
+/** 这个密钥槽上已经有密钥了吗？（**当前选中的来源**的槽，不是生效中的那个）
+ *
+ *  不能拿 current.has_api_key 代替：它描述的是**正在生效的槽**。切去别的
+ *  来源再切回来时它已经不适用——面板会显示"粘贴密钥"，用户以为密钥丢了，
+ *  于是每次切换都重新粘一遍（2026-09-23 报障）。
+ */
+function slotHasKey(envName) {
+  return !!envName && keySlots.has(envName);
 }
 
 function setResult(text, kind = "") {
@@ -138,7 +157,8 @@ function applyPreset(name) {
 
 /** 已存密钥的占位提示（值本身永不下发，输入框只能靠 placeholder 表达状态）。 */
 function syncKeyPlaceholder() {
-  const has = !!(current && current.has_api_key);
+  const preset = PRESETS[activePreset];
+  const has = slotHasKey(preset ? preset.keyEnv : serverKeyEnv());
   const input = $("#s-api-key");
   if (keyDirty && input.value) {
     input.placeholder = has ? "已保存（保存后替换为新密钥）" : "保存后写入";
@@ -161,6 +181,7 @@ export async function refreshModelSettings() {
   // 否则会把用户刚选好的来源覆盖回服务端的旧值（2026-09-21 E2E 实测到）
   if (seq !== loadSeq) return;
   current = fetched;
+  syncKeySlots(fetched);
   keyDirty = false;
   $("#s-api-key").value = "";
   $("#s-base-url").value = current.base_url || "";
@@ -255,6 +276,7 @@ async function saveSettings() {
       body: JSON.stringify(body),
     });
     current = saved;
+    syncKeySlots(saved);
     keyDirty = false;
     $("#s-api-key").value = "";
     syncKeyPlaceholder();

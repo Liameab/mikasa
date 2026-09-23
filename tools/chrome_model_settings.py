@@ -8,9 +8,12 @@
   2. 点 DeepSeek 预设 → 地址/模型自动填好（不保存）；
   3. 粘贴密钥 → 保存并生效 → 轮询服务端确认模型已切换（**热生效**）；
   4. 宿主机侧断言落盘：覆盖层只有 llm 段且**不含密钥**，密钥在 .env；
-  5. 错误路径：地址改成打不通的端口 → 「测试连接」出红色错误文案；
-  6. **重启服务器** → 配置仍在（持久化闭环，覆盖层真的生效）；
-  7. 刷新页面 → 面板字段由服务端回填（不是 localStorage）。
+  4.5 **切来源往返**：切去本机 Ollama 再切回来，密钥框必须仍说"已保存"
+     （说"粘贴密钥"用户就会重粘一遍——2026-09-23 报障的正是这个）；另逐个
+     预设核对提示与**该来源自己的**密钥槽一致（有没有密钥都算对）；
+  6. 错误路径：地址改成打不通的端口 → 「测试连接」出红色错误文案；
+  7. **重启服务器** → 配置仍在（持久化闭环，覆盖层真的生效）；
+  8. 刷新页面 → 面板字段由服务端回填（不是 localStorage）。
   全程收集 console 错误，有错退出码 1。
 
 **为什么不用 --config 注入 data_dir**（chrome_corpus.py 的老办法）：
@@ -45,6 +48,17 @@ MIKASA_EXE = REPO_ROOT / ".venv" / "Scripts" / "mikasa.exe"
 
 FAKE_KEY = "sk-e2e-fake-0001"  # 只写进临时数据目录，不可能是真密钥
 BAD_URL = "http://127.0.0.1:9/v1"  # 9 号端口：必然连接拒绝，且不产生外部调用
+
+# 预设 → 密钥槽（与前端 PRESETS 的 keyEnv 对齐）。本机 .env 里可能好几个槽
+# 都躺着真密钥，所以这里是"期望"的定义，不是"结果"——期望值仍由服务端自己
+# 报的 saved_key_envs 算出（见下面的往返检查）。
+PRESET_KEY_ENVS = {
+    "deepseek": "DEEPSEEK_API_KEY",
+    "siliconflow": "SILICONFLOW_API_KEY",
+    "claude": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "custom": "MIKASA_LLM_API_KEY",
+}
 
 
 def js_quote(s: str) -> str:
@@ -136,6 +150,16 @@ async def run(args):
     userdata.mkdir(parents=True)
     env = dict(os.environ)
     env["MIKASA_DATA_DIR"] = str(userdata)  # 隔离的生命线：所有写入落在 tmp
+    # 密钥槽先清干净：宿主机上真 export 过的密钥会顺着环境继承进来，
+    # "这个槽有没有密钥"的断言就不由本脚本控制了
+    for name in (
+        "DEEPSEEK_API_KEY",
+        "SILICONFLOW_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "MIKASA_LLM_API_KEY",
+    ):
+        env.pop(name, None)
     server = None
     chrome = None
     try:
@@ -244,6 +268,47 @@ async def run(args):
             overlay = (userdata / "config.yaml").read_text(encoding="utf-8")
             env_file = (userdata / ".env").read_text(encoding="utf-8")
 
+            # ---- 4.5 切来源往返：密钥留在自己的槽里，"已保存"提示跟着槽走 ----
+            # 切去本机 Ollama 并保存：生效槽换成 local（无密钥）
+            await cdp.evaluate(
+                "document.querySelector('#s-provider .s-chip[data-preset=\"ollama\"]')"
+                ".click(); true"
+            )
+            await asyncio.sleep(0.2)
+            await cdp.evaluate("document.querySelector('#s-save-btn').click(); true")
+            await wait_until(
+                cdp,
+                "fetch('/api/settings/model').then(r => r.json()).then(d => d.backend === 'local')",
+                "切到本机 Ollama 档并生效",
+            )
+            # 逐个预设点一遍：密钥框的提示必须跟着**该预设的槽**走。
+            # 期望值由服务端自己的 saved_key_envs 算出来（不是写死的）——
+            # 本机 .env 里可能好几个槽都有真密钥，写死哪一边都会误报。
+            saved_envs = set(api_get(port, "/api/settings/model")["saved_key_envs"])
+            preset_hints: dict[str, bool] = {}
+            for name in PRESET_KEY_ENVS:
+                await cdp.evaluate(
+                    f"document.querySelector('#s-provider .s-chip[data-preset={js_quote(name)}]')"
+                    ".click(); true"
+                )
+                await asyncio.sleep(0.2)
+                placeholder = await cdp.evaluate("document.querySelector('#s-api-key').placeholder")
+                preset_hints[name] = "已保存" in placeholder
+            # 回到 DeepSeek 保存：配置复原，密钥还是原来那把（全程没重粘）
+            await cdp.evaluate(
+                "document.querySelector('#s-provider .s-chip[data-preset=\"deepseek\"]')"
+                ".click(); true"
+            )
+            await asyncio.sleep(0.2)
+            await cdp.evaluate("document.querySelector('#s-save-btn').click(); true")
+            await wait_until(
+                cdp,
+                "fetch('/api/settings/model').then(r => r.json())"
+                ".then(d => d.model === 'deepseek-chat' && d.has_api_key === true)",
+                "切回 DeepSeek 并保存后配置复原（密钥没丢）",
+            )
+            env_after_roundtrip = (userdata / ".env").read_text(encoding="utf-8")
+
             # ---- 5. 错误路径：打不通的地址 → 测试连接出红色文案 ----
             await set_input(cdp, "#s-base-url", BAD_URL)
             await cdp.evaluate("document.querySelector('#s-test-btn').click(); true")
@@ -335,6 +400,9 @@ async def run(args):
                 "overlayHasKey": FAKE_KEY in overlay,
                 "overlayHasModel": "deepseek-chat" in overlay,
                 "envFileHasKey": "DEEPSEEK_API_KEY" in env_file,
+                "presetKeyHints": preset_hints,
+                "savedKeyEnvs": sorted(saved_envs),
+                "keyKeptAcrossSwitch": FAKE_KEY in env_after_roundtrip,
                 "testError": test_error[:80],
                 "visionInitial": vision_initial,
                 "visionPreset": vision_preset,
@@ -372,6 +440,18 @@ async def run(args):
                 bad.append("覆盖层没有写入模型名")
             if "DEEPSEEK_API_KEY" not in env_file:
                 bad.append(".env 没有写入密钥变量")
+            # ---- 切来源往返（用户 2026-09-23 报障的那条路）----
+            for name, env in PRESET_KEY_ENVS.items():
+                expect = env in saved_envs
+                if preset_hints[name] != expect:
+                    bad.append(
+                        f"「{name}」预设的密钥提示不对：显示已保存={preset_hints[name]}，"
+                        f"该槽（{env}）实际有密钥={expect}"
+                    )
+            if len(set(preset_hints.values())) < 2:
+                log("提示：本机已知密钥槽都有值，'没密钥不该显示已保存'这半条没被验到")
+            if FAKE_KEY not in env_after_roundtrip:
+                bad.append("切来源往返把 .env 里的密钥弄丢了")
             if not test_error:
                 bad.append("错误路径没有报错文案")
             if health_after_error != "deepseek-chat":
