@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mikasa.config.settings import Settings
-from mikasa.errors import EvalError
+from mikasa.errors import EvalError, ProviderError
 from mikasa.eval.golden import GoldenItem, GoldenSet, save_golden
 from mikasa.index.manager import Corpus, IndexManager
 from mikasa.models.document import Chunk
@@ -114,12 +114,44 @@ def _clean_question(raw: str) -> str | None:
 
 
 def _ask(llm: LLMProvider, prompt: str) -> str:
-    completion: Completion = llm.complete(
-        [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": prompt}],
-        temperature=0.7,
-        max_tokens=200,
-    )
+    try:
+        completion: Completion = llm.complete(
+            [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=200,
+        )
+    except ProviderError as exc:
+        # 出题是"几十次小请求"的任务，失败几乎都出在本地模型这一侧。把可照做的
+        # 下一步附上——用户 2026-09-22 看到的原话是干巴巴一句
+        # "LLM 调用失败（qwen3:8b，http://localhost:11434/v1）：timed out"。
+        raise EvalError(
+            f"出题时模型调用失败：{exc}\n"
+            "  本地模型常见原因：显存被别的程序占用（推理变慢）、模型正在加载。\n"
+            "  可照做的三步：① 把题量调小；② 换更小的模型（如 qwen3:4b）；"
+            "③ 或用云端模型（设置 →「模型」选 DeepSeek 等）。"
+        ) from exc
     return completion.text
+
+
+def _synth_llm(settings: Settings) -> LLMProvider:
+    """出题用的模型句柄：**本地档强制关思考、并把单次超时放到 120 秒**。
+
+    为什么必须关思考：出题是机械任务（读一段 → 提一个"只有这段能答"的问题），
+    不需要推理。开着思考只会 ① 白烧时间（实测同一问题 think 开关差 10 倍）
+    ② 把 `max_tokens=200` 的预算全吃在推理上 → 返回空答案（题面为空/直接报错）。
+
+    为什么放宽超时：一轮要发几十次小请求，每次都得等模型开口；本地 8B 在
+    冷加载或显卡被别的东西占着时，单次超过 60 秒并不罕见（用户 2026-09-22 报障
+    的 "timed out" 就是这个）。云端的 60 秒够用，不改。
+    """
+    from mikasa.providers import get_llm
+
+    cfg = settings.llm
+    if cfg.backend == "local":
+        cfg = cfg.model_copy(
+            update={"think": False, "timeout_seconds": max(cfg.timeout_seconds, 120.0)}
+        )
+    return get_llm(cfg)
 
 
 def _sample_chunks(corpus: Corpus, seed: int) -> list[Chunk]:
@@ -184,8 +216,6 @@ def synthesize(
     corpus 可注入（测试零索引）；不传则取当前索引快照。
     出不满目标题数不算失败——语料小、模型偶发不配合都会少题，如实少给。
     """
-    from mikasa.providers import get_llm
-
     _require_real_llm(settings)
     snapshot = corpus if corpus is not None else IndexManager(settings).corpus()
     if snapshot.empty:
@@ -197,7 +227,7 @@ def synthesize(
             "语料太碎时请先调整分块参数再入库。"
         )
 
-    llm = get_llm(settings.llm)
+    llm = _synth_llm(settings)
     items: list[GoldenItem] = []
     total = questions + unanswerable
     done = 0

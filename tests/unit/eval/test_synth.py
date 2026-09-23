@@ -205,3 +205,49 @@ def test_same_seed_gives_the_same_bank(tmp_path):
     first = [c.id for c in _sample_chunks(corpus, seed=7)]
     second = [c.id for c in _sample_chunks(corpus, seed=7)]
     assert first == second
+
+
+# ---------------------------------------------------------------------------
+# 出题链路的本地模型参数（2026-09-22 用户报障 "timed out" 的回归锁）
+# ---------------------------------------------------------------------------
+
+
+def test_local_synth_turns_thinking_off_and_widens_timeout(tmp_path):
+    """本地档出题必须**关思考 + 放大单次超时**。
+
+    用户报障原话："为我的资料生成题库 → LLM 调用失败（qwen3:8b，…）：timed out"。
+    根因是出题这条链路漏吃了本地档的两个旋钮：思考开着时 `max_tokens=200` 会被
+    推理吃光（题面为空），而冷加载/显卡被别的东西占用时，单次调用还会超过默认 60 秒。
+    """
+    from mikasa.eval.synth import _synth_llm
+
+    settings = load_settings("local", data_dir=tmp_path / "data")
+    llm = _synth_llm(settings)
+    assert llm._config.think is False  # 机械任务不需要思考
+    assert llm._config.timeout_seconds >= 120.0  # 几十次小请求，别卡在 60 秒
+
+
+def test_api_synth_leaves_cloud_config_alone(tmp_path):
+    """云端档不动：60 秒够用，也不该替用户改任何参数。"""
+    from mikasa.eval.synth import _synth_llm
+
+    settings = load_settings("api", data_dir=tmp_path / "data")
+    llm = _synth_llm(settings)
+    assert llm.model == settings.llm.model
+    assert llm._config.timeout_seconds == settings.llm.timeout_seconds
+
+
+def test_ask_turns_provider_error_into_actionable_words():
+    """模型调用失败时给出可照做的三步，而不是干巴巴一句 "timed out"。"""
+    from mikasa.errors import ProviderError
+    from mikasa.eval.synth import _ask
+
+    class _Boom:
+        def complete(self, messages, *, temperature, max_tokens):  # noqa: ANN001, ANN202
+            raise ProviderError("LLM 调用失败（qwen3:8b，http://localhost:11434/v1）：timed out")
+
+    with pytest.raises(EvalError) as exc:
+        _ask(_Boom(), "随便写点什么")  # type: ignore[arg-type]
+    message = str(exc.value)
+    assert "timed out" in message  # 原始原因保留
+    assert "题量调小" in message and "云端模型" in message  # 附上能照做的下一步
