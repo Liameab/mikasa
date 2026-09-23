@@ -52,6 +52,7 @@
 | ADR-0031 | 文生图：出图独立成段 + 字节落盘 + 只放行同源图片 | Accepted |
 | ADR-0032 | 模型来源：云端预设补齐（Claude / OpenAI）+ 本机模型拉取进应用内 | Accepted |
 | ADR-0033 | 浏览器访问与访问口令：开给网络就必须设口令（fail closed） | Accepted |
+| ADR-0034 | 阅读器「边看边问」：就地提问 + 命中全给 + 即问即散 | Accepted |
 
 ---
 
@@ -680,7 +681,9 @@ E2E `tools/chrome_reader.py`。
 3. **密钥写 `user_data_root()/.env`**（python-dotenv `set_key`，
    `quote_mode="always"`，缺文件时先建 UTF-8 头注释），覆盖层里永不出现密钥；
    读取仍按 ADR-0002 经 `api_key_env` 在请求时刻解析。`GET /api/settings/model`
-   只回 `has_api_key`、永不回值；测试连接把密钥临时放进
+   只回 `has_api_key`、永不回值，另回一份 `saved_key_envs`（已经存了密钥的**槽名**
+   列表）——`has_api_key` 描述的是**当前生效槽**，切去别的来源再切回来就会说
+   "没密钥"，用户以为密钥丢了、每次切换都重粘一遍（2026-09-23 报障）；测试连接把密钥临时放进
    `MIKASA_SETTINGS_TEST_KEY` 环境变量并在 `finally` 摘除。清除密钥 = 删行 +
    从进程环境弹出，**且只动本次提交那一个变量**（api 档的
    `SILICONFLOW_API_KEY` 被 embedding/reranker/judge 共用，误清会静默打挂检索）。
@@ -1671,3 +1674,74 @@ qwen3:8b）：权重 5.2GB，16k 上下文时运行时占用 **7.8GB → 超卡�
 `clear-password` + serve 的 fail-closed 闸门 + 生效地址写回）、
 `tests/unit/web/test_auth_gate.py`（15 条）、`tests/unit/cli/test_cli.py`（闸门两条）、
 E2E `tools/chrome_lan_login.py`（含登录页截图）。
+
+## ADR-0034 阅读器「边看边问」：就地提问 + 命中全给 + 即问即散
+
+- 状态：Accepted ｜ 论文阅读器 A 档 c（2026-09-22 实现，2026-09-23 补档 + 真机 E2E 验收）
+- 关联：ADR-0016（阅读视图与原文件白名单）、ADR-0013（kb/free 与"mode 不落库"的同族语义）、
+  ADR-0017（页面视图）、ADR-0018 起的面板与配置纪律
+
+**背景**：用户在右侧阅读面板读论文时，"读到某处有感"只能切到问答页重新问——阅读位置
+丢了，而问答页默认全库检索，"就这段/就这篇"的精确问题做不到。A 档（论文阅读器）的
+a/a2/b/d 都收工后，只剩 c 这一块：**翻到哪儿、就地提问、答案与相关片段一并回来、
+点片段还能跳回原文**。
+
+**决定**（前三条是用户 2026-09-22 拍板的取舍，别推翻）：
+
+1. **范围默认「本篇」，一键切「全库」**。默认窄是刻意的：读者问的是"这一段"，
+   全库是少数时候（"这跟别处怎么说的"）。
+2. **不进会话、不落库**（即问即散）。问答页那条"每问必建会话"的路**绝不走**：
+   阅读器里问的是随手问题，不该把会话树塞满；代价是这条路没有回放（见边界）。
+3. **入口 = 阅读器底部常驻提问栏**；正文里有选中文字时**自动带上作为上下文**
+   （胶囊可见、可一键去掉）。
+4. **限定文档用 allow-list 过滤，而不是给语料做"限定视图"**：`Retriever.retrieve`
+   加一个 keyword-only 的 `document_id`，两路检索都取 `top_k=0`（既有"返回全部"
+   语义）再按允许集合过滤，**过滤发生在 `rrf_fuse` 之前**。
+   - 反例（被否）：`Corpus.scoped(doc_id)` 重建一个只含本篇的语料——**本篇 IDF 与全库
+     不同，同一个问题在两种范围下等于换了一套算法**，而且还要复制向量矩阵。
+   - 落在融合之后同样不行：RRF 用全局名次算分，先融合再过滤 = 名次已被大库压平，
+     表现为**静默降质**（不报错、答案变差）。
+5. **相关片段（`ReaderSource`）全量给，且不进 `Answer`**：`Answer` 只带**被引用**的
+   块且随答案落库（评测口径），`ReaderSource` 是**全部命中 + 是否被引用**，
+   只走这个端点的 SSE 帧——`Answer` 与 `/api/ask/stream` 一个字段都不加，
+   落库载荷与评测口径不动。帧序：`meta`（先铺片段，`cited` 全 false）→ `delta`×n →
+   `done`（answer + `cited/marker` 回填后的片段）；"答案里引了 [12]、列表里却没有第 12
+   张卡"这种看起来像 bug 的事，靠"全给"直接消掉。
+6. **选中文字的段位有硬约束**：`【正在阅读的段落】`必须排在**【资料片段】之前**——
+   MockLLM 的解析器只认 `【资料N】` 之后的行，放后面会被吞进最后一个资料，
+   offline 档的答案会静默变味。检索另走 `_reader_query(question, context)`：
+   问题在前、上下文截 500 字（与双语块的原文上限同口径——本地 bge-small-zh 的输入上限），
+   跨语言的 `second_query` 仍只翻问题本身。
+7. **复用 vs 新增**：kb 链路的流式内核抽成 `_kb_stream`（`ask_stream` 改为委托它，
+   **落库责任留在调用方**——qa 页要求"落库先于 done 帧"，时序不能变）；阅读器走同一内核
+   但不建会话、不落库。
+
+**实测与踩坑**（2026-09-23 首次真跑 E2E，三条都是"验收脚本自己"的坑）：
+
+- **按下标点文档 = 静默验错篇**：知识库树是 `created_at DESC`（后传的在第 0 行），
+  脚本按 `[0]` 点开、按"另一篇"断言，整场都在验另一篇却一路绿。现在**按标题点 + 核对
+  阅读器标题**，点错当场报错。
+- **计划书里的 id 与实现里的 class 不一致**：结果区的 `who/body/srcs` 实现用 class
+  （由闭包引用，不对外发 id），脚本按计划书写的 `#rd-ask-*` 全是 null。教训：选择器
+  要照**真实 DOM** 写（`--dump-dom` 那条惯例），不是照计划书写。
+- **就绪判定要用新端点的 404 文案**：`/api/documents/999999/ask/stream` 回 404 时
+  旧构建是 FastAPI 默认 `{"detail":"Not Found"}`、新构建是"文档不存在"——端口上盘踞着
+  旧进程时绝不能误认（同 `chrome_reader.py` 的 `/api/chunks` 做法）。
+
+**代价与边界**：
+
+- **「原文件」标签里的 PDF 选不中文字**（iframe 内是浏览器插件，拿不到选区）——
+  那个标签下不出现上下文胶囊；要带上下文请在「文本」或「页面」标签里选。
+- **即问即散 = 没有回放**：关掉阅读器就没了，不进会话树、不进导出；要留存请在问答页问。
+- 不做 free 模式开关（范围固定 kb）：阅读器的语义就是"针对你的材料"。
+- 命中片段上限即 `fusion_top_k`（8~14 条），全给但不截断之后再排序。
+
+**代码**：`pipeline/retriever.py`（`document_id` allow-list）、`pipeline/ask.py`
+（`ask_doc_stream` / `_kb_stream` / `_reader_query` / `_sources` / `_mark_cited`）、
+`pipeline/prompts.py`（`SECTION_READING` 与段序）、`pipeline/generator.py`（context 透传）、
+`models/answer.py`（`ReaderSource`）、`web/schemas.py`（`ReaderAskIn`）、
+`web/routers/documents.py`（`POST /api/documents/{id}/ask/stream`）、
+`static/js/reader.js`（提问栏/片段列表/就地跳转/选区捕捉）、`static/js/reader-view.js`
+（`normalizeSelection`）、`css/style.css`（`.rd-ask*` / `.rd-src*`）；
+测试 `tests/unit/web/test_reader_ask_api.py`（10 条）+ 三处旧测试扩充；
+E2E `tools/chrome_reader_ask.py`（8 步真浏览器，截图 `tools/shots/reader-ask.png`）。

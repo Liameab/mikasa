@@ -59,6 +59,7 @@
 | ADR-0031 | Text-to-image: a separate section, bytes on disk, same-origin images only | Accepted |
 | ADR-0032 | Model sources: cloud presets (Claude / OpenAI) and an in-app local-model pull | Accepted |
 | ADR-0033 | Browser access and a shared password: exposing the service requires a password (fail closed) | Accepted |
+| ADR-0034 | Reader "ask as you read": ask in place, show every hit, nothing persists | Accepted |
 
 ---
 
@@ -850,7 +851,11 @@ a key, test the connection, done.
 3. **Keys go to `user_data_root()/.env`** (python-dotenv `set_key`, `quote_mode="always"`,
    created with a UTF-8 header when missing), never into the overlay. Reads resolve the key
    through `api_key_env` at request time, exactly as ADR-0002 prescribes. `GET
-   /api/settings/model` returns `has_api_key` and never the key; the connection probe passes a
+   /api/settings/model` returns `has_api_key` and never the key; it also returns
+   `saved_key_envs` (the *names* of the slots that already hold a key), because `has_api_key`
+   only describes the slot in force right now — switching to another source and back would
+   otherwise show "paste a key" and make the user re-paste one that was never lost
+   (2026-09-23 report). The connection probe passes a
    throwaway `MIKASA_SETTINGS_TEST_KEY` environment variable that is removed in a `finally`.
    Clearing a key removes the line and pops it from the process environment — and only the one
    variable the request names (the api profile shares `SILICONFLOW_API_KEY` between embedding,
@@ -2084,3 +2089,103 @@ endpoints), `web/app.py` (installs the gate last, i.e. outermost), `cli/__init__
 effective address back), `tests/unit/web/test_auth_gate.py` (15 cases),
 `tests/unit/cli/test_cli.py` (two gate cases), E2E `tools/chrome_lan_login.py` (with a login
 page screenshot).
+
+## ADR-0034 Reader "ask as you read": ask in place, show every hit, nothing persists
+
+- Status: Accepted | Paper reader track A, item c (implemented 2026-09-22; written up
+  2026-09-23 together with a real-device E2E sign-off)
+- Related: ADR-0016 (the reader view and the original-file allowlist), ADR-0013 (the kb/free
+  family of semantics around "mode is not persisted"), ADR-0017 (the Page view), and the panel
+  and config discipline from ADR-0018 onward
+
+**Context**: reading a paper in the right-hand reader panel, "something here strikes me" meant
+switching back to the QA page and asking again - the reading position was lost, and the QA page
+searches the whole library by default, so a precise "just this passage / just this paper"
+question was out of reach. Once paper-reader items a/a2/b/d (track A) had wrapped up, only c was
+left: **ask wherever you have scrolled to, get the answer and the related passages back
+together, and click a passage to jump back into the text**.
+
+**Decision** (the first three are trade-offs the user settled on 2026-09-22 - do not overturn
+them):
+
+1. **Scope defaults to "this paper", with a one-click switch to "whole library"**. The narrow
+   default is deliberate: the reader is asking about *this passage*, and the whole library is
+   the rare case ("what do other papers say about this").
+2. **No session, nothing persisted** (ask and it is gone). The QA page's "every question
+   creates a session" path is **never taken**: questions asked in the reader are casual and
+   should not fill up the session tree; the cost is that this path has no replay (see
+   boundaries).
+3. **The entry point is a persistent ask bar at the bottom of the reader**; when text is
+   selected in the body it is **carried along automatically as context** (shown as a pill, one
+   click to remove).
+4. **Limiting to a document is an allow-list filter, not a "scoped view" of the corpus**:
+   `Retriever.retrieve` gains a keyword-only `document_id`; both retrieval arms take `top_k=0`
+   (the existing "return everything" semantics) and the result is then filtered by the allowed
+   set - **the filter runs before `rrf_fuse`**.
+   - Rejected alternative: `Corpus.scoped(doc_id)` rebuilding a corpus that holds only this
+     paper - **this paper's IDF differs from the whole library's, so the same question runs a
+     different algorithm under the two scopes**, and it would mean copying the vector matrix as
+     well.
+   - Filtering after fusion does not work either: RRF scores by global rank, so
+     fuse-then-filter means the ranks have already been flattened by the large corpus, showing
+     up as **silent degradation** (no error, worse answers).
+5. **Related passages (`ReaderSource`) are returned in full and never enter `Answer`**:
+   `Answer` carries only the **cited** chunks and is persisted along with the answer (the
+   evaluation contract); `ReaderSource` is **every hit plus whether it was cited**, and travels
+   only in this endpoint's SSE frames - `Answer` and `/api/ask/stream` gain not a single field,
+   so the stored payload and the evaluation contract are untouched. Frame order: `meta`
+   (passages laid out first, `cited` all false) → `delta`×n → `done` (answer + the passages with
+   `cited`/`marker` filled in); the "the answer cites [12] but the list has no 12th card"
+   class of looks-like-a-bug is designed out by showing everything.
+6. **Where the selected text sits is a hard constraint**: `【正在阅读的段落】` ("the passage
+   currently being read") must come **before 【资料片段】** ("source excerpts") - MockLLM's
+   parser only reads lines after `【资料N】`, so placing it later swallows it into the last
+   passage and the offline profile's answers silently change flavour. Retrieval instead goes
+   through `_reader_query(question, context)`: the question first, the context truncated to 500
+   characters (the same bound as the bilingual block's original text - the local bge-small-zh
+   input limit), and the cross-language `second_query` still translates the question only.
+7. **Reuse versus add**: the kb path's streaming core is factored out into `_kb_stream`
+   (`ask_stream` now delegates to it, and **persistence stays the caller's responsibility** -
+   the QA page requires "persist before the done frame", an order that cannot change); the
+   reader goes through the same core but creates no session and persists nothing.
+
+**Field notes and traps** (2026-09-23, the first real E2E run - all three were traps in the
+acceptance script itself):
+
+- **Clicking by index silently verified the wrong paper**: the library tree is ordered
+  `created_at DESC` (the most recently uploaded sits in row 0), and the script opened `[0]`
+  while asserting against "the other paper" - the whole run verified the other paper and stayed
+  green throughout. It now **clicks by title and checks the reader's title**, failing on the
+  spot if it lands on the wrong document.
+- **The plan's ids did not match the implementation's classes**: the result area's
+  `who/body/srcs` use classes in the implementation (referenced through a closure, with no ids
+  exposed), so the `#rd-ask-*` selectors written from the plan were all null. Lesson: write
+  selectors against the **real DOM** (the `--dump-dom` convention), not against the plan.
+- **The readiness check has to key on the new endpoint's 404 text**: for
+  `/api/documents/999999/ask/stream`, an old build answers with FastAPI's default
+  `{"detail":"Not Found"}` while a new one answers "文档不存在" (document not found) - a stale
+  process squatting on the port must never be mistaken for the new build (the same trick
+  `chrome_reader.py` uses for `/api/chunks`).
+
+**Costs and boundaries**:
+
+- **The PDF in the "Original file" tab cannot be selected** (inside the iframe it is the
+  browser's own plugin, so there is no selection to read) - the context pill never appears in
+  that tab; to carry context, select in the **Text** or **Page** tab.
+- **Ask and it is gone means no replay**: closing the reader loses it, and it enters neither
+  the session tree nor an export; ask on the QA page if you want it kept.
+- No free-mode toggle (the scope is fixed to kb): the reader's semantics are "about your
+  material".
+- The passage ceiling is `fusion_top_k` (8-14 items): everything is shown as-is, with no
+  truncation followed by a re-sort.
+
+**Code**: `pipeline/retriever.py` (the `document_id` allow-list), `pipeline/ask.py`
+(`ask_doc_stream` / `_kb_stream` / `_reader_query` / `_sources` / `_mark_cited`),
+`pipeline/prompts.py` (`SECTION_READING` and the section order), `pipeline/generator.py`
+(context pass-through), `models/answer.py` (`ReaderSource`), `web/schemas.py` (`ReaderAskIn`),
+`web/routers/documents.py` (`POST /api/documents/{id}/ask/stream`), `static/js/reader.js` (ask
+bar / passage list / in-place jump / selection capture), `static/js/reader-view.js`
+(`normalizeSelection`), `css/style.css` (`.rd-ask*` / `.rd-src*`); tests
+`tests/unit/web/test_reader_ask_api.py` (10 cases) plus three existing test files extended;
+E2E `tools/chrome_reader_ask.py` (8 steps in a real browser, screenshot
+`tools/shots/reader-ask.png`).

@@ -358,6 +358,20 @@ else → 400 — the same rule the app-level handler uses. Regression tests lock
   feeds embedding / reranker / judge, so the vision section **cannot** clear it (the frontend never
   sends an empty key and the server answers 422). Clear it in the model section instead.
 
+### Four boundaries of the reader's "ask as you read" (track A item c, ADR-0034, 2026-09-23)
+
+- **The PDF in the "Original file" tab cannot be selected**: that layer is the browser's own PDF
+  viewer (a plugin inside an iframe) and exposes no selection — the "N characters selected" pill
+  never appears under this tab. To carry context, select in the Text or Page tab.
+- **Ask and it is gone means no replay**: questions asked in the reader create no session and enter
+  no history, and closing the panel loses them (deliberately so: casual questions should not fill
+  up the session tree). To keep one, ask on the QA page instead.
+- **The scope has exactly two settings, "this paper" / "whole library"**: there is no free-mode
+  toggle, and "pick a folder" is not supported as a scope either.
+- **The passage ceiling is the number of fused candidates** (`fusion_top_k`, 8-14 items): everything
+  is shown with no server-side truncation, but there is no "find a few more" path — the candidate
+  set is the retrieval result itself.
+
 ## 4. Real Bug Cases from Development (Fixed, Archived)
 
 > Each entry is a retrospective on why testing missed it at the time, not a trophy case. Archival
@@ -692,3 +706,61 @@ regression test), and 4 are recorded below as honest boundaries.
   Ollama by editing the config file — the panel deliberately allows only public hosts and loopback.
 - **`.tmp-e2e` / `.tmp-pytest`**: temp directories the E2E tools and pytest leave in the repo (the
   sandbox cannot delete them here) — drop them in the bin.
+
+## 10. Real Bug Cases from Released Builds (Continued, 2026-09-22/23, two reports from the user)
+
+### "为我的资料出题" (generate questions from my material) always times out on the local profile
+
+**What the user saw**: generating a bank on the evaluation page with a local model (qwen3:8b), the
+whole batch failed after a while, with nothing but the bare line
+`LLM 调用失败（qwen3:8b，http://localhost:11434/v1）：timed out` ("LLM call failed (qwen3:8b,
+http://localhost:11434/v1): timed out").
+
+**Root cause (two things stacked)**:
+
+1. **Question generation never turned thinking off**. Generating a question is a mechanical task
+   (read a passage → write a question only that passage answers), while on the local profile a
+   reasoning chain costs ten times the wall clock (measured on the same question: 14.2 s vs 1.4 s)
+   and burns the whole `max_tokens=200` budget on reasoning — **once the budget runs out, the
+   answer comes back empty**. The Q&A path had switched it off long before (ADR-0029); this path
+   was missed.
+2. **The per-call timeout was the Q&A path's 60 seconds**: one round fires dozens of small
+   requests, and on a cold load or with VRAM held by something else, a local 8B model going past
+   60 seconds is not rare; one timeout took the whole batch down.
+
+**Fix**: `_synth_llm()` in `eval/synth.py` — **force `think=False` on the local profile and raise
+the per-call timeout to ≥120 seconds** (the cloud path is untouched; 60 seconds is plenty there);
+`_ask()` turns a `ProviderError` into an `EvalError` carrying "three things you can do" (shrink
+the bank / switch to a smaller model / or use the cloud).
+
+**Lesson**: **"turn thinking off" is a general precondition of the local profile, not a local
+optimisation of the Q&A path** — any mechanical task that fires dozens of small requests
+(question generation, translation, judging) has to ask first whether that path can afford
+`think`.
+
+### The settings panel "needs the key pasted again every time you switch sources"
+
+**What the user saw**: "after hooking up the API and switching models, the API key I typed before
+is not saved, so I have to copy and paste it again every time."
+
+**What was actually happening**: **the key was never lost**. `.env` keeps one slot per source
+(`DEEPSEEK_API_KEY`, `SILICONFLOW_API_KEY`, …), and switching sources only changes *which slot is
+used* in the overlay — **it never deletes anyone else's slot**, so switching back to DeepSeek
+finds that key exactly where it was. What was lost was **what the panel said**: the `has_api_key`
+returned by GET describes **only the currently effective slot**, and after switching to the local
+Ollama and back it is `false`, so the input box shows "paste your key" — the user assumed it was
+gone and pasted it again (pasting the very same value).
+
+**Fix**: GET gains `saved_key_envs` (**the list of slot names that have a key stored, never the
+values**; limited to the slots the panel knows plus the effective one, with no probing for
+arbitrary environment variables); the frontend's `slotHasKey()` decides the prompt text from **the
+selected source's own slot**.
+
+**Guard**: three unit tests (including "switch away and back, the slot is still there") plus a
+4.5 step in the E2E (check the prompt against that slot for each preset in turn) — **and the
+negative was tried**: rolling the frontend back to the old logic turns the E2E red.
+
+**Lesson**: **"the X that is currently effective" and "the X the user is looking at / has
+selected" are two different questions**. Any field in a panel that echoes state should be asked
+"which copy does this state describe" — rendering the selection state from the effective state
+produces exactly the symptom of "the user thinks their data is gone".

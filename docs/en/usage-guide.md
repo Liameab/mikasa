@@ -115,6 +115,14 @@ Three pages in the top bar: **Chat** (home) / **Library** / **Evaluation**; the 
 
    **Reader font size**: `A-` / `A+` in the header scale only the reader's body text; the choice is stored locally and remembered next time. **Every citation card has an "↗ Open original file" button** — if you never guessed that the markers were clickable, this is the explicit entry point.
 
+9. **Asking straight from the text (the reader's "ask as you read", since v0.1.12)** — a persistent ask bar sits at the bottom of the reader, so you ask wherever you have read to: **no switching back to the QA page, and the reading position is not lost**.
+
+   - **The scope defaults to "this paper"** (only this paper's chunks are fed to the model), with a one-click switch to "whole library": use this paper for "what does this passage actually say", and switch to the library for "what do other sources say about this";
+   - **Selecting a piece of text** in the body carries it into the question (a pill shows "N characters selected", ✕ removes it) — the handiest way to ask "what does this mean";
+   - Below the answer comes a list of **related passages**: **every hit from this question is listed** (not only the ones the answer cited), and the cited one carries its `[n]` marker; **clicking any passage jumps back to it in the text and highlights it**, passages belonging to another document are labelled "another document", and clicking one switches the reader over to it;
+   - **Ask and it is gone**: questions asked in the reader **create no session and enter no history** (close it and they are lost) — ask on the QA page if you want one kept;
+   - Known boundary: **the PDF in the "Original file" tab cannot be selected** (that is the browser's own viewer, which exposes no selection), so to carry context select in the **Text** or **Page** tab.
+
 ### 4.2 Follow-Up Techniques
 - Chain follow-ups within one turn (the context stays coherent): "What about vanishing gradients?", "What if we switch to L1?";
 - Push for depth with compare / example / boundary questions: "Give me an example", "When does it not apply?";
