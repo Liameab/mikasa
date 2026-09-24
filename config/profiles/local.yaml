@@ -29,7 +29,11 @@ retrieval:
   crosslingual: true  # 中文问英文库：查询自动翻译作第二路（2026-09-10）
 
 reranker:
-  backend: none                 # 本地重排：改 local 并安装 fastembed 后可用
+  # 本地重排**现在开不了**：fastembed ≥0.8 已移除全部重排 API，而本项目锁的
+  # 就是 0.8.x——`backend: local` 会直接报 ConfigError。要开得先做版本选型
+  # （回落 0.7.x 或换独立重排包），见 ADR-0014 ② 与 known-issues F5。
+  # （原注释写的是"改 local 并安装 fastembed 后可用"，与事实相反，2026-09-24 改。）
+  backend: none
 
 vision:
   # 图片 → 文本（拍照转笔记）：默认**未接入**——本机没装视觉模型，而识图走

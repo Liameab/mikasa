@@ -1,6 +1,6 @@
 # Usage Guide
 
-> A complete guide that takes you from zero to productive use: the three pages, the paper
+> A complete guide that takes you from zero to productive use: the four pages, the paper
 > research workflow, detailed AI Q&A usage, corpus management, settings and data privacy.
 > Companion piece to docs/ideas-and-backlog.md (the idea ledger).
 
@@ -73,13 +73,16 @@ mikasa auth clear-password    # after this, a 0.0.0.0 bind is refused again
 
 ## 3. Page Tour
 
-Three pages in the top bar: **Chat** (home) / **Library** / **Evaluation**; the status pill in the top right shows the current model and the live connection state.
+Four pages in the top bar: **Chat** (home) / **Library** / **Papers** / **Evaluation**; the status pill in the top right shows the current model and the live connection state.
+(There is also a login page at `/login`, shown only when a browser reaches the app from a
+non-local address — see §2b.)
 
 | Page | Left | Right |
 |---|---|---|
 | Chat | Session tree | Chat area (with the free-chat toggle) |
-| Library | Corpus folder tree + search box | Upload area + details of the selected document |
-| Evaluation | — | Golden-set evaluation runs + past reports |
+| Library | Corpus folder tree + search box | Upload area + details of the selected document (the reader panel opens here too, ask-while-reading included) |
+| Papers | Search history + filters/sort | Result list + detail panel (import / citation relations) |
+| Evaluation | Past run list | Golden-set evaluation runs + report rendering |
 
 ---
 

@@ -24,4 +24,7 @@ those files are the source of truth when wording matters. The repository README 
 well ([`README.md`](../../README.md), with this tree's English edition at
 [`README.en.md`](../../README.en.md)). The two trees correspond file by file, and
 `tests/unit/web/test_docs_trees.py` fails if a document or a relative link goes missing.
-`ideas-and-backlog.md` is a private ledger: not shipped, no English mirror.
+Four documents are private: not shipped, no English mirror, and excluded from the correspondence
+and link checks in `tests/unit/web/test_docs_trees.py` — `ideas-and-backlog.md` (the idea ledger),
+`codex-handover.md` (internal hand-off notes), and `interview-handbook.md` / `advisor-readme.md`
+(graduate-admissions interview preparation material).

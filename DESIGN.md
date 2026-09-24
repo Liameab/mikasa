@@ -117,8 +117,8 @@ components:
     rounded: "{rounded.control}"
     padding: 6px 14px
   nav-link-active:
-    backgroundColor: "rgba(63, 185, 80, 0.12)"
-    textColor: "{colors.green}"
+    backgroundColor: "rgba(204, 120, 92, 0.12)"
+    textColor: "{colors.accent}"
     rounded: "{rounded.control}"
   card:
     backgroundColor: "{colors.bg-panel}"
@@ -133,14 +133,14 @@ components:
     rounded: "7px"          # 漂移值——见文末「已知缺口」
     padding: 7px 16px
   button-primary:
-    backgroundColor: "rgba(63, 185, 80, 0.16)"
-    textColor: "{colors.green}"
+    backgroundColor: "{colors.accent}"
+    textColor: "#ffffff"
     typography: "{typography.row-strong}"
     rounded: "7px"
     padding: 7px 16px
   button-primary-active:
-    backgroundColor: "rgba(63, 185, 80, 0.28)"
-    textColor: "{colors.green}"
+    backgroundColor: "{colors.accent-active}"
+    textColor: "#ffffff"
     rounded: "7px"
   button-primary-disabled:
     backgroundColor: "{colors.bg-inset}"
@@ -148,11 +148,11 @@ components:
     rounded: "7px"
   button-danger:
     backgroundColor: transparent
-    textColor: "{colors.red}"
+    textColor: "{colors.danger}"
     rounded: "7px"
   button-danger-solid:
-    backgroundColor: "rgba(248, 81, 73, 0.16)"
-    textColor: "{colors.red}"
+    backgroundColor: "rgba(198, 69, 69, 0.16)"
+    textColor: "{colors.danger}"
     typography: "{typography.row-strong}"
     rounded: "7px"
   button-ghost:
@@ -190,19 +190,19 @@ components:
     padding: 4px 9px
     border: "1px solid {colors.border}"
   pill-ok:
-    backgroundColor: "rgba(63, 185, 80, 0.08)"
-    textColor: "{colors.green}"
-    border: "1px solid rgba(63, 185, 80, 0.5)"
+    backgroundColor: "rgba(93, 184, 114, 0.12)"
+    textColor: "{colors.success}"
+    border: "1px solid rgba(93, 184, 114, 0.5)"
     rounded: "{rounded.pill}"
   pill-warn:
-    backgroundColor: "rgba(210, 153, 34, 0.08)"
-    textColor: "{colors.yellow}"
-    border: "1px solid rgba(210, 153, 34, 0.5)"
+    backgroundColor: "rgba(212, 160, 23, 0.1)"
+    textColor: "{colors.warning}"
+    border: "1px solid rgba(212, 160, 23, 0.5)"
     rounded: "{rounded.pill}"
   pill-bad:
-    backgroundColor: "rgba(248, 81, 73, 0.08)"
-    textColor: "{colors.red}"
-    border: "1px solid rgba(248, 81, 73, 0.5)"
+    backgroundColor: "rgba(198, 69, 69, 0.08)"
+    textColor: "{colors.danger}"
+    border: "1px solid rgba(198, 69, 69, 0.5)"
     rounded: "{rounded.pill}"
   chip:
     backgroundColor: "{colors.bg-inset}"
@@ -211,8 +211,9 @@ components:
     rounded: "{rounded.pill}"
     padding: 3px 10px
   chip-selected:
-    backgroundColor: "rgba(63, 185, 80, 0.16)"
-    textColor: "{colors.green}"
+    backgroundColor: "rgba(204, 120, 92, 0.16)"
+    textColor: "{colors.accent}"
+    border: "1px solid {colors.accent}"
     typography: "{typography.caption-strong}"
     rounded: "{rounded.pill}"
   segmented-control:
@@ -228,21 +229,21 @@ components:
     rounded: "{rounded.row}"
     padding: 6px 8px
   tree-row-selected:
-    backgroundColor: "rgba(63, 185, 80, 0.1)"
+    backgroundColor: "rgba(204, 120, 92, 0.1)"
     textColor: "{colors.text}"
     rounded: "{rounded.row}"
-    border: "1px solid rgba(63, 185, 80, 0.4)"
+    border: "1px solid rgba(204, 120, 92, 0.4)"
   folder-row:
-    backgroundColor: "rgba(63, 185, 80, 0.07)"
+    backgroundColor: "rgba(204, 120, 92, 0.07)"
     textColor: "{colors.text}"
     typography: "{typography.row-strong}"
     rounded: "{rounded.row}"
   user-bubble:
-    backgroundColor: "rgba(47, 129, 247, 0.18)"
+    backgroundColor: "{colors.bg-inset}"
     textColor: "{colors.text}"
     rounded: "{rounded.modal}"
     padding: 11px 14px
-    border: "1px solid rgba(47, 129, 247, 0.35)"
+    border: "1px solid {colors.border}"
   assistant-bubble:
     backgroundColor: "{colors.bg-panel}"
     textColor: "{colors.text}"
@@ -250,19 +251,19 @@ components:
     padding: 11px 14px
     border: "1px solid {colors.border}"
   cite-chip:
-    backgroundColor: "rgba(57, 197, 207, 0.1)"
-    textColor: "{colors.cyan}"
+    backgroundColor: "rgba(93, 184, 166, 0.1)"
+    textColor: "{colors.teal}"
     typography: "{typography.micro}"
     rounded: "5px"
     padding: "1.5px 5px"
-    border: "1px solid rgba(57, 197, 207, 0.55)"
+    border: "1px solid rgba(93, 184, 166, 0.55)"
   cite-card:
     backgroundColor: "{colors.bg-inset}"
     textColor: "{colors.text}"
     typography: "{typography.row}"
     rounded: "{rounded.row}"
     padding: 8px 12px
-    borderLeft: "3px solid {colors.cyan}"
+    borderLeft: "3px solid {colors.teal}"
   code-block:
     backgroundColor: "{colors.bg-inset}"
     textColor: "{colors.text}"
@@ -324,17 +325,19 @@ components:
 
 ## 总览
 
-Mikasa 的界面是一个**紧凑、暗色、单用户的桌面工作台**：四页（问答 / 知识库 / 找论文 / 评测）装在
+Mikasa 的界面是一个**紧凑、暖米浅色、单用户的桌面工作台**：四页（问答 / 知识库 / 找论文 / 评测）装在
 一个窗口里，用鼠标与键盘操作，大量时间离线运行。
 
 - **桌面窗口优先**：整套样式是按"打包成桌面应用"和"本机浏览器标签页"来写的，不是给手机的。
-  全表**只有一条**响应式规则（`@media (max-width: 900px)` 收窄阅读面板）。
+  同一断点下**只有两条**响应式规则（`@media (max-width: 900px)`：收窄阅读面板、笔记编辑器转纵向）。
 - **密度就是目的**：三个字号（11/13/14）承载了几乎全部界面文本，行高 26–34px，语料树 /
   消息列表 / 表格都以"一屏看到更多"为目标。这与营销页的意图正好相反——所以本文档的格式
   参考（Vercel 系产品页的分析）里那套尺度是**重推**的，不是照抄的。
-- **一个强调色、三种含义——刻意如此**：绿色同时表示*品牌*、*选中*与*成功*。这是一次权衡：
-  单用户工具没有营销装饰，"这就是当前的 / 这是对的"本就是同一个意思，再加第二个强调色
-  只会变成噪声。青色、琥珀、红各自只承担一个语义族（信息+引用 / 警示+注意 / 危险）。
+- **一个强调色、三种含义——刻意如此**：珊瑚（`--accent`）同时表示*品牌*、*主行动*与*选中*。
+  这是一次权衡：单用户工具没有营销装饰，"这就是当前的 / 该按的"本就是同一个意思，再加第二个
+  强调色只会变成噪声。**绿（`--success`）刻意不参与**——它只说"好/健康"，与品牌色分开，
+  因为"健康"和"这是 Mikasa"不是一回事（顶栏那个点是全站唯一用它的地方）。青、琥珀、红
+  各自只承担一个语义族（信息+引用 / 警示+注意 / 危险）。
 - **没有 web font、没有图标字体、没有构建链**：字体栈就是系统 UI 字体（`Segoe UI` /
   `Microsoft YaHei` / `PingFang SC` / `system-ui`），图标是 Unicode 字符
   （`⋯ ✕ ▸ ▾ ＋ ◌ ▌`），一次完整重渲染就是刷新页面。
@@ -478,7 +481,7 @@ Segoe UI，中文落到微软雅黑或苹方。所有控件都写了 `font: inhe
 
 ### 布局
 
-- **`main`** 是纵向 flex 列，18px 内边距、14px 间距；三页都填进它。
+- **`main`** 是纵向 flex 列，18px 内边距、14px 间距；四页都填进它。
 - **问答 / 知识库**：两栏网格，`290px` 侧栏 + 内容区（14px 间距）。知识库页复用问答页同一套
   侧栏组件（`kb-tree` 与会话树刻意共用一套行语言）。
 - **评测**：`300px` 运行列表 + 报告，同样 14px 间距。
@@ -500,7 +503,7 @@ Segoe UI，中文落到微软雅黑或苹方。所有控件都写了 `font: inhe
 | 浮层遮罩 | `rgba(0, 0, 0, 0.55)` | 确认框、更新弹窗、首启引导 |
 | 菜单 / toast | `0 6px 18px rgba(0,0,0,0.4)` · `0 8px 28px rgba(0,0,0,0.5)` | `#ctx-menu`、toast、设置面板（`0 8px 30px`） |
 | 对话框 | `0 18px 48px rgba(0, 0, 0, 0.55)` | 确认框（阅读面板用 `0 18px 60px`） |
-| 状态辉光 | `box-shadow: 0 0 6px rgba(63,185,80,0.8)` | 顶栏状态点，全站仅此一处 |
+| 状态辉光 | `box-shadow: 0 0 6px rgba(93,184,114,0.8)` | 顶栏状态点，全站仅此一处 |
 | 高亮 | `outline: 2px solid` / `box-shadow: 0 0 0 1px` | `.cite.lit`、`.rd-chunk.lit`、焦点圈 |
 
 **规则**：阴影属于浮在页面上方的物件。卡片、行、按钮**永不**靠阴影假装抬高——要用就用
@@ -536,7 +539,7 @@ toast 刻意压在确认框之上（动作结果要在弹窗关掉后仍看得�
 | pill | 999px | 徽标、芯片、分段控件、进度槽/条、模式按钮 |
 | circle | 50% | 文件夹开合环、夹内会话环、状态点 |
 
-有两个形状是**语义性**的，不是风格：**绿环**（`border: 2px solid var(--green)` +
+有两个形状是**语义性**的，不是风格：**珊瑚环**（`border: 2px solid var(--accent)` +
 `border-radius: 50%`）标文件夹的开合箭头，**琥珀环**标"住在文件夹里"的会话。它们是同一套
 "圈"语言、两种颜色，区分是有承载的——不要改这两个颜色。
 
@@ -548,14 +551,14 @@ toast 刻意压在确认框之上（动作结果要在弹窗关掉后仍看得�
 | hover（普通按钮） | 描边 → `{colors.muted}` |
 | hover（主按钮） | 填充着色 0.16 → 0.28 |
 | hover（危险按钮） | 描边与文字变红，填充红 0.08 |
-| active / 当前 | 绿色着色 0.10–0.16 + 绿描边或绿字（导航、会话行、运行项、标签、模式钮） |
-| disabled | `opacity: 0.45`（输入框 0.55）、`cursor: not-allowed`；禁用的*主*按钮**完全褪掉绿色**，回到中性控件外观 |
+| active / 当前 | 珊瑚着色 0.06–0.16 + 珊瑚描边或珊瑚字（导航、会话行、运行项、标签、模式钮） |
+| disabled | `opacity: 0.45`（输入框 0.55）、`cursor: not-allowed`；禁用的*主*按钮**完全褪掉珊瑚**，回到中性控件外观 |
 | focus | `:focus-visible` → `outline: 2px solid var(--focus)`；输入框 → `border-color: var(--focus)` |
 | 拖拽源 | `opacity: 0.45` |
-| 拖放目标 | 绿色着色 0.14 + 绿描边 |
-| 高亮（引用 / 阅读块） | 琥珀着色、1px 琥珀光圈，或 `outline: 2px solid var(--yellow)` |
-| 流式中 | 气泡描边 → 青色；绿色 `▌` 光标闪烁 |
-| 忙碌 / 加载中 | 文本用 `--muted`（"正在…"），进度条绿→青渐变 |
+| 拖放目标 | 珊瑚着色 0.14 + 珊瑚描边 |
+| 高亮（引用 / 阅读块） | 琥珀着色、1px 琥珀光圈，或 `outline: 2px solid var(--warning)` |
+| 流式中 | 气泡描边 → 青色；珊瑚 `▌` 光标闪烁 |
+| 忙碌 / 加载中 | 文本用 `--muted`（"正在…"），进度条珊瑚→青渐变 |
 
 ## 组件
 
@@ -567,7 +570,7 @@ toast 刻意压在确认框之上（动作结果要在弹窗关掉后仍看得�
 
 卡片：`.card`（`h2` 标题 / `h3` 节标签）· `.stat-card`（`.k` 标签 `.v` 数值）· `#reading-card`
 
-按钮：`.btn`（默认描边）· `.btn.primary`（绿系主行动）· `.btn.ghost`（透明底）·
+按钮：`.btn`（默认描边）· `.btn.primary`（珊瑚实心主行动）· `.btn.ghost`（透明底）·
 `.btn.danger` / `.btn.danger.solid`（危险，实心用于确认框）· `.icon-btn`（方角图标钮）·
 `.btn-copy`（代码块复制）· `.mode-btn`（胶囊模式切换）
 
@@ -577,7 +580,7 @@ toast 刻意压在确认框之上（动作结果要在弹窗关掉后仍看得�
 选择：`.pill`（`.ok` / `.warn` / `.bad`）· `.s-chip`（`.on`）· `.rd-tabs`（胶囊分段）·
 `.s-sw`（色板圆点，`.on` / `.clear`）
 
-树：`.t-row` · `.t-folder` · `.t-caret`（绿圆环）· `.t-name` · `.t-more`（悬停显现的 ⋯）·
+树：`.t-row` · `.t-folder` · `.t-caret`（珊瑚圆环）· `.t-name` · `.t-more`（悬停显现的 ⋯）·
 `.session-item`（`.active` / `.in-folder` 琥珀圈）· `.t-empty` · `.tree-edit-row`
 
 对话：`.msg.user` / `.msg.assistant` · `.bubble` · `.who` · `.cite`（`.lit` / `.bad`）·
@@ -691,11 +694,12 @@ toast 刻意压在确认框之上（动作结果要在弹窗关掉后仍看得�
 - **圆角漂移**：除五档之外，样式表里仍有 3/4/5/7/14px（气泡 12 + 内角 4、`.btn` 7px、
   `.cite` 5px、`.s-sw`/`.t-caret` 6px）。上面的档位是**目标尺度**；收敛这些零头是一次清理，
   本文档写明目标，而不假装那些漂移就是系统。
-- **alpha 漂移**：仅绿色就出现过 15 个不同的 α（0.05→0.8）。阶梯只点名了其中关键的六档，
+- **alpha 漂移**：仅珊瑚就出现过十几个不同的 α（0.05→0.8）。阶梯只点名了其中关键的六档，
   其余是历史值。
 - **间距是经验值而非推导值**：4px 基数配 6/8/10/12/14/16/18/20 的档位是从现有 CSS 抄录的。
   严格的 4/8/12/16/20 会更干净，方向也是那边，但尚未整体执行（每个面板都要重新过一遍）。
-- **没有浅色主题。** 色板只有暗色；"对话背景色/图"设置是用户级逃生门，不是主题系统。
+- **只有一套（暖米浅色）方案，没有深色主题。** 深色只用在代码块与终端（`--dark`）；
+  "对话背景色/图"设置是用户级逃生门，不是主题系统。
 - **没有图标系统。** 图标是 Unicode 字符，字重与视觉大小随平台字体而变；没有等价于
   icon token 的东西。
 - **动效除上述几处过渡外未记录**（没有时长 token）。

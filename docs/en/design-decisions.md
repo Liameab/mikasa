@@ -2031,8 +2031,8 @@ config).
 
 1. **Browser/LAN access is a first-class entry point**: `mikasa serve --host 0.0.0.0` (or
    `web.host` in the config), then open the address from a phone, tablet or another computer -
-   all three pages, asking, the library and the papers page work (the UI was always
-   responsive).
+   all four pages work - asking, the library, the papers page and the evaluation page (the UI was
+   always responsive).
 2. **A non-loopback bind requires a password; without one the server refuses to start**
    (fail closed): `serve --host 0.0.0.0` exits and prints the command that fixes it
    (`mikasa auth set-password`). Better to refuse than to run wide open by default.

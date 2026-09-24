@@ -1,7 +1,8 @@
 # 自动化评测（M2）：设计口径与使用指南
 
-> 配套代码：`src/mikasa/eval/`、`tools/build_golden.py`、`evals/questions.yaml`、
-> `evals/golden_set.json`；命令：`mikasa eval run | list`。
+> 配套代码：`src/mikasa/eval/`（评测编排 + `synth.py` 自动出题）、
+> `tools/build_golden.py`、`evals/questions.yaml`、`evals/golden_set.json`。
+> 命令：`mikasa eval run | list`；**自动出题的入口在 Web 评测页**，不在 CLI。
 
 评测要回答的不是"模型好不好"，而是三句可以拆开回答的话：
 **要的资料有没有被捞回来（检索）**、**回答有没有按规则引用并守住拒答（生成协议）**、
@@ -12,14 +13,15 @@
 
 | 阶段 | 测什么 | 配置口径 | 指标 | 离线可跑 |
 | --- | --- | --- | --- | --- |
-| A 检索层 | 融合召回有没有把题面素材带回来 | 关重排（融合窗口独立锚定 10，与产品当前值相同） | recall@5/8/10、MRR、nDCG@k（按难度分层） | ✅ |
-| B 生成层 | 引用纪律 + 拒答纪律 | 产品配置原样（重排开 top5、窗口 10） | citation gold ratio、引用越界率、可答误拒、拒答准确率 | ✅（mock LLM） |
+| A 检索层 | 融合召回有没有把题面素材带回来 | 关重排（融合窗口独立锚定 10，与 api/offline 档当前值相同；local 档是 14） | recall@5/8/10、MRR、nDCG@k（按难度分层） | ✅ |
+| B 生成层 | 引用纪律 + 拒答纪律 | 产品配置原样（重排开 `top_n=8`、窗口 10） | citation gold ratio、引用越界率、可答误拒、拒答准确率 | ✅（mock LLM） |
 | C 语义裁判 | 回答内容质量 | LLM-as-Judge（双轮位置交换） | 正确性 1-5、档位 A-D、忠实性、两轮一致性 | ❌ 需密钥/本地裁判 |
 
 为什么阶段 A 要"关重排"：重排器可能把题面素材挤出前几名——那是重排的失误，
 不是召回的失误。检索层评测要把召回与重排解耦，只回答"素材在不在候选里"；
-阶段 B 才回到产品配置（重排开 top5），测真实链路端到端表现。融合窗口 A/B
-都定 10（63 题真实验收实证：窗口 8 会漏 hard 综合题的第二金块，q036/q037
+阶段 B 才回到产品配置（重排开 `top_n=8`），测真实链路端到端表现。融合窗口 A 定 10、
+B 走产品配置（api/offline 档 10、local 档 14——63 题真实验收实证：窗口 8
+会漏 hard 综合题的第二金块，q036/q037
 实测金块落在第 9-10 名，@10 时 47 题 recall@10=1.000）——A 的窗口由
 runner 常量独立锚定，产品将来调小也不动摇 A 口径。两个口径都在同一份报告里披露。
 
@@ -29,7 +31,8 @@ runner 常量独立锚定，产品将来调小也不动摇 A 口径。两个口�
 分级 + 16 不可答按 unrelated / insufficient / hallucination_bait 分类），不是自动生成的——
 人工题的价值在于它不会顺着语料的措辞出题，自动生成只会把语料的偏见再学一遍。
 
-**自动题库**（2026-09-19 起，`src/mikasa/eval/synth.py`）补上另一半：人工题的锚句
+**自动题库**（2026-09-19 起，`src/mikasa/eval/synth.py`；**入口是 Web 评测页**——
+`POST /api/eval/synthesize`，产物落 `<数据目录>/eval/golden-auto.json`，CLI 没有对应子命令）补上另一半：人工题的锚句
 是示例语料的原文，**换一份语料就天然失效**，而"评我自己的资料"这件事没人替你的文档
 写过标准答案。自动出题从你自己的语料里抽样分块，让模型出一道"只有这段能回答"的题，
 **那个分块即标准答案**，于是任意语料都能评。代价必须写在报告里：自动题是模型照着
@@ -59,7 +62,8 @@ runner 常量独立锚定，产品将来调小也不动摇 A 口径。两个口�
 ```bash
 mikasa ingest sample-corpus      # 1. 语料入库
 python tools/build_golden.py     # 2. 冻结黄金集（幂等；语料变了就重跑）
-mikasa eval run --profile offline   # 3. 跑评测（零密钥）；api/local 配置开语义裁判
+mikasa eval run --profile offline   # 3. 跑评测（零密钥）；只有 api 档开语义裁判
+                                    #    （local 档 judge.enabled=false，见 ADR-0014 ③）
 mikasa eval list                 #    历史评测回溯
 ```
 
@@ -108,6 +112,10 @@ JSON mode——Ollama 小模型不稳；解析失败计 raw 留痕。裁判对�
   实证，也说明真实语义必须靠阶段 C；
 - mock 自带的噪声说明：offline 场次拒答准确率 ≠ 产品拒答能力，勿拿它对外汇报；
 - **真实 api 档对照（2026-09-09 验收基线，DeepSeek 生成 + Qwen 裁判）**：
+  ⚠ **配置脚注**：这两条 09-09 基线跑在旧链路参数上（api 档 `reranker.top_n=5`、
+  local 档 `fusion_top_k=10`、本地档当时还没有 `think`/`num_ctx` 两个旋钮），
+  与当前默认值不同，**绝对数不可与新跑的结果直接比**（ADR-0017 ④ 原话：
+  改 `top_n` 会平移基线）。它们仍是"真实质量量级"的证据，不是回归对照。
   阶段 A recall@10=1.000 / MRR=0.979 / nDCG≈0.98（hard 12 题 recall@5=0.972）；
   引用越界率 0.000、citation gold ratio 均值 0.848（p50=1.000，44 题样本）；
   16 道不可答拒答 16/16（真实模型守住纪律，mock 的 7 误答在此归零）；
@@ -157,9 +165,11 @@ JSON mode——Ollama 小模型不稳；解析失败计 raw 留痕。裁判对�
 - **异常明细**：链路失败、误拒、误答、L3 违规、裁判不一致逐条列出——这是
   人工复核的入口，正常条目请查 metrics_json 的 items 逐条留痕。
 
-回归门禁口径（CI）：全量 `pytest -q`（含 eval 单测 58 条）+ `ruff` + `mypy` +
-`mikasa eval run --profile offline` 冒烟。**覆盖率基线：93%**（3469 语句，
-2026-09-09 M4.5 会话管理收工后全量重测；`--cov=mikasa --cov-report=term`，
-332 条用例 ~17s；上版基线 91% = 3143 语句 / M3.5 收工后重测）。真实质量验收（发布前人工跑）：`--profile api`（DeepSeek 生成 + Qwen 裁判，
+回归门禁口径（CI）：全量 `pytest -q` + `ruff` + `mypy` +
+`mikasa eval run --profile offline` 冒烟。**覆盖率基线：92%**（8123 语句，
+2026-09-24 收工后全量重测：**1063 passed + 2 skipped、约 2 分钟**；
+`--cov=mikasa --cov-report=term`。上一版基线 93% = 3469 语句 / 2026-09-09 M4.5
+收工——语句数翻了近一倍而比例只降一个点，是"新增功能都带测试"的结果）。
+真实质量验收（发布前人工跑）：`--profile api`（DeepSeek 生成 + Qwen 裁判，
 阶段 C 判分）；`local` 档 judge 关闭（ADR-0014 ③）→ 只看协议层
 （召回/引用纪律/拒答），语义质量对照以 api 档近似。

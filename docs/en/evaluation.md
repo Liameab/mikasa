@@ -1,7 +1,9 @@
 # Automated Evaluation (M2): Methodology and Usage Guide
 
-> Companion code: `src/mikasa/eval/`, `tools/build_golden.py`, `evals/questions.yaml`,
-> `evals/golden_set.json`; commands: `mikasa eval run | list`.
+> Companion code: `src/mikasa/eval/` (orchestration plus `synth.py`, the question
+> generator), `tools/build_golden.py`, `evals/questions.yaml`, `evals/golden_set.json`.
+> Commands: `mikasa eval run | list`; **the synthesized bank is generated from the web
+> evaluation page**, not from the CLI.
 
 Evaluation is not meant to answer "is the model any good." It answers three
 questions that can be assessed separately: **were the sources we needed actually
@@ -15,16 +17,17 @@ that no conclusion masks another.
 
 | Stage | What it measures | Configuration | Metrics | Runs offline |
 | --- | --- | --- | --- | --- |
-| A Retrieval | Whether fusion recall brings back the material the question needs | Reranker off (fusion window independently anchored at 10, same as the current product value) | recall@5/8/10, MRR, nDCG@k (stratified by difficulty) | ✅ |
-| B Generation | Citation discipline + refusal discipline | Product configuration as-is (reranker on, top5, window 10) | citation gold ratio, out-of-range citation rate, false refusals on answerable questions, refusal accuracy | ✅ (mock LLM) |
+| A Retrieval | Whether fusion recall brings back the material the question needs | Reranker off (fusion window independently anchored at 10, the same as the api/offline profile's current value; the local profile uses 14) | recall@5/8/10, MRR, nDCG@k (stratified by difficulty) | ✅ |
+| B Generation | Citation discipline + refusal discipline | Product configuration as-is (reranker on, `top_n=8`, window 10) | citation gold ratio, out-of-range citation rate, false refusals on answerable questions, refusal accuracy | ✅ (mock LLM) |
 | C Semantic judge | Answer content quality | LLM-as-Judge (two rounds, positions swapped) | correctness 1-5, grade A-D, faithfulness, two-round agreement | ❌ needs an API key / local judge |
 
 Why stage A turns the reranker off: the reranker can push the material a question
 needs out of the top ranks — that is a reranker failure, not a recall failure.
 Retrieval evaluation has to decouple recall from reranking and answer only "is the
 material in the candidate set"; stage B returns to the product configuration
-(reranker on, top5) to measure the real end-to-end path. The fusion window is 10
-for both A and B (validated by the real 63-question run: a window of 8 misses the
+(reranker on, `top_n=8`) to measure the real end-to-end path. The fusion window is
+10 for A, and for B it is whatever the product says (10 on api/offline, 14 on
+local) — validated by the real 63-question run: a window of 8 misses the
 second gold chunk on hard synthesis questions — q036/q037 put gold chunks at ranks
 9-10, and at @10 47 questions reach recall@10=1.000) — A's window is anchored
 independently by a runner constant, so shrinking it in the product later cannot
@@ -38,7 +41,9 @@ insufficient / hallucination_bait). Its value is that a human does not phrase
 questions the way the corpus does — auto-generation would only learn the corpus's
 biases all over again.
 
-**The synthesized bank** (2026-09-19, `src/mikasa/eval/synth.py`) covers the other
+**The synthesized bank** (2026-09-19, `src/mikasa/eval/synth.py`; **its entry point
+is the web evaluation page** — `POST /api/eval/synthesize`, with the bank landing in
+`<data dir>/eval/golden-auto.json`; there is no CLI subcommand) covers the other
 half: hand-written anchors are verbatim quotes from the sample corpus, so they die
 with a corpus swap — and nobody has written gold answers for *your* documents. The
 synthesizer samples chunks from your own corpus and asks the model for a question
@@ -82,7 +87,8 @@ loader, so an anchor must fall inside a single line.
 ```bash
 mikasa ingest sample-corpus      # 1. ingest the corpus
 python tools/build_golden.py     # 2. freeze the golden set (idempotent; re-run when the corpus changes)
-mikasa eval run --profile offline   # 3. run the evaluation (zero API keys); api/local enable the semantic judge
+mikasa eval run --profile offline   # 3. run the evaluation (zero API keys); only api enables
+                                    #    the semantic judge (local has judge.enabled=false, ADR-0014 ③)
 mikasa eval list                 #    browse past runs
 ```
 
@@ -156,6 +162,12 @@ identically, differing only in configuration.
   that real semantics require stage C;
 - A note on the mock's built-in noise: offline refusal accuracy ≠ the product's
   refusal capability; do not report it externally;
+- ⚠ **Configuration footnote**: both 09-09 baselines below were run on older link
+  parameters (api `reranker.top_n=5`, local `fusion_top_k=10`, and the local profile
+  had neither `think` nor `num_ctx` yet). They are **not directly comparable** to a
+  fresh run against today's defaults (ADR-0017 ④: changing `top_n` shifts the
+  baseline). They remain evidence for the *magnitude* of real quality, not a
+  regression reference.
 - **Real api-profile baseline (2026-09-09 acceptance run, DeepSeek generation +
   Qwen judge)**: stage A recall@10=1.000 / MRR=0.979 / nDCG≈0.98 (hard, 12
   questions: recall@5=0.972); out-of-range citation rate 0.000, citation gold ratio
@@ -235,12 +247,13 @@ identically, differing only in configuration.
   for human review; for normal items, inspect the metrics_json items for the
   per-item audit trail.
 
-Regression gate (CI): full `pytest -q` (including 58 eval unit tests) + `ruff` +
+Regression gate (CI): full `pytest -q` + `ruff` +
 `mypy` + `mikasa eval run --profile offline` as a smoke test. **Coverage baseline:
-93%** (3469 statements, full re-measurement after the M4.5 conversation-management
-work landed on 2026-09-09; `--cov=mikasa --cov-report=term`, 332 test cases in
-~17s; the previous baseline was 91% = 3143 statements, re-measured after M3.5
-landed). Real quality acceptance (run manually before release): `--profile api`
+92%** (8123 statements, full re-measurement on 2026-09-24:
+**1063 passed + 2 skipped in ~2 minutes**; `--cov=mikasa --cov-report=term`. The previous
+baseline was 93% = 3469 statements after M4.5 on 2026-09-09 — the statement count
+nearly doubled while the percentage dropped one point, which is what "every new
+feature ships with its tests" looks like). Real quality acceptance (run manually before release): `--profile api`
 (DeepSeek generation + Qwen judge, stage C scoring); with the `local` profile the
 judge is off (ADR-0014 ③) → protocol-layer metrics only (recall / citation
 discipline / refusal), with the api profile standing in as the semantic-quality

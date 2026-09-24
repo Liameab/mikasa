@@ -18,4 +18,7 @@ Mikasa 的技术文档——写给想知道**为什么这样建**的人，而不
 | [已知问题与改进 backlog](known-issues.md) | 未修复问题（含裁决记录）与未排期候选 |
 | [设计系统](../DESIGN.md) | Web UI 的 token（CSS 变量）、字阶、圆角语法、z-index 阶梯、状态与组件契约——有护栏测试盯着 |
 
-`ideas-and-backlog.md`（想法总账）是**私人文档**，不进仓库、没有英文镜像。
+这几篇是**私人文档**，不进仓库、没有英文镜像（`tests/unit/web/test_docs_trees.py`
+的对应关系与链接检查把它们排除在外）：`ideas-and-backlog.md`（想法总账）、
+`codex-handover.md`（内部交接）、`interview-handbook.md` 与 `advisor-readme.md`
+（考研复试准备材料）。

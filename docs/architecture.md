@@ -14,10 +14,12 @@
                     └────────────────────────────────────────────────┘
                                    ↓ meta.json 指纹快照（doctor/评测用）
 
-                    ┌─────────── 问答链路（CLI / Web，双模式）─────────┐
+                    ┌─────────── 问答链路（CLI / Web，三模式）─────────┐
   问题 ─┬→ kb 知识库：双路召回 ─→ RRF 融合 ─→ 精排(可选) ─→ top_n 块
         │       注入提示词(编号 1..N) ─→ LLM 生成 ─→ [n] 解析校验(L1)
         │       ─→ 答案 + 可点击引用溯源（无据拒答）
+        │       （阅读器「限定本篇」是同一内核的窄范围变体：两路召回先按
+        │         allow-list 过滤、融合前生效，不建会话不落库；ADR-0034）
         └→ free 自由问答：跳过检索/注入 ─→ 直连 LLM 自由作答
                 （无引用/拒答协议；需 api/local 模型；见 ADR-0013）
                     └────────────────────────────────────────────────┘
@@ -37,8 +39,8 @@
 | --- | --- | --- |
 | 入口 | `cli/` `web/` `__main__.py` | typer+rich 命令；FastAPI + 原生前端 |
 | 应用 | `pipeline/` | ask 编排：检索 → 注入 → 生成 → 校验 |
-| 领域服务 | `ingest/` `index/` `eval/` `papers/` | 入库、索引、评测、在线论文检索（可插拔的算法区） |
-| 提供方 | `providers/` | LLM / 嵌入 / 重排 / **视觉**（M6 ②，ADR-0027）：Protocol + 实现（ADR-0003） |
+| 领域服务 | `ingest/` `index/` `eval/` `papers/` `update/` | 入库、索引、评测、在线论文检索（可插拔的算法区）、应用内更新（ADR-0022/0024） |
+| 提供方 | `providers/` | LLM（api 兼容面 + Ollama 原生）/ 嵌入 / 重排 / **视觉**（ADR-0027）/ **出图**（ADR-0031）：Protocol + 实现（ADR-0003） |
 | 存储 | `storage/` | SQLite 连接/仓库 + meta.json 快照 |
 | 基础 | `config/` `models/` `utils/` `errors.py` | 配置、pydantic 模型、文本/日志 |
 
@@ -111,10 +113,17 @@ Web 上传端点、在线找论文的导入端点、以及知识库页的笔记�
   （解耦口径，见 evaluation.md §1），产品形态才开精排。
 
 **local 形态实况（M4）**：嵌入走 fastembed（onnxruntime，CPU 可跑）
-的 bge-small-zh-v1.5（**512 维**，query 加 bge 检索指令前缀）；重排
+的 bge-small-zh-v1.5（**512 维**，query 加 bge 检索指令前缀）；**发布物随包
+携带这份模型**（固定 revision + 运行时铺进缓存 + `local_files_only`，
+首次入库不再联网，ADR-0030；源码版仍首次联网下载）；重排
 backend=none——RRF 融合保序直通生成（实现保留，启用见 ADR-0014）；
-生成走 Ollama（qwen3:8b）OpenAI 兼容 `/v1` 端点，**免密钥**（占位 key
-注入，放行点论证见 ADR-0014 ①）。维度迁移纪律是 local 档的存亡线：
+生成走 Ollama（qwen3:8b）的**原生 `/api/chat`**（`OllamaNativeLLM`，
+免密钥——原生面本就不发鉴权头；api 档不受影响，仍走 OpenAI 兼容面 +
+占位 key，放行点论证见 ADR-0014 ①）。走原生面是硬要求：`think` 与
+`num_ctx` **只有它认**，兼容面会静默忽略（ADR-0029）——两个 local 专属
+旋钮 `llm.think`（默认 `false`，否则推理吃光输出预算）与
+`llm.num_ctx`（默认 `16384`，实测不传时同一段提示词只处理 2050 token，
+材料被砍掉大半）。维度迁移纪律是 local 档的存亡线：
 embeddings 表单库单模型（api bge-m3 1024 维 ≠ local 512 维），切
 profile 必须 `ingest --reindex`，三层防护 = doctor 三方一致性 +
 `ExactVectorStore.search` 维度防御 + 评测前的逐题校验（重建后旧分块
@@ -124,9 +133,15 @@ profile 必须 `ingest --reindex`，三层防护 = doctor 三方一致性 +
 
 **提示词协议**（`pipeline/prompts.py`，唯一事实源——MockLLM 与真实 LLM
 共用同一套标记，杜绝两处漂移）：
-- 用**纯文本分区标记**（【资料片段】/【问题】/【历史对话摘要】）而非
-  JSON 结构化输出：对 Ollama 等本地小模型更稳、流式友好，解析失败可
-  观测（格式解析失败率是评测回归必看项）；
+- 用**纯文本分区标记**（【资料片段】/【问题】/【历史对话摘要】/
+  【正在阅读的段落】）而非 JSON 结构化输出：对 Ollama 等本地小模型更稳、
+  流式友好，解析失败可观测（格式解析失败率是评测回归必看项）。段序是
+  **硬约束**：【正在阅读的段落】必须排在【资料片段】**之前**，否则
+  MockLLM 的解析器会把它吞进最后一个资料，offline 档的答案静默变味
+  （ADR-0034）；
+- 两份系统提示词都追加同一份**输出呈现规范**（`OUTPUT_FORMAT_CONTRACT`，
+  ADR-0029）：结论先行、`## ` 分节、该用表格就用、公式走 LaTeX、求全不求短
+  ——小模型不会"自己想起来"这些形态，写进要求才会照做；
 - 引用编号 `[n]` 与注入片段编号一一对应，**模型无权自造编号**——注入
   顺序即编号，越界即协议违规；
 - 拒答统一句式常量 `REFUSAL_TEXT`：评测与 UI 都以字符串精确识别拒答，
@@ -143,7 +158,9 @@ profile 必须 `ingest --reindex`，三层防护 = doctor 三方一致性 +
 生成产物 `Answer`（文本 + 解析出的 Citation 列表 + 拒答标志）与
 `Completion`（含 token 用量，供成本核算与评测）分离返回；引用溯源
 闭环：chunk 的 heading_path/page 一路带到 Citation，Web 问答页据此
-渲染可点击的来源卡片。
+渲染可点击的来源卡片。阅读器另有一个 `ReaderSource`：**全部命中 +
+是否被引用**，只走那个端点的 SSE 帧——`Answer` 与 `/api/ask/stream`
+一个字段都不加，落库载荷与评测口径不动（ADR-0034）。
 
 **free 自由问答是刻意的旁路**（ADR-0013）：同一 AskService 门面上
 `mode="free"` 时跳过检索/注入/引用解析/拒答判定，直连 LLM——防线
@@ -158,16 +175,30 @@ L1~L3 只约束 kb 路径。旁路点在**服务层**而非 Generator（Generato
 data/
 ├── mikasa.db          # SQLite：WAL 模式（读写不互斥）、外键级联
 │    ├── documents / chunks / embeddings    # 正文、预分词 tokens、float32 向量
+│    ├── kb_folders                        # 语料文件夹树（知识库页，自引用 parent_id）
 │    ├── qa_folders                        # 会话文件夹树（自引用 parent_id）
 │    ├── qa_sessions / qa_messages          # 会话（title/title_manual/folder_id）与历史
-│    └── eval_runs                          # 评测行（report_md 列 = 报告全文）
+│    ├── eval_runs                          # 评测行（report_md 列 = 报告全文）
+│    └── doc_links                          # 知识链地基（M6 ③）：只有表与 repo 层，
+│                                           #   暂无写入方，会一直是空的
 ├── uploads/           # 文档入库副本（Web 上传的归一处；删除文档时同步删）
+├── note-media/        # 笔记原图（按笔记 key 分子目录，ADR-0027）
+├── generated/         # 文生图产出（ADR-0031）——与上面两个同理放在 uploads 之外，
+│                      #   否则 reindex 会把图片当待解析文档扫进去
 ├── indexes/meta.json  # 派生快照：语料指纹/chunk 数——doctor 一致性体检与
 │                      #   报告里"这套题是为哪份语料写的"的来源（可随时由 DB 重建，不是权威源）
-└── eval-reports/      # {run_id}-{name}.md 评测报告（与 eval_runs 表同源）
+├── eval-reports/      # {run_id}-{name}.md 评测报告（与 eval_runs 表同源）
+├── eval/golden-auto.json  # 自动出题的题库（ADR-0026）
+├── web-tmp/           # 上传/导入的暂存子目录（成功或失败都在 finally 里清）
+├── updates/           # 更新包与它的 .part 半成品（ADR-0024 断点续传）
+├── logs/              # 轮转日志
+├── auth.json          # 访问口令的 PBKDF2 哈希与盐（无明文，ADR-0033）
+├── config.yaml        # 用户可写配置覆盖层（Web 设置面板写入，ADR-0018）
+├── .env               # 密钥（面板写入；只在本机，永不回显）
+└── models/            # 随包向量模型的运行时铺设目标（fastembed 缓存形状，ADR-0030）
 ```
 
-- 版本管理：schema_version 分路（ADR-0004 修订）：低版本库沿
+**schema 终态是 v5**。版本管理分路（ADR-0004 修订）：低版本库沿
   `_MIGRATIONS` 自动逐级迁移（每级幂等 + 独立提交 + 日志留痕），
   高版本库硬报错、旧程序绝不读写新库；schema 终态、历史版本快照
   （immutable）、迁移函数三者同 PR；
@@ -185,17 +216,22 @@ data/
 offline settings）；uvicorn `--reload` 走 `serve_app_factory()` 导入字符串。
 前端零构建链：原生 HTML + ES Modules，全部动态文本经 esc 后 innerHTML
 （LLM 输出不可信），SSE 由 fetch + ReadableStream 手拆帧（不引
-sse-starlette）。
+sse-starlette）。这条纪律有**两个受控例外**：公式在 `esc()` **之前**抽出
+交给 KaTeX（放之后会把 `x < y` 渲染错，ADR-0028），图片只放行**单个 `/`
+开头的同源路径**（远程图片等于追踪像素，ADR-0031）——两处都是白名单式的
+窄开口，不是"少转义了一次"。
 
-**单进程约束**（serve 硬性设计）：内存态索引快照与评测
-EvalJobManager（单槽状态机，threading.Lock）都活在进程内——
+**单进程约束**（serve 硬性设计）：内存态索引快照与一组**单槽状态机**
+（评测 EvalJobManager、自动出题 SynthJobManager、本机模型拉取 PullJobManager、
+更新下载 UpdateManager，各带 threading.Lock）都活在进程内——
 `serve` 不能多 worker（uvicorn --workers 不受支持，报错提示），
 启动时对既有库做一致性校验并快照加载。换句话：**Web 形态是一台
 单用户交互机，不是水平扩展服务**——规模边界在 README/FAQ 如实声明。
 
-上传安全四道（`web/routers/documents.py`）：sanitize_filename（保留中文）
-→ 后缀白名单 415 → `read(max+1)` 超限 413 → 临时文件 finally unlink；
-DB 层 `file_path` 脱敏，杜绝路径探针。
+上传安全四道（`web/routers/documents.py`）：sanitize_filename（保留中文，
+净化失败直接 415）→ 后缀白名单 415 → `seek()` 量真实字节数、超限 413
+（不把整份读进内存；另有请求体上限中间件兜底，空文件 400）
+→ 临时文件 finally unlink；DB 层 `file_path` 脱敏，杜绝路径探针。
 
 **在线找论文**（M7/M8/ADR-0023）住在 `papers/`：四源检索服务——arXiv（Atom）与
 OpenAlex/CORE/DOAJ（JSON）各写一个来源模块，**归一成同一份 `PaperResult`**；
@@ -206,8 +242,10 @@ OpenAlex/CORE/DOAJ（JSON）各写一个来源模块，**归一成同一份 `Pap
 每个来源声明自己的能力（`SourceCaps`：年份过滤、被引排序、时间排序、语言过滤、
 开放获取处理方式），做不到的条件以 `notes` 如实回报——降级要说出来，绝不静默
 忽略（CORE 的年份**参数**会被上游收下后丢掉，所以那个来源改走查询语法）。
-`web/routers/papers.py` 暴露五个端点——`POST /api/papers/search`、
-`POST /api/papers/import`、`GET /api/papers/sources`、`GET/PUT /api/papers/settings`
+`web/routers/papers.py` 暴露六个端点——`POST /api/papers/search`、
+`POST /api/papers/import`、`GET /api/papers/sources`、`GET/PUT /api/papers/settings`、
+`GET /api/papers/related`（引证关系：相关论文 / 引用了它 / 参考文献——只有 OpenAlex
+有原生数据，其余来源按 DOI 桥接）
 （翻页不新增端点：第 N 页就是 `offset=(N-1)×50` 的同一个检索请求——服务层的窗口公式
 把全局窗口摊到各来源上，所以"跳页"只是换一个 offset；总页数由前端按各源自报的命中数
 求和算出，并按上游按页取数的 1 万条上限 × 来源数封顶，状态行里写明这个来路）
@@ -220,7 +258,10 @@ OpenAlex/CORE/DOAJ（JSON）各写一个来源模块，**归一成同一份 `Pap
 `GET /api/update/check`、`POST /api/update/download`、`GET /api/update/download/status`、
 `POST /api/update/install`。服务端自己去问 GitHub 的 `/releases/latest` 并从响应里挑出安装包
 资产——**客户端永远拿不到 URL**——然后在主机白名单（`github.com` / `*.githubusercontent.com`，
-http+回环是 E2E 逃生门）后面下载，与同一 release 的 `SHA256SUMS.txt` 逐字节核对 sha256，最后用
+http+回环是 E2E 逃生门）后面下载，核对安装包的 sha256：**优先用 GitHub API 自带的
+`asset.digest`**（2026-09-21 用户报障后的改动——原先一律去 github.com 下那个几百字节的
+`SHA256SUMS.txt`，国内握手被重置就整场更新胎死腹中、进度永远 0），拿不到 digest 的老 API /
+假源才回退去下校验和文件，判据一条不减；最后用
 双击语义（`os.startfile`）启动安装向导。检查失败保持静默（只进日志与状态端点），结果缓存 10
 分钟；前端提供「跳过此版本」与设置面板里的启动检查开关。
 
@@ -229,6 +270,43 @@ ADR-0024 起下载与任务槽都是"可续、可接"的：半成品在 `updates
 ——所以 `POST /api/update/download` 是**幂等**的（202 + `adopted: true`），不再回 409。
 前端用**一个轮询循环**同时驱动弹窗与顶栏胶囊：关弹窗、切页、刷新都不打断下载；只有弹窗还开着
 （用户在场）时才自动启动安装器，否则胶囊停在「已就绪 · 点此安装」等人来按。
+
+**公式排版**（v0.1.6，ADR-0028）：KaTeX 0.18.7 内置在 `web/static/vendor/katex/`
+（含 20 个 woff2 字体，四个页面都引、vendor 样式排在 `style.css` **之前**好让项目字号覆盖生效），
+`renderAnswer` 里以**前置一遍**的方式排版：从原始文本抽 LaTeX → 占位符 → 走既有的
+（esc → 受控替换）管线 → 还原 KaTeX 的 HTML。**必须在 `esc()` 之前抽**，否则 KaTeX 收到的是
+`x &lt; y`。两道闸先摘掉代码块/行内代码（`echo $HOME` 不是公式），再排除"中文夹钱数"与纯数字
+（`价格$5到$10之间`、`$1000$`），其余默认放行——判据松紧是踩过坑的：第一版太严，在用户那条回答里
+静默漏掉 8 处真公式。KaTeX 缺席时原样显示 LaTeX 源码，**绝不吞内容**。
+
+**文生图**（v0.1.9，ADR-0031）：出图独立成一个配置段（`image: none|api`，默认 `none`，与 vision
+分开——一个收图一个出图，参数都不是一回事）。`POST /api/images/generate` 拿到的是**字节不是 URL**
+（上游图片链接只有 1 小时有效期，写进回答就是一小时后变裂图）→ 落盘 `data_dir/generated/`，
+`GET /api/images/generated/{name}` 取图（文件名服务端拼、正则白名单，路径穿越没有入口）。
+出网**两条路都过 SSRF 闸门**：用户填的 base_url 与上游返回的图片地址（后者算半可信输入，不查就是
+现成的内网探测原语）。前端只放行同源图片（见上）。生成图**不进知识库**。
+
+**模型来源**（v0.1.10，ADR-0032）：六个预设——Ollama 本机 / DeepSeek / SiliconFlow / Claude /
+OpenAI / 自定义。Claude 走 Anthropic 官方的 OpenAI 兼容入口（如实写明那只是兼容层：不支持提示词
+缓存、不认识的字段静默忽略）；OpenAI 预设的文案里写明「订阅不能当 API」。本机模型的第二步收进
+应用内：`POST /api/settings/ollama/pull`（202 + 轮询、逐帧进度、可取消、单槽状态机），
+但**不代下 Ollama 安装器**（1.5GB 的第三方二进制再分发 + 版本漂移，收益只是省一次点开官网）。
+
+**浏览器访问与访问口令**（v0.1.11，ADR-0033）：Mikasa 本来就是 Web 应用（桌面端只是 pywebview
+外壳），所以"浏览器/局域网访问"是第一等入口（`serve --host 0.0.0.0`）。带上网络就有一道
+**fail closed 的门**：非回环绑定**必须已设口令**，没设直接拒绝启动并给出能照做的命令
+（`mikasa auth set-password`）；口令 PBKDF2-HMAC-SHA256 + 随机盐存 `<数据目录>/auth.json`，
+会话是 **HMAC 签名的过期时间戳**（无服务端状态、无数据库表，改口令即换密钥 → 所有旧会话立刻
+失效）；**回环来源免口令**（能连到 127.0.0.1 的人本来就坐在你机器上了）。门的判据只有一条：
+来源地址是不是回环——同一判据在这套代码里踩过"空门"（命令行开了 `0.0.0.0`、门却读配置以为还在
+本机，局域网直连拿到 200），教训是**同一判据有第二个消费点时必须回到同一处取值**。不做账号体系：
+多用户与云托管是另一个里程碑。
+
+**阅读器「边看边问」**（v0.1.12，ADR-0034）：阅读面板底部常驻提问栏，范围默认「本篇」、可一键切
+「全库」，正文选中文字自动作为上下文；**即问即散**（不建会话、不落库）。限定文档走
+`Retriever.retrieve` 的 keyword-only `document_id`（allow-list 过滤，**发生在 `rrf_fuse` 之前**——
+落在融合之后等于让大库先把名次压平，表现为静默降质）。流式内核抽成 `_kb_stream`，qa 页与阅读器
+各自决定落不落库。
 
 ## 九、评测编排（CLI 与 Web 同一套）
 
@@ -244,12 +322,17 @@ ADR-0024 起下载与任务槽都是"可续、可接"的：半成品在 `updates
 只有一条：**评测与产品共用同一检索/生成代码路径**（换配置不换代码），
 离线 mock 在 CI 保证协议正确性，真实质量靠 api/local 真跑阶段 C。
 
+**自动出题**（v0.1.6，ADR-0026）是同款形状的另一个作业：`POST /api/eval/synthesize`
+（202 + `GET /api/eval/synthesize/status` 轮询），`SynthJobManager` 与评测作业同一套
+单槽 + `threading.Lock` 语义，题库落在 `<数据目录>/eval/golden-auto.json`；
+offline 档没有可出题的模型，端点直接 400 拒绝而不是排队等失败。
+
 ## 十、运行时形态
 
 | 形态 | 命令 | 说明 |
 | --- | --- | --- |
-| CLI | `mikasa init/doctor/ingest/list/index/ask/chat/eval` | 全量能力，rich 输出 |
-| Web | `mikasa serve [--profile/--host/--port/--reload]` | 三页（问答/文档/评测），SSE |
+| CLI | `mikasa init/doctor/ingest/list/index/ask/chat/eval/auth` | 全量能力，rich 输出；`auth` 管访问口令（开给局域网前必须设，ADR-0033） |
+| Web | `mikasa serve [--config/--profile/--host/--port/--reload]` | 四页（问答/知识库/找论文/评测）+ 登录页，SSE |
 | 体检 | `mikasa doctor` | 依赖/密钥/**本地推理依赖（local 档门控 Ollama/fastembed）**/索引三方一致性，CI 冒烟用（口径见 limitations-and-failures.md） |
 | 评测真跑 | `mikasa eval run --profile api/local` | 63 题 × 三阶段，api 档 4-5 分钟/轮 |
 

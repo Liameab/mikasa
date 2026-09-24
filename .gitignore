@@ -46,6 +46,9 @@ ollamamodels/
 docs/ideas-and-backlog.md
 # Codex 会话的交接文档：给下一个会话读的"我这摊还差什么"，同属内部工作文档
 docs/codex-handover.md
+# 考研复试准备材料（个人材料，不进公开仓库）：项目手册 + 面向评审的 README 草稿
+docs/interview-handbook.md
+docs/advisor-readme.md
 
 # ===== 本地工具产物与配置 =====
 # 无头 Chrome 验收截图

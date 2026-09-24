@@ -6,9 +6,11 @@
 
   1. front-matter 能解析，且 `colors:` 里每个 token 的名字与值都和
      `style.css` `:root` 里的同名 CSS 变量逐字一致；
-  2. 「Components / 组件」段里点名的每个 CSS 类（或 #id）都真实存在于
+  2. front-matter 里每个 `{section.name}` **引用**都指到已声明的 token
+     （2026-09-24 补：换肤漏改 components 段，让它带着 11 处死引用活了下来）；
+  3. 「Components / 组件」段里点名的每个 CSS 类（或 #id）都真实存在于
      样式表，带 `-*` 的族名按前缀核对；
-  3. 圆角五档与 z-index 阶梯里的每个数值都在样式表里出现过。
+  4. 圆角五档与 z-index 阶梯里的每个数值都在样式表里出现过。
 
 **中英两份都查**（`DESIGN.md` 是中文事实源，`DESIGN.en.md` 是英文镜像，并列在仓库根）：
 镜像不得各自漂移，英文版漏改一个色值同样会红。
@@ -92,6 +94,38 @@ def test_colors_match_root_variables(design_md: Path, title: str):
         elif actual[name] != str(value):
             problems.append(f"--{name}: 文档 {value!r} ≠ 样式表 {actual[name]!r}")
     assert not problems, f"{design_md.name} 的 colors 与 :root 不一致：\n" + "\n".join(problems)
+
+
+@pytest.mark.parametrize(("design_md", "title"), DESIGN_FILES, ids=DESIGN_IDS)
+def test_token_references_resolve(design_md: Path, title: str):
+    """front-matter 里每个 `{section.name}` 引用都必须指到已声明的 token。
+
+    这条是补的洞（2026-09-24）：上面那三条只校验 `colors:` 段里的**声明**，
+    而 components 段里对 token 的**引用**没人看。2026-09-19 换肤（暗色绿系 →
+    暖米珊瑚）改了 :root 和「配色」章，却漏了 components 段——于是它带着
+    **11 处指向 `{colors.green/red/yellow/cyan}` 的死引用**活了下来，
+    而按本文档的说法"下一个人会照它写错"。引用的 token 名不存在时这里必须红。
+    """
+    data = front_matter(design_md)
+    declared = {s: set(data.get(s) or {}) for s in ("colors", "rounded", "z-index")}
+    dangling = sorted(
+        {
+            f"{{{section}.{name}}}"
+            for text in _scalars(data)
+            for section, name in re.findall(r"\{(\w[\w-]*)\.([\w-]+)\}", text)
+            if section in declared and name not in declared[section]
+        }
+    )
+    assert not dangling, f"{design_md.name} 引用了未声明的 token：" + "、".join(dangling)
+
+
+def _scalars(node) -> list[str]:
+    """front-matter 里所有字符串值（引用嵌在任意深度：components 的每个属性值里都有）。"""
+    if isinstance(node, dict):
+        return [s for value in node.values() for s in _scalars(value)]
+    if isinstance(node, list):
+        return [s for item in node for s in _scalars(item)]
+    return [node] if isinstance(node, str) else []
 
 
 @pytest.mark.parametrize(("design_md", "title"), DESIGN_FILES, ids=DESIGN_IDS)

@@ -117,8 +117,8 @@ components:
     rounded: "{rounded.control}"
     padding: 6px 14px
   nav-link-active:
-    backgroundColor: "rgba(63, 185, 80, 0.12)"
-    textColor: "{colors.green}"
+    backgroundColor: "rgba(204, 120, 92, 0.12)"
+    textColor: "{colors.accent}"
     rounded: "{rounded.control}"
   card:
     backgroundColor: "{colors.bg-panel}"
@@ -133,14 +133,14 @@ components:
     rounded: "7px"          # drift — see Known Gaps
     padding: 7px 16px
   button-primary:
-    backgroundColor: "rgba(63, 185, 80, 0.16)"
-    textColor: "{colors.green}"
+    backgroundColor: "{colors.accent}"
+    textColor: "#ffffff"
     typography: "{typography.row-strong}"
     rounded: "7px"
     padding: 7px 16px
   button-primary-active:
-    backgroundColor: "rgba(63, 185, 80, 0.28)"
-    textColor: "{colors.green}"
+    backgroundColor: "{colors.accent-active}"
+    textColor: "#ffffff"
     rounded: "7px"
   button-primary-disabled:
     backgroundColor: "{colors.bg-inset}"
@@ -148,11 +148,11 @@ components:
     rounded: "7px"
   button-danger:
     backgroundColor: transparent
-    textColor: "{colors.red}"
+    textColor: "{colors.danger}"
     rounded: "7px"
   button-danger-solid:
-    backgroundColor: "rgba(248, 81, 73, 0.16)"
-    textColor: "{colors.red}"
+    backgroundColor: "rgba(198, 69, 69, 0.16)"
+    textColor: "{colors.danger}"
     typography: "{typography.row-strong}"
     rounded: "7px"
   button-ghost:
@@ -190,19 +190,19 @@ components:
     padding: 4px 9px
     border: "1px solid {colors.border}"
   pill-ok:
-    backgroundColor: "rgba(63, 185, 80, 0.08)"
-    textColor: "{colors.green}"
-    border: "1px solid rgba(63, 185, 80, 0.5)"
+    backgroundColor: "rgba(93, 184, 114, 0.12)"
+    textColor: "{colors.success}"
+    border: "1px solid rgba(93, 184, 114, 0.5)"
     rounded: "{rounded.pill}"
   pill-warn:
-    backgroundColor: "rgba(210, 153, 34, 0.08)"
-    textColor: "{colors.yellow}"
-    border: "1px solid rgba(210, 153, 34, 0.5)"
+    backgroundColor: "rgba(212, 160, 23, 0.1)"
+    textColor: "{colors.warning}"
+    border: "1px solid rgba(212, 160, 23, 0.5)"
     rounded: "{rounded.pill}"
   pill-bad:
-    backgroundColor: "rgba(248, 81, 73, 0.08)"
-    textColor: "{colors.red}"
-    border: "1px solid rgba(248, 81, 73, 0.5)"
+    backgroundColor: "rgba(198, 69, 69, 0.08)"
+    textColor: "{colors.danger}"
+    border: "1px solid rgba(198, 69, 69, 0.5)"
     rounded: "{rounded.pill}"
   chip:
     backgroundColor: "{colors.bg-inset}"
@@ -211,8 +211,9 @@ components:
     rounded: "{rounded.pill}"
     padding: 3px 10px
   chip-selected:
-    backgroundColor: "rgba(63, 185, 80, 0.16)"
-    textColor: "{colors.green}"
+    backgroundColor: "rgba(204, 120, 92, 0.16)"
+    textColor: "{colors.accent}"
+    border: "1px solid {colors.accent}"
     typography: "{typography.caption-strong}"
     rounded: "{rounded.pill}"
   segmented-control:
@@ -228,21 +229,21 @@ components:
     rounded: "{rounded.row}"
     padding: 6px 8px
   tree-row-selected:
-    backgroundColor: "rgba(63, 185, 80, 0.1)"
+    backgroundColor: "rgba(204, 120, 92, 0.1)"
     textColor: "{colors.text}"
     rounded: "{rounded.row}"
-    border: "1px solid rgba(63, 185, 80, 0.4)"
+    border: "1px solid rgba(204, 120, 92, 0.4)"
   folder-row:
-    backgroundColor: "rgba(63, 185, 80, 0.07)"
+    backgroundColor: "rgba(204, 120, 92, 0.07)"
     textColor: "{colors.text}"
     typography: "{typography.row-strong}"
     rounded: "{rounded.row}"
   user-bubble:
-    backgroundColor: "rgba(47, 129, 247, 0.18)"
+    backgroundColor: "{colors.bg-inset}"
     textColor: "{colors.text}"
     rounded: "{rounded.modal}"
     padding: 11px 14px
-    border: "1px solid rgba(47, 129, 247, 0.35)"
+    border: "1px solid {colors.border}"
   assistant-bubble:
     backgroundColor: "{colors.bg-panel}"
     textColor: "{colors.text}"
@@ -250,19 +251,19 @@ components:
     padding: 11px 14px
     border: "1px solid {colors.border}"
   cite-chip:
-    backgroundColor: "rgba(57, 197, 207, 0.1)"
-    textColor: "{colors.cyan}"
+    backgroundColor: "rgba(93, 184, 166, 0.1)"
+    textColor: "{colors.teal}"
     typography: "{typography.micro}"
     rounded: "5px"
     padding: "1.5px 5px"
-    border: "1px solid rgba(57, 197, 207, 0.55)"
+    border: "1px solid rgba(93, 184, 166, 0.55)"
   cite-card:
     backgroundColor: "{colors.bg-inset}"
     textColor: "{colors.text}"
     typography: "{typography.row}"
     rounded: "{rounded.row}"
     padding: 8px 12px
-    borderLeft: "3px solid {colors.cyan}"
+    borderLeft: "3px solid {colors.teal}"
   code-block:
     backgroundColor: "{colors.bg-inset}"
     textColor: "{colors.text}"
@@ -324,21 +325,25 @@ components:
 
 ## Overview
 
-Mikasa's UI is a **dense, dark, single-user workbench**: four pages (ask / library /
+Mikasa's UI is a **dense, warm-cream, single-user workbench**: four pages (ask / library /
 find-papers / evaluation) inside one window, driven with a mouse and a keyboard, largely offline.
 
 - **Desktop window first**; the layout is built for a packaged desktop app and a browser
-  tab on the same machine, not for phones. There is exactly **one** responsive rule in
-  the whole stylesheet (`@media (max-width: 900px)` shrinks the reader panel).
+  tab on the same machine, not for phones. At one breakpoint there are exactly **two**
+  responsive rules in the whole stylesheet (`@media (max-width: 900px)`: shrink the reader
+  panel, and stack the note editor vertically).
 - **Density is the point**: three font sizes (11/13/14) carry almost all UI text, rows are
   26–34px tall, and the tree / message list / table are meant to show a lot at once. This
   is the opposite intent from a marketing surface, which is why the references this file
   was modelled on (Vercel-style product pages) needed their scaling re-derived, not copied.
-- **One accent, three meanings — deliberately overloaded**: green means *brand*, *selected*
-  and *success* at once. That is a considered trade: in a single-user tool with no
-  marketing chrome, "this is current / this is fine" is one idea, and a second accent color
-  would be noise. Cyan, amber and red each carry exactly one semantic family (info +
-  citation / warning + attention / danger).
+- **One accent, three meanings — deliberately overloaded**: coral (`--accent`) means
+  *brand*, *primary action* and *selected* at once. That is a considered trade: in a
+  single-user tool with no marketing chrome, "this is current / this is what you press" is
+  one idea, and a second accent color would be noise. **Green (`--success`) deliberately
+  stays out of it** — it only ever says "good/healthy", because "healthy" and "this is
+  Mikasa" are not the same statement (the health dot is the one place it appears). Teal,
+  amber and red each carry exactly one semantic family (info + citation / warning +
+  attention / danger).
 - **No web fonts, no icon font, no build chain**: the type stack is the OS UI font
   (`Segoe UI` / `Microsoft YaHei` / `PingFang SC` / `system-ui`), glyphs are Unicode
   (`⋯ ✕ ▸ ▾ ＋ ◌ ▌`), and a full re-render is a page refresh.
@@ -522,7 +527,7 @@ layout deliberately breathes.
 | Overlay shade | `rgba(0, 0, 0, 0.55)` backdrop | Confirm dialog, update dialog, on-boarding mask |
 | Menu / toast | `0 6px 18px rgba(0,0,0,0.4)` · `0 8px 28px rgba(0,0,0,0.5)` | `#ctx-menu`, toast, settings panel (`0 8px 30px`) |
 | Dialog | `0 18px 48px rgba(0, 0, 0, 0.55)` | Confirm box (also `0 18px 60px` on the reader panel) |
-| Status glow | `box-shadow: 0 0 6px rgba(63,185,80,0.8)` | The health dot, once |
+| Status glow | `box-shadow: 0 0 6px rgba(93,184,114,0.8)` | The health dot, once |
 | Highlight | `outline: 2px solid` / `box-shadow: 0 0 0 1px` | `.cite.lit`, `.rd-chunk.lit`, focus rings |
 
 **Rule:** shadows belong to things that float *over* the page. A card, a row or a button
@@ -560,7 +565,7 @@ that lands on top of a panel header never blocks the ✕ underneath.
 | pill | 999px | Pills, chips, segmented controls, progress track/bar, mode buttons |
 | circle | 50% | Folder caret ring, in-folder session ring, health dot |
 
-Two shapes are *semantic*, not stylistic: the **green ring** (`border: 2px solid var(--green)`
+Two shapes are *semantic*, not stylistic: the **coral ring** (`border: 2px solid var(--accent)`
 + `border-radius: 50%`) marks a folder's caret, and the **amber ring** marks a session that
 lives inside a folder. They are the same "circle" language with different colors, and the
 distinction is load-bearing — do not recolor either.
@@ -573,79 +578,82 @@ distinction is load-bearing — do not recolor either.
 | hover (button, default) | Border → `{colors.muted}` |
 | hover (primary button) | Fill tint 0.16 → 0.28 |
 | hover (danger button) | Border + text red, fill red 0.08 |
-| active / current | Green tint 0.10–0.16 + green border or green text (nav, session row, run item, tab, mode button) |
-| disabled | `opacity: 0.45` (or 0.55 for inputs), `cursor: not-allowed`; a disabled *primary* button drops its green entirely and returns to the neutral control look |
+| active / current | Coral tint 0.06–0.16 + coral border or coral text (nav, session row, run item, tab, mode button) |
+| disabled | `opacity: 0.45` (or 0.55 for inputs), `cursor: not-allowed`; a disabled *primary* button drops its coral entirely and returns to the neutral control look |
 | focus | `:focus-visible` → `outline: 2px solid var(--focus)`; inputs → `border-color: var(--focus)` |
 | drag source | `opacity: 0.45` |
-| drop target | Green tint 0.14 + green border |
-| highlighted (citation / reader chunk) | Amber tint, 1px amber ring, or `outline: 2px solid var(--yellow)` |
-| streaming | Bubble border → cyan; blinking `▌` caret in green |
-| busy / loading | Text in `--muted` ("正在…"), progress bar green→cyan gradient |
+| drop target | Coral tint 0.14 + coral border |
+| highlighted (citation / reader chunk) | Amber tint, 1px amber ring, or `outline: 2px solid var(--warning)` |
+| streaming | Bubble border → cyan; blinking `▌` caret in coral |
+| busy / loading | Text in `--muted` ("working…"), progress bar coral→cyan gradient |
 
 ## Components
 
-Layout：`.qa-layout` · `.kb-main` · `.eval-layout` · `.session-pane` · `.chat-pane` ·
-`.msg-scroll`（消息滚动区，用户可覆写底色/背景图）
+Layout: `.qa-layout` · `.kb-main` · `.eval-layout` · `.session-pane` · `.chat-pane` ·
+`.msg-scroll` (message scroll area; the user can override its background color/image)
 
-Chrome：`.topbar` · `.brand` · `nav.main a`（`.active`）· `.health-pill`（`.dot`）·
-`.upd-pill`（顶栏的更新进度胶囊，`.ok` / `.warn`）
+Chrome: `.topbar` · `.brand` · `nav.main a` (`.active`) · `.health-pill` (`.dot`) ·
+`.upd-pill` (the topbar update-progress capsule, `.ok` / `.warn`)
 
-Cards：`.card`（`h2` 标题 / `h3` 节标签）· `.stat-card`（`.k` 标签 `.v` 数值）· `#reading-card`
+Cards: `.card` (`h2` title / `h3` section label) · `.stat-card` (`.k` label, `.v` value) ·
+`#reading-card`
 
-Buttons：`.btn`（默认描边）· `.btn.primary`（绿系主行动）· `.btn.ghost`（透明底）·
-`.btn.danger` / `.btn.danger.solid`（危险，实心用于确认框）· `.icon-btn`（方角图标钮）·
-`.btn-copy`（代码块复制）· `.mode-btn`（胶囊模式切换）
+Buttons: `.btn` (outlined by default) · `.btn.primary` (solid coral, primary action) ·
+`.btn.ghost` (transparent) ·
+`.btn.danger` / `.btn.danger.solid` (danger; the solid form is for confirm dialogs) ·
+`.icon-btn` (square icon button) ·
+`.btn-copy` (copy a code block) · `.mode-btn` (pill-shaped mode switch)
 
-Inputs：`.kb-search`（查找框）· `.tree-input`（行内改名/新建）· `.composer textarea`（提问框）·
-`#s-nick` / `#s-base-url` / `#s-model` / `#s-api-key`（设置面板输入）· `.rd-page-jump input`（页码）
+Inputs: `.kb-search` (search box) · `.tree-input` (inline rename/create) · `.composer textarea` (the ask box) ·
+`#s-nick` / `#s-base-url` / `#s-model` / `#s-api-key` (settings-panel fields) · `.rd-page-jump input` (page number)
 
-Selection：`.pill`（`.ok` / `.warn` / `.bad`）· `.s-chip`（`.on`）· `.rd-tabs`（胶囊分段）·
-`.s-sw`（色板圆点，`.on` / `.clear`）
+Selection: `.pill` (`.ok` / `.warn` / `.bad`) · `.s-chip` (`.on`) · `.rd-tabs` (pill segmented control) ·
+`.s-sw` (palette swatch, `.on` / `.clear`)
 
-Tree：`.t-row` · `.t-folder` · `.t-caret`（绿圆环）· `.t-name` · `.t-more`（悬停显现的 ⋯）·
-`.session-item`（`.active` / `.in-folder` 琥珀圈）· `.t-empty` · `.tree-edit-row`
+Tree: `.t-row` · `.t-folder` · `.t-caret` (coral ring) · `.t-name` · `.t-more` (the ⋯ that appears on hover) ·
+`.session-item` (`.active` / `.in-folder` amber ring) · `.t-empty` · `.tree-edit-row`
 
-Chat：`.msg.user` / `.msg.assistant` · `.bubble` · `.who` · `.cite`（`.lit` / `.bad`）·
-`.ref-shelf .cite-card`（`.c-head` / `.c-title` / `.c-snippet`）· `.code-block`（`.code-head` /
-`.code-lang`）· `.md-table` · `blockquote.bilingual`（原文+译文块）· `.composer`（`.mode-bar` /
-`.composer-row` / `.hint`）
+Chat: `.msg.user` / `.msg.assistant` · `.bubble` · `.who` · `.cite` (`.lit` / `.bad`) ·
+`.ref-shelf .cite-card` (`.c-head` / `.c-title` / `.c-snippet`) · `.code-block` (`.code-head` /
+`.code-lang`) · `.md-table` · `blockquote.bilingual` (original + translation block) · `.composer` (`.mode-bar` /
+`.composer-row` / `.hint`)
 
-Overlays：`#ctx-menu`（`.ctx-item` / `.ctx-head` / `.ctx-sep`）· `.confirm-backdrop` /
-`.confirm-box`（`.cf-title` / `.cf-detail` / `.cf-actions`）· `#toast` / `.toast-msg`（`.ok` /
-`.warn` / `.error`）· `.settings-panel`（`.s-head` / `.s-body` / `.s-row` / `.s-name` /
-`.s-hint` / `.s-group`）· `.onboard-mask`（`.onboard-card` / `.ob-step`）· `.upd-backdrop` /
-`.upd-card`（`.upd-head` / `.upd-sub` / `.upd-notes` / `.upd-progress` / `.upd-bar` /
-`.upd-progress-text` / `.upd-error` / `.upd-actions`）
+Overlays: `#ctx-menu` (`.ctx-item` / `.ctx-head` / `.ctx-sep`) · `.confirm-backdrop` /
+`.confirm-box` (`.cf-title` / `.cf-detail` / `.cf-actions`) · `#toast` / `.toast-msg` (`.ok` /
+`.warn` / `.error`) · `.settings-panel` (`.s-head` / `.s-body` / `.s-row` / `.s-name` /
+`.s-hint` / `.s-group`) · `.onboard-mask` (`.onboard-card` / `.ob-step`) · `.upd-backdrop` /
+`.upd-card` (`.upd-head` / `.upd-sub` / `.upd-notes` / `.upd-progress` / `.upd-bar` /
+`.upd-progress-text` / `.upd-error` / `.upd-actions`)
 
-Evaluation：`.run-list` / `.run-item`（`.active`）· `.progress-track` / `.progress-bar` ·
-`.md`（报告渲染）· `.stat-grid`
+Evaluation: `.run-list` / `.run-item` (`.active`) · `.progress-track` / `.progress-bar` ·
+`.md` (report rendering) · `.stat-grid`
 
-Library：`.dropzone`（`.drag`）· `.doc-item`（`.meta-bad` / `.meta-busy`）· `.dd-grid` ·
+Library: `.dropzone` (`.drag`) · `.doc-item` (`.meta-bad` / `.meta-busy`) · `.dd-grid` ·
 `.dd-open`
 
-Find-papers page (ADR-0020)：`.papers-layout`（grid 三栏）· sidebar `.p-filter` /
+Find-papers page (ADR-0020): `.papers-layout` (three-column grid) · sidebar `.p-filter` /
 `.p-filter-label` / `.p-check` / `.p-year` / `.p-note` / `.p-sorts` · results
-`.paper-form` / `.paper-bar` / `.paper-results` / `.paper-item`（`.on` = selected）/
+`.paper-form` / `.paper-bar` / `.paper-results` / `.paper-item` (`.on` = selected) /
 `.paper-head` / `.paper-title` / `.paper-src` / `.paper-meta` / `.paper-cites` /
 `.paper-snippet` / `.paper-inlib` / `.paper-actions` / `.paper-status` / `.paper-key-row` ·
 detail `.pd-title` / `.pd-meta` / `.pd-body` / `.pd-actions` / `.pd-exits`
 
-Find-papers extras (v0.1.4)：`.paper-history` (`.ph-chip` / `.ph-clear`) · `.pd-related` / `.pd-rel-head` / `.pd-rel-tab` (`.on`) / `.pd-rel-status` / `.pd-rel-list` / `.pd-rel-item` / `.pd-rel-title` / `.pd-rel-meta` / `.pd-rel-import`
-Find-papers paging (2026-09-20)：`.paper-pager` / `.pg-nums` / `.pg-num` (`.on` = current page) / `.pg-gap` / `.pg-jump` · `.paper-detail-btn` (the per-row "详情" button; the row itself opens the paper in a browser)
+Find-papers extras (v0.1.4): `.paper-history` (`.ph-chip` / `.ph-clear`) · `.pd-related` / `.pd-rel-head` / `.pd-rel-tab` (`.on`) / `.pd-rel-status` / `.pd-rel-list` / `.pd-rel-item` / `.pd-rel-title` / `.pd-rel-meta` / `.pd-rel-import`
+Find-papers paging (2026-09-20): `.paper-pager` / `.pg-nums` / `.pg-num` (`.on` = current page) / `.pg-gap` / `.pg-jump` · `.paper-detail-btn` (the per-row "details" button; the row itself opens the paper in a browser)
 
-Note editor (M6 ①)：`.note-backdrop` · `.note-box` / `.note-head` / `.note-title` ·
+Note editor (M6 ①): `.note-backdrop` · `.note-box` / `.note-head` / `.note-title` ·
 `.note-split` / `.note-input` / `.note-preview` · `.note-foot` / `.note-folder-wrap` /
 `.note-folder` / `.note-hint`
 
-Reader：`.reader-panel` / `.reader-inline` · `.rd-head`（`.rd-title` / `.rd-tabs` / `.rd-zoom`）·
-`.rd-body` / `.rd-text` / `.rd-orig` / `.rd-frame` · `.rd-chunk`（`.lit`）· `.rd-page-*`
-（`.rd-page-view` / `.rd-page-img` / `.rd-page-layer` / `.rd-page-mark` / `.rd-page-jump`）·
-`.rd-ocr`（`.rd-ocr-head` / `.rd-ocr-body`）· `.rd-ask`（`.rd-ask-bar` / `.rd-ask-sel` /
-`.rd-ask-input` / `.rd-ask-out` / `.rd-ask-who` / `.rd-ask-body` / `.rd-ask-cites`）·
-`.rd-src`（`.cited` / `.rd-src-meta` / `.rd-src-snippet`）· `.rd-foot`
+Reader: `.reader-panel` / `.reader-inline` · `.rd-head` (`.rd-title` / `.rd-tabs` / `.rd-zoom`) ·
+`.rd-body` / `.rd-text` / `.rd-orig` / `.rd-frame` · `.rd-chunk` (`.lit`) · `.rd-page-*`
+(`.rd-page-view` / `.rd-page-img` / `.rd-page-layer` / `.rd-page-mark` / `.rd-page-jump`) ·
+`.rd-ocr` (`.rd-ocr-head` / `.rd-ocr-body`) · `.rd-ask` (`.rd-ask-bar` / `.rd-ask-sel` /
+`.rd-ask-input` / `.rd-ask-out` / `.rd-ask-who` / `.rd-ask-body` / `.rd-ask-cites`) ·
+`.rd-src` (`.cited` / `.rd-src-meta` / `.rd-src-snippet`) · `.rd-foot`
 
-Misc：`.empty`（空态，`◌` 前缀）· `.muted` / `.small` / `.nowrap` / `.grow` / `.hidden` ·
-`.drag-over` / `.dragging` · `.to-bottom` · `.clip-ghost` · `table.list`（`.num` / `.clickable`）
+Misc: `.empty` (empty state, `◌` prefix) · `.muted` / `.small` / `.nowrap` / `.grow` / `.hidden` ·
+`.drag-over` / `.dragging` · `.to-bottom` · `.clip-ghost` · `table.list` (`.num` / `.clickable`)
 
 **Component contract:** a component is a class, not a utility soup. New UI reuses the
 classes above and adds a new one *in the same vocabulary* (state suffixes: `.on`, `.active`,
@@ -745,8 +753,9 @@ dependencies (PyYAML is already a runtime dependency):
 - **Spacing is empirical, not derived**: the 4px base with 6/8/10/12/14/16/18/20 steps was
   written down from the existing CSS. A strict 4/8/12/16/20 scale would be cleaner and is
   the direction, but it has not been applied wholesale (every panel would need re-checking).
-- **No light theme.** The palette is dark-only; the "chat background color/image" settings
-  are a user-level escape hatch, not a theme system.
+- **One scheme (warm cream), no dark theme.** Dark surfaces exist only inside code blocks
+  and terminals (`--dark`); the "chat background color/image" settings are a user-level
+  escape hatch, not a theme system.
 - **No icon system.** Glyphs are Unicode characters, so their weight and optical size vary
   by platform font; there is no equivalent of an icon token.
 - **Motion is undocumented beyond the few transitions above** (no timing tokens).

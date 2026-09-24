@@ -13,8 +13,8 @@ are reproducible.
 modes → M4 local profile → M4.5 session management (including the first real schema migration v1→v2)
 → corpus folders v3 → table rendering → cross-lingual retrieval → original + translation for cited
 English passages → document reader with citation jump → pre-M5 audit (23 fixes, 4 of them
-data-safety) → packaged installer → model settings in the panel → the embedding model shipped inside the package (first ingest is offline, ADR-0030) → text-to-image (draw straight from the ask page, ADR-0031). Currently **1048 tests passing**,
-ruff + mypy clean, ~93% coverage. Windows portable zip and installer builds are published
+data-safety) → packaged installer → model settings in the panel → the embedding model shipped inside the package (first ingest is offline, ADR-0030) → text-to-image (draw straight from the ask page, ADR-0031) → Claude/OpenAI presets and in-app model pulling (ADR-0032) → browser/LAN access with an access password (ADR-0033) → ask-while-reading in the reader (ADR-0034). Currently **1063 tests passing**,
+ruff + mypy clean, ~92% coverage. Windows portable zip and installer builds are published
 (v0.1.0 → v0.1.12) with in-app update checking — downloads resume across dropped connections, and
 closing the dialog, switching pages or reloading no longer interrupts them (progress lives in a
 top-bar pill; ADR-0024).
@@ -30,16 +30,21 @@ top-bar pill; ADR-0024).
 - **Three-stage automated evaluation** — (A) retrieval: recall@k / MRR / nDCG; (B) generation
   protocol: citation-gold ratio, out-of-range rate, refusal accuracy; (C) semantic judging:
   LLM-as-judge with position-swap consistency. Real acceptance run: recall@10 = 1.000, zero
-  out-of-range citations, 16/16 unanswerable questions cleanly refused.
+  out-of-range citations, 16/16 unanswerable questions cleanly refused. The bank can also be
+  **generated from your own corpus** on the evaluation page, so the measurement is not tied to one
+  sample corpus (ADR-0026).
 - **Cross-lingual retrieval** — a Chinese question against English documents is automatically
   translated into a second query, and both retrieval paths are merged with RRF. Cited English
   passages are shown as *original + Chinese translation* side by side.
 - **Document reader with citation jump** — click a citation marker and the source opens in a side
   panel, either as reconstructed text or as the rendered PDF page with the cited region highlighted.
+  You can also **ask right there** while reading (scope defaults to "this document", selected text
+  becomes context, every hit is listed and jumps back to the highlighted passage), and those
+  questions are discarded rather than piling up in the session tree (ADR-0034).
 - **Three runtime profiles** — cloud API / local inference / zero-key offline; switch with a single
   `--profile` flag, no code changes, no hardcoded endpoints.
-- **Build-free web UI** — three plain HTML/JS pages with hand-written SSE streaming (no node_modules,
-  no bundler).
+- **Build-free web UI** — four plain HTML/JS pages (chat / library / papers / evaluation) with
+  hand-written SSE streaming (no node_modules, no bundler).
 - **Session tree** — arbitrarily nested folders for conversations, with auto-generated titles from
   the first question (manual renames are never overwritten).
 - **Photos into notes** — point the note editor at a photo (button, drag-and-drop, or paste a
@@ -50,10 +55,16 @@ top-bar pill; ADR-0024).
 - **Formula typesetting** — LaTeX in answers is rendered by a bundled KaTeX (offline, no CDN);
   fenced and inline code are left untouched, and prices like `$5` are not mistaken for formulas
   (ADR-0028).
-- **Model settings in the UI** — pick a provider (local Ollama / DeepSeek / SiliconFlow / any
-  OpenAI-compatible endpoint), paste a key, test the connection, save: the LLM switches
-  immediately, no restart and no `.env` editing. Keys stay in the local data directory and are
-  never sent back to the browser.
+- **Text-to-image** — draw an image straight from the ask page and keep it with the conversation.
+  The upstream image is written to disk immediately (its link expires in an hour), the frontend
+  renders same-origin images only (a remote image is a tracking pixel), and both outbound legs pass
+  the SSRF gate (ADR-0031).
+- **Model settings in the UI** — pick a provider (local Ollama / DeepSeek / SiliconFlow / Claude /
+  OpenAI / any OpenAI-compatible endpoint, six presets in all), paste a key, test the connection,
+  save: the LLM switches immediately, no restart and no `.env` editing. Keys stay in the local data
+  directory and are never sent back to the browser; picking local Ollama also lets you **pull the
+  model from inside the app** with a progress bar, instead of going back to `ollama pull`
+  (ADR-0018 / ADR-0032).
 - **In-app updates** — on startup the app checks GitHub for a newer release (silent on failure, and
   switchable off); a one-click download verifies the published sha256 and launches the installer.
   The client never sees a download URL, and the installer must match the expected name inside the
@@ -69,6 +80,7 @@ top-bar pill; ADR-0024).
 | [Limitations & failures](docs/en/limitations-and-failures.md) | Ecosystem pitfalls, heuristic boundaries, and a real bug archive from development |
 | [Usage guide](docs/en/usage-guide.md) | End-to-end workflows (paper reading, follow-up questions, what to do when it refuses) |
 | [Known issues](docs/en/known-issues.md) | Unfixed issues (with rulings) and unscheduled candidates |
+| [Design system](DESIGN.en.md) | Web UI tokens, type scale, radius grammar, z-index ladder and component contracts |
 
 > This page is the English edition of the Chinese-primary [`README.md`](README.md). The technical
 > documentation is Chinese too ([`docs/`](docs/)), with an English mirror in [`docs/en/`](docs/en/) —
@@ -119,7 +131,7 @@ mikasa ask --profile local "How does L2 regularization prevent overfitting?" --s
 | profile | Generation | Embedding / rerank | Use case |
 | --- | --- | --- | --- |
 | `api` | DeepSeek (OpenAI-compatible) | SiliconFlow bge-m3 / bge-reranker | Real QA and acceptance runs |
-| `local` | Ollama qwen3 (**no API key**) | fastembed bge-small-zh (512-d) | Fully offline inference (see ADR-0014) |
+| `local` | Ollama qwen3 (native `/api/chat`, **no API key**; the `think`/`num_ctx` knobs exist only there, ADR-0029) | fastembed bge-small-zh (512-d, **shipped inside the package**, ADR-0030) / no local reranker yet | Fully offline inference (see ADR-0014) |
 | `offline` | Built-in MockLLM | none (BM25 only) | Zero-key demos, tests, CI |
 
 All configuration lives in `config/profiles/*.yaml` with a fully commented field reference in
@@ -129,12 +141,18 @@ All configuration lives in `config/profiles/*.yaml` with a fully commented field
 
 ```bash
 mikasa serve                      # api profile (real models)
-# WARNING: --host 0.0.0.0 exposes the service to your whole network.
-# There is no authentication: anyone on that network can read every
-# document you ingested, delete them, upload files, and run evaluations
-# (which spends your API credits). Only use it on a network you trust.
 mikasa serve --profile offline    # zero-key demo
 # Options: --host 0.0.0.0 (LAN access) / --port 9000 / --reload (dev)
+
+# Use it from a phone, tablet or another computer (v0.1.11, ADR-0033):
+mikasa auth set-password          # set the access password first
+mikasa serve --host 0.0.0.0       # bind a non-loopback address
+# Without a password that command **refuses to start** and tells you which
+# one to run first (fail closed). Once the service is on the network, anyone
+# on it could read your documents and spend your model credits - so it would
+# rather not open the door than open it unlocked. Loopback (your own browser,
+# the desktop app) never needs a password, and your data still stays on your
+# own machine.
 ```
 
 Open http://127.0.0.1:8000/ — four pages:
@@ -174,6 +192,7 @@ API docs (Swagger) at http://127.0.0.1:8000/docs.
 | `ask "<question>"` | Single question with refusal when evidence is missing (`--show-sources`) |
 | `chat` | Multi-turn conversation (kb mode with history summary, free mode raw history) |
 | `eval run/list` | Run the evaluation / browse past runs (`--profile offline` needs no keys) |
+| `auth set-password` / `clear-password` | Set / clear the access password — required before `serve --host 0.0.0.0` (ADR-0033) |
 
 ## Milestones
 
@@ -208,7 +227,7 @@ API docs (Swagger) at http://127.0.0.1:8000/docs.
 - Source comments and the README are written in **Chinese** (the project's working language; this
   page is the English edition); baseline gates are `ruff format`, `ruff check`, `mypy`, and
   `pytest`;
-- Current suite: **1048 tests**, coverage ~93% (see the regression gate in `docs/en/evaluation.md`);
+- Current suite: **1063 tests**, coverage ~92% (see the regression gate in `docs/en/evaluation.md`);
 - Zero-compilation install on Windows + CPython 3.13 (all dependencies ship prebuilt wheels;
   see `pyproject.toml` and ADR-0006/0008 for the version-pinning rationale).
 
@@ -217,12 +236,14 @@ API docs (Swagger) at http://127.0.0.1:8000/docs.
 ```
 src/mikasa/
 ├── cli/          # typer + rich commands
-├── web/          # FastAPI + plain HTML/JS (chat / library / evaluation pages)
+├── web/          # FastAPI + plain HTML/JS (chat / library / papers / evaluation + login)
 ├── pipeline/     # retrieve → inject → generate → verify orchestration (citation protocol)
 ├── ingest/       # four-format loaders + Chinese structural chunking
 ├── index/        # self-implemented BM25 / numpy exact vector search / RRF fusion
-├── eval/         # golden-set evaluation: three stages + judge
-├── providers/    # LLM / embedding / rerank: Protocol + cloud & mock implementations
+├── eval/         # golden-set evaluation: three stages + judge + question generation
+├── papers/       # online paper search: four sources + a defended PDF downloader
+├── update/       # in-app updates: check / resumable download / verify / launch installer
+├── providers/    # LLM (compatible surface + Ollama native) / embedding / rerank / vision / image
 ├── storage/      # SQLite + meta.json snapshots
 └── config/       # pydantic settings (three profiles merged)
 sample-corpus/    # original sample corpus (MD / TXT / DOCX / PDF)

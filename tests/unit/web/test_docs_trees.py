@@ -25,7 +25,13 @@ DOCS_EN = DOCS / "en"
 
 # 私人总账与内部交接文档：被 .gitignore 排除、不进仓库、没有英文镜像，
 # 天然不参与对应关系（它们自己的链接坏了只影响本机阅读，不该让 CI 红）
-_PRIVATE = {"ideas-and-backlog.md", "codex-handover.md"}
+_PRIVATE = {
+    "ideas-and-backlog.md",
+    "codex-handover.md",
+    # 考研复试准备材料（2026-09-24 加入）：个人使用、.gitignore 排除、无英文镜像
+    "interview-handbook.md",
+    "advisor-readme.md",
+}
 
 # 检查链接的范围：仓库根的门面 + 两棵文档树
 _PAGES = [

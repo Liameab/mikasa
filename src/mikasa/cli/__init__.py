@@ -802,7 +802,8 @@ def serve(
         ),
     ] = False,
 ) -> None:
-    """启动 Web 服务，浏览器打开 http://127.0.0.1:8000/ 使用三页界面。
+    """启动 Web 服务，浏览器打开 http://127.0.0.1:8000/ 使用四个页面
+    （问答 / 知识库 / 找论文 / 评测；绑非回环地址时还会多一个登录页）。
 
     profile 语义与 CLI 其余命令一致：默认 api（真实 DeepSeek/SiliconFlow），
     零密钥演示用 --profile offline（MockLLM）。接口文档（Swagger）在 /docs。
