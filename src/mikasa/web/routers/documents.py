@@ -34,6 +34,7 @@ PATCH /api/documents 语义同 qa 的 PATCH /api/sessions：model_fields_set
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -1110,9 +1111,12 @@ def _ingest_note_file(
 
     （2026-09-20 起围栏代码块**会**作为纯文本段落进索引，所以"整篇只有代码"
     不再走这条路——本函数的文案只说剩下的那种：只有标题。）
+
+    保存成功后顺带同步 `[[标题]]` 互链（M6 ③ 的确定性写入方）——放在这里而不是
+    两个端点里，是因为**新建与编辑的最后一步都经过本函数**，两条路径才不会漂。
     """
     try:
-        return ingest_web_file(
+        response = ingest_web_file(
             tmp_path,
             safe_name,
             hashlib.sha256(payload).hexdigest(),
@@ -1133,6 +1137,32 @@ def _ingest_note_file(
                 ),
             ) from exc
         raise
+
+    _sync_note_links(settings, response, payload)
+    return response
+
+
+def _sync_note_links(settings: Settings, response: JSONResponse, payload: bytes) -> None:
+    """把这次保存的 `[[标题]]` 互链同步进 doc_links（派生数据，失败不翻车）。
+
+    **失败为什么只记日志、不把保存报成失败**：笔记本身已经落库并建好索引了，
+    这时抛 500 会让用户以为"白写了"而重写一遍。丢的只是一条关联边——重存一次
+    就能补回来，代价远小于谎报。这条取舍与"失败提示要如实"并不冲突：如实指的是
+    **不假装成功**，而这里主操作确实成功了，日志里也留了痕。
+    """
+    from mikasa.ingest import wikilinks
+
+    try:
+        doc_id = int(json.loads(bytes(response.body))["document"]["id"])
+    except (ValueError, KeyError, TypeError):  # pragma: no cover - 响应形状由本模块保证
+        return
+    try:
+        added = wikilinks.sync_doc_links(settings, doc_id, payload.decode("utf-8", "replace"))
+    except Exception as exc:  # noqa: BLE001 - 派生数据失败不抵消主操作（见 docstring）
+        logger.warning("笔记互链同步失败（不影响保存）：%s", strip_paths(str(exc)))
+        return
+    if added:
+        logger.info("笔记 #%s 的互链已同步：%d 条", doc_id, added)
 
 
 @router.post("/api/notes", status_code=201)

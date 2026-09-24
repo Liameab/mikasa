@@ -60,6 +60,7 @@
 | ADR-0032 | Model sources: cloud presets (Claude / OpenAI) and an in-app local-model pull | Accepted |
 | ADR-0033 | Browser access and a shared password: exposing the service requires a password (fail closed) | Accepted |
 | ADR-0034 | Reader "ask as you read": ask in place, show every hit, nothing persists | Accepted |
+| ADR-0035 | Cross-document one hop: note `[[wiki links]]` become doc_links, plus an **off-by-default** neighbour expansion | Accepted |
 
 ---
 
@@ -2189,3 +2190,76 @@ bar / passage list / in-place jump / selection capture), `static/js/reader-view.
 `tests/unit/web/test_reader_ask_api.py` (10 cases) plus three existing test files extended;
 E2E `tools/chrome_reader_ask.py` (8 steps in a real browser, screenshot
 `tools/shots/reader-ask.png`).
+
+## ADR-0035 Cross-document one hop: note `[[wiki links]]` become doc_links, plus an off-by-default neighbour expansion
+
+- Status: Accepted | 2026-09-25 (the user chose "wiki links plus the retrieval-side
+  hop; LLM extraction stays deferred")
+- Related: ADR-0021 (a note is an ordinary document with a marker), ADR-0011 (RRF
+  only reads ranks), the M6 ③ `doc_links` groundwork (schema v5)
+
+**Background**: the `doc_links` table (schema v5) was only ever **groundwork** —
+`replace_doc_links`, `links_for_document` and the delete cascade were all written,
+but nothing ever wrote to it, so the table stayed empty. One of the four gaps the
+user listed was "no cross-document / multi-hop mechanism: a fixed top_n cannot
+guarantee cross-document associations are handled". The original plan (M6 ③) was
+for an **LLM to read document pairs and judge the relation**, which the user had
+already put on the shelf on 2026-09-23 — expensive (a document-pair pass) and with
+uncertain quality.
+
+**Decision** (the first two are the trade-offs the user settled on):
+
+1. **The first writer is a deterministic one: `[[title]]` wiki links inside notes**
+   (`ingest/wikilinks.py`). No LLM, no network, 100% precision — the edge is
+   something **the user wrote**, with none of the "the model thinks these two are
+   related" noise. It also matches the "library → notebook" direction: linking notes
+   to each other is the core action of a notes app. When the LLM extractor lands it
+   writes the same table through the same entry point, with `source` telling them
+   apart (this one writes `wikilink`).
+2. **The retrieval-side hop is off by default** (`retrieval.hop_expand: 0`). Turning
+   it on changes the set of injected passages, which **shifts the evaluation
+   baseline** — the 63-question numbers would have to be re-run to count — and it
+   only does anything when your notes actually link to each other, so it is not a
+   general win. Set a positive number in a profile yaml to enable it.
+3. **Expansion requires that the neighbour's chunk was already a candidate for this
+   query** (it reuses the fused ranking the main query already computed; there is no
+   second search). That makes the cost zero extra searches and zero extra embedding
+   calls — and it is what makes "relevance" mean something. The earlier version
+   ("follow the link and take the neighbour's first chunk") was wrong: BM25 returns
+   chunks with zero lexical overlap too (the existing `top_k<=0` semantics), so it
+   would have injected an unrelated chunk unconditionally — **and the citation
+   protocol could not have caught it**, because it really is a numbered source. The
+   tests surfaced this immediately.
+4. **Appended at the tail, not re-ranked, one chunk per neighbour, capped by
+   document count.** Citation numbers `[n]` follow **injection order** (the
+   generator numbers with `enumerate`), so the main hits have to keep the low
+   numbers; the cap is by document because when a popular note is linked from a
+   dozen others, capping by chunk would let that one note take over.
+
+**Why the edge is a title rather than an id**: `[[title]]` is the only form anyone
+will actually type while writing a note. The price is that **renaming breaks the
+link** — an unresolvable target is skipped (a half-written `[[a note I haven't
+written yet]]` is normal, not an error). Documents **sharing a title are all
+linked**: in a personal library a duplicate title is usually the same thing
+imported twice, and picking one would silently point at the other after a rename.
+
+**Costs and boundaries**:
+
+- **Renaming breaks links** (above): a rename does not rewrite edges; re-save that
+  note once.
+- **Expanded chunks are ordinary hits**: the citation card does not distinguish
+  "this came over a link". Deliberate — it is a *source*, not a different kind of
+  thing, and labelling it would add a dimension to the citation protocol for no
+  clear gain.
+- **Only outgoing edges are written**: `links_for_document` treats both directions
+  as neighbours, so wiki links are reachable in both directions.
+- **LLM extraction is still not done** (the original M6 ③ plan): this ADR adds the
+  other half, and `known-issues.md` F3's ③ status moves with it.
+
+**Code**: `ingest/wikilinks.py` (new: parsing plus edge writing),
+`pipeline/retriever.py` (`_neighbor_doc_ids` / `_expand_one_hop`, and the
+allow-list parameterisation of `oneside`), `config/settings.py`
+(`RetrievalConfig.hop_expand`), `config/config.example.yaml`,
+`web/routers/documents.py` (syncs links after a successful `_ingest_note_file`);
+tests `tests/unit/ingest/test_wikilinks.py` (9 cases) and
+`tests/unit/pipeline/test_retriever.py` (3 hop cases).

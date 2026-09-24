@@ -24,6 +24,12 @@ retrieval:
   dense_enabled: true           # 是否启用向量路（offline 下关闭）
   fusion_top_k: 8               # RRF 融合后进入生成器的块数
   fusion_k: 60                  # RRF 常数 k（经典值 60）
+  crosslingual: false           # 中文问英文库：查询自动翻译作第二路（要真实 LLM）
+  hop_expand: 0                 # 一跳跨文档扩展：沿笔记的 [[标题]] 互链，把邻居
+                                # 文档里**已进候选**的最优块追加到命中尾部。
+                                # 0 = 关（默认）。值是"最多扩展几篇文档"。
+                                # 注意：打开会改变注入的片段集合，也就是平移评测
+                                # 基线——63 题的数字得重跑才算数。
 
 # ---- 重排器（rerank 阶段，三档：api / local / none）----
 reranker:

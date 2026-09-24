@@ -12,6 +12,7 @@ from mikasa.index.manager import IndexManager
 from mikasa.ingest.service import IngestService
 from mikasa.pipeline.retriever import Retriever
 from mikasa.providers import get_embedding
+from mikasa.storage import repo
 from mikasa.storage.db import open_db
 
 NOTE = """# 量子计算笔记
@@ -281,3 +282,96 @@ def test_document_scope_applies_to_second_query(tmp_path, offline_settings):
     )
     assert all(h.chunk.document_id == doc_a for h in hits)
     assert not any(h.chunk.document_id == doc_b for h in hits), "第二路不许把 B 篇带进来"
+
+
+# ---------------------------------------------------------------------------
+# 一跳跨文档扩展（2026-09-25；默认关，见 RetrievalConfig.hop_expand）
+# ---------------------------------------------------------------------------
+
+DOC_A = """# 甲篇
+
+## 锚固
+
+预应力锚索的锚固段长度按规范取。
+"""
+
+DOC_B = """# 乙篇
+
+## 注浆
+
+注浆体的抗压强度决定了预应力锚索的承载上限。
+"""
+
+
+def _linked_retriever(
+    tmp_path, offline_settings, *, hop: int, fusion_top_k: int = 8, bm25_top_k: int = 20
+):
+    """两篇文档入库 + 甲篇 `[[乙篇]]` 建边，返回按参数配好的检索器与文档 id。"""
+    from mikasa.config.settings import load_settings
+    from mikasa.ingest import wikilinks
+
+    (tmp_path / "甲.md").write_text(DOC_A, encoding="utf-8")
+    (tmp_path / "乙.md").write_text(DOC_B, encoding="utf-8")
+    IngestService(offline_settings).ingest_paths([tmp_path])
+
+    with open_db(offline_settings.db_path) as conn:
+        ids = {doc.title: doc.id for doc in repo.list_documents(conn)}
+    wikilinks.sync_doc_links(offline_settings, ids["甲篇"], "见 [[乙篇]]")
+
+    tuned = load_settings("offline", data_dir=offline_settings.data_dir).model_copy(
+        update={
+            "retrieval": offline_settings.retrieval.model_copy(
+                update={
+                    "hop_expand": hop,
+                    "fusion_top_k": fusion_top_k,
+                    "bm25_top_k": bm25_top_k,
+                    "dense_top_k": bm25_top_k,
+                }
+            ),
+        }
+    )
+    corpus = IndexManager(tuned).corpus()
+    return Retriever(tuned, corpus, get_embedding(tuned.embedding)), ids
+
+
+def test_hop_expand_off_by_default_keeps_baseline(tmp_path, offline_settings):
+    """默认关：注入的片段集合与不配这个旋钮时逐字节一致（基线不动的保证）。"""
+    retriever, ids = _linked_retriever(tmp_path, offline_settings, hop=0, fusion_top_k=1)
+    hits, latency = retriever.retrieve("预应力锚索的锚固段长度怎么取")
+    assert [hit.chunk.document_id for hit in hits] == [ids["甲篇"]]
+    assert "hop" not in latency  # 关着时连延迟段都不记
+
+
+def test_hop_expand_pulls_the_linked_document(tmp_path, offline_settings):
+    """打开后：被互链的乙篇那一块**已进融合候选**，于是被追加到尾部。
+
+    fusion_top_k=1 是为了造出"乙篇进了候选、但没进最终命中"的窗口——那正是
+    这个功能要覆盖的场景（主命中不够，但关联文档里正好有料）。
+    """
+    retriever, ids = _linked_retriever(tmp_path, offline_settings, hop=1, fusion_top_k=1)
+    hits, latency = retriever.retrieve("预应力锚索的锚固段长度怎么取")
+    docs = [hit.chunk.document_id for hit in hits]
+
+    assert docs[0] == ids["甲篇"], "主命中必须仍排第一"
+    assert docs[-1] == ids["乙篇"], "邻居文档只能追加在尾部"
+    assert "hop" in latency
+    # 序号接着主命中排（展示用），不出现 0
+    assert [hit.rank for hit in hits] == list(range(1, len(hits) + 1))
+    # 块 id 唯一，不会重复注入
+    assert len({hit.chunk.id for hit in hits}) == len(hits)
+
+
+def test_hop_expand_ignores_neighbours_with_no_candidate(tmp_path, offline_settings):
+    """邻居这次**一块都没进候选** → 不扩展。
+
+    这才是这个功能真正的边界：扩展的前提是"邻居的块本来就出现在这次查询的
+    结果里"。早先那版是"链过去就取邻居第 1 名"，而 BM25 对零词面命中的块也会
+    返回（`top_k<=0` 的既有语义）——那等于无条件灌一块无关内容进注入，而且
+    引用协议拦不住它（它确实是一条编号资料）。
+
+    这里把 `bm25_top_k` 压到 1：候选里只剩最相关的那一块，另一篇（无论它是
+    种子还是邻居）自然出局，扩展必须老老实实什么都不加。
+    """
+    retriever, _ids = _linked_retriever(tmp_path, offline_settings, hop=1, bm25_top_k=1)
+    hits, _ = retriever.retrieve("预应力锚索的锚固段长度怎么取")
+    assert len(hits) == 1, "候选里只剩一块时，邻居没有「顺带一提」的资格"

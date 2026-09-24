@@ -16,6 +16,8 @@ from mikasa.models.retrieval import RetrievedChunk
 from mikasa.providers import get_reranker
 from mikasa.providers.embedding import EmbeddingProvider
 from mikasa.providers.reranker import RerankerProvider
+from mikasa.storage import repo
+from mikasa.storage.db import open_db
 from mikasa.utils.logging import get_logger
 
 logger = get_logger("pipeline")
@@ -106,9 +108,7 @@ class Retriever:
         # 限定文档时的允许行集合（一次算好，两条路共用）
         allowed_rows: set[int] | None = None
         if document_id is not None:
-            allowed_rows = {
-                row for row, chunk in enumerate(corpus.chunks) if chunk.document_id == document_id
-            }
+            allowed_rows = self._rows_of({document_id})
             if not allowed_rows:
                 # 该文档不在快照里（已删/未入库）或没有块：空手而归。
                 # 不能退化成全库检索（那不是用户要的），也不让 dense 白跑一次全排序。
@@ -117,6 +117,7 @@ class Retriever:
 
         def oneside(
             query: str,
+            rows_filter: set[int] | None,
         ) -> tuple[list[tuple[int, float]], list[tuple[int, float]], list[tuple[int, float]]]:
             """单查询双路召回 + RRF：返回 (bm25_hits, dense_hits, fused)。
 
@@ -131,24 +132,24 @@ class Retriever:
             排序质量静默变差——不报错，只是答案变味。
             """
             bm25_hits = corpus.bm25.search(
-                query, top_k=cfg.bm25_top_k if allowed_rows is None else 0
+                query, top_k=cfg.bm25_top_k if rows_filter is None else 0
             )
-            if allowed_rows is not None:
-                bm25_hits = [hit for hit in bm25_hits if hit[0] in allowed_rows]
+            if rows_filter is not None:
+                bm25_hits = [hit for hit in bm25_hits if hit[0] in rows_filter]
             runs: list[list[int]] = [[row for row, _ in bm25_hits]]
             dense_hits: list[tuple[int, float]] = []
             if store is not None and dense_on:
                 query_vec = self._embedding.embed_query(query)
                 if query_vec.shape[0] > 0:
                     dense_hits = store.search(
-                        query_vec, top_k=cfg.dense_top_k if allowed_rows is None else 0
+                        query_vec, top_k=cfg.dense_top_k if rows_filter is None else 0
                     )
-                    if allowed_rows is not None:
-                        dense_hits = [hit for hit in dense_hits if hit[0] in allowed_rows]
+                    if rows_filter is not None:
+                        dense_hits = [hit for hit in dense_hits if hit[0] in rows_filter]
                     runs.append([row for row, _ in dense_hits])
             return bm25_hits, dense_hits, rrf_fuse(runs, k=cfg.fusion_k)
 
-        bm25_hits, dense_hits, fused = oneside(question)
+        bm25_hits, dense_hits, fused = oneside(question, allowed_rows)
         # (bm25, dense) 分数字典：主查询先塞（setdefault 保主路优先），
         # 第二查询只补主路未命中的块（跨语言路的英文块）
         row_scores: dict[int, list[float | None]] = {}
@@ -158,7 +159,7 @@ class Retriever:
             row_scores.setdefault(row, [None, None])[1] = score
 
         if second_query:
-            bm25_alt, dense_alt, fused_alt = oneside(second_query)
+            bm25_alt, dense_alt, fused_alt = oneside(second_query, allowed_rows)
             # 只补主路没有的分数（setdefault 返回的是**已存在**的列表，直接
             # 赋值会把主路分数覆盖成英文路的——2026-09-11 修正，与上面的注释同义）
             for row, score in bm25_alt:
@@ -174,6 +175,8 @@ class Retriever:
                 [[row for row, _ in fused], [row for row, _ in fused_alt]],
                 k=cfg.fusion_k,
             )
+        # 截断前的完整融合排名：一跳扩展要用它判断邻居的块有没有进过候选
+        full_fused = fused
         fused = fused[: cfg.fusion_top_k]
         lat["retrieve"] = (perf_counter() - t0) * 1000.0
         fused_scores = dict(fused)
@@ -211,6 +214,12 @@ class Retriever:
                     rank=rank,
                 )
             )
+
+        # ---- 一跳跨文档扩展（M6 ③ 的检索侧；默认关，见 RetrievalConfig.hop_expand）----
+        if cfg.hop_expand > 0 and hits:
+            t2 = perf_counter()
+            hits = self._expand_one_hop(hits, full_fused)
+            lat["hop"] = (perf_counter() - t2) * 1000.0
         logger.debug(
             "检索：问题=%r bm25=%d dense=%d fused=%d → 命中 %d（dense=%s）",
             question[:30],
@@ -221,3 +230,90 @@ class Retriever:
             dense_on,
         )
         return hits, lat
+
+    # ------------------------------------------------------------------
+
+    def _rows_of(self, doc_ids: set[int]) -> set[int]:
+        """这些文档在**当前快照**里占的行号集合（快照外的文档自然为空）。"""
+        return {
+            row for row, chunk in enumerate(self._corpus.chunks) if chunk.document_id in doc_ids
+        }
+
+    def _neighbor_doc_ids(self, seed: set[int]) -> list[int]:
+        """种子文档的 1 跳邻居（`doc_links` 两个方向都算），保序去重。
+
+        读路径复用 `repo.links_for_document`（它已经处理了方向和排序）——
+        一篇文档的边通常个位数，按种子逐篇查比拼一条 IN 查询更省心，
+        也和这个库里其它"个人规模就别过度设计"的取舍一致。
+
+        库文件不存在时返回空：评测/CI 里语料是纯内存快照，没有 DB 可读，
+        那条路必须安静地退化成"没有邻居"，而不是抛。
+        """
+        if not self.settings.db_path.is_file():
+            return []
+        ordered: list[int] = []
+        seen = set(seed)
+        with open_db(self.settings.db_path) as conn:
+            for doc_id in seed:
+                for row in repo.links_for_document(conn, doc_id, limit=10):
+                    other = int(row["other_id"])
+                    if other not in seen:
+                        seen.add(other)
+                        ordered.append(other)
+        return ordered
+
+    def _expand_one_hop(
+        self,
+        hits: list[RetrievedChunk],
+        fused: list[tuple[int, float]],
+    ) -> list[RetrievedChunk]:
+        """沿 `doc_links` 一跳，把邻居文档里**已经进了融合排名**的最优块追加到尾部。
+
+        四个口径都是有意的：
+
+        1. **复用主查询已经算出来的排名，不重跑检索**。代价因此是零次额外
+           搜索、零次额外嵌入调用——顺带把"相关性"这件事定义清楚了：邻居的块
+           要想被扩展，前提是**它本来就出现在这次查询的候选里**。早先那版是
+           "链过去就取邻居的第 1 名"，而 BM25 对零词面命中的块也会返回
+           （`top_k<=0` 的既有语义），那等于往注入里灌无关内容——引用协议还
+           拦不住它，因为它确实是一条编号资料。
+        2. **追加在尾部，不参与重排**。重排器只对主命中工作；混进来会让主排序
+           随链接结构抖动。
+        3. **每个邻居只要一块**。多取等于把邻居整篇塞进上下文，而引用编号
+           `[n]` 是**注入顺序**，主命中必须稳定占据靠前的编号。
+        4. **上限按文档数**（`hop_expand`）。一篇热门笔记被十几篇链到，
+           只按块截断会让同一篇霸屏。
+        """
+        seed_docs = {hit.chunk.document_id for hit in hits}
+        neighbors = [d for d in self._neighbor_doc_ids(seed_docs) if d not in seed_docs]
+        if not neighbors:
+            return hits
+        taken = {hit.chunk.id for hit in hits}
+        best: dict[int, int] = {}  # 邻居文档 → 它在融合排名里的最优行号
+        for row, _score in fused:
+            doc_id = self._corpus.chunks[row].document_id
+            if doc_id in neighbors and doc_id not in best:
+                best[doc_id] = row
+        extra: list[RetrievedChunk] = []
+        for doc_id in neighbors[: self.settings.retrieval.hop_expand]:
+            pick = best.get(doc_id)
+            if pick is None:
+                continue  # 邻居这次一块都没进候选：它是无关，不是"顺带一提"
+            chunk = self._corpus.chunks[pick]
+            if chunk.id in taken:
+                continue
+            taken.add(chunk.id)
+            # rank 接着主命中往下排：它只用于展示（引用卡上的序号），而
+            # **编号 [n] 走的是注入顺序**（generator 按 enumerate 编号），
+            # 所以追加在尾部就自动是 N+1 起，不会串号。
+            extra.append(
+                RetrievedChunk(chunk=chunk, fused_score=0.0, rank=len(hits) + len(extra) + 1)
+            )
+        if extra:
+            logger.debug(
+                "一跳扩展：种子 %d 篇 → 邻居 %d 篇，追加 %d 块",
+                len(seed_docs),
+                len(neighbors),
+                len(extra),
+            )
+        return hits + extra

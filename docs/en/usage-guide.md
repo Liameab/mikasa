@@ -186,6 +186,17 @@ their ⋯ menu gains **编辑笔记**.
 - **The note file is the only copy.** Unlike an uploaded paper — where you still have your original —
   a note exists only inside the library (`data/uploads/`). Back up `data/` before switching embedding
   models or moving machines.
+- **Notes can link to each other**: write `[[the title of another note]]` in the body (or
+  `[[title|display text]]`) and the link is stored in the library on save (the `doc_links` table).
+  `[[…]]` inside code blocks or inline code is not a link.
+  - **Renaming breaks the link**: links resolve by title and a rename does not rewrite them — save
+    that note once to rebuild them.
+  - **A half-written link is not an error**: a target that does not exist yet is silently skipped.
+  - For links to actually **take part in retrieval**, turn on a knob that ships off
+    (`retrieval.hop_expand`, documented in `config.example.yaml`): once enabled, a question that
+    hits note A also brings in the most relevant chunk of note B that A links to. It defaults to
+    off for the reasons in [ADR-0035](design-decisions.md) — it shifts the evaluation baseline, and
+    it only does anything if your notes really do link to each other.
 
 ### Photos into notes (M6 ②)
 

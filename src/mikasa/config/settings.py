@@ -134,6 +134,14 @@ class RetrievalConfig(BaseModel):
     # 在各自 profile yaml 里开启。英文路只在英文块上有分，不会挤占主路
     # 中文结果（RRF 两路合流，见 retriever.retrieve second_query）。
     crosslingual: bool = False
+    # 一跳跨文档扩展（2026-09-25）：融合出结果后，沿 doc_links（笔记的
+    # `[[标题]]` 互链）把**邻居文档**里与问题最相关的那一块追加到命中尾部。
+    # 值是"最多扩展几篇文档"，0 = 关。
+    #
+    # **默认关是刻意的**：一开就会改变注入的片段集合，也就是平移评测基线
+    # （63 题的那些数字得重跑才算数）；而且它只在"你的笔记之间有互链"时才
+    # 有效果，不是普适增益。要开就在 profile yaml 里给个正数。
+    hop_expand: int = 0
 
 
 class RerankerConfig(BaseModel):
