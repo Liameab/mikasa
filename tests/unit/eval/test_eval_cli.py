@@ -159,3 +159,93 @@ def test_eval_list_empty_then_after_run(tmp_path, monkeypatch):
     assert listing.exit_code == 0
     assert "评测历史（共 1 次）" in listing.output
     assert "mikasa-golden" in listing.output
+
+
+# ---------------------------------------------------------------------------
+# eval compare：两次运行的逐题配对比较（2026-09-25）
+# ---------------------------------------------------------------------------
+
+
+def _insert_run(settings, *, recall_at_10: list[float], name: str) -> int:
+    """直接造一行 eval_runs（含逐题检索留痕）——比较逻辑不需要真跑评测。"""
+    items = {
+        f"q{i:02d}": {
+            "recall_at": {"5": v, "10": v},
+            "ndcg_at": {"5": v, "10": v},
+            "rr": v,
+        }
+        for i, v in enumerate(recall_at_10)
+    }
+    with open_db(settings.db_path) as conn:
+        return repo.insert_eval_run(
+            conn,
+            eval_set_name=name,
+            corpus_sha256="deadbeef" * 8,
+            config_json="{}",
+            metrics_json=json.dumps({"retrieval": {"items": items}}),
+            report_md="",
+        )
+
+
+def test_eval_compare_reports_a_paired_delta(tmp_path, monkeypatch):
+    """每道题都提高 → 差值正、区间不跨 0、判为显著。"""
+    settings = _isolate(tmp_path, monkeypatch)
+    settings.ensure_dirs()
+    before = _insert_run(settings, recall_at_10=[0.0] * 8, name="a")
+    after = _insert_run(settings, recall_at_10=[0.5] * 8, name="b")
+
+    result = runner.invoke(app, ["eval", "compare", str(before), str(after)])
+    assert result.exit_code == 0, result.output
+    assert "配对比较" in result.output
+    assert "8 道共同题" in result.output
+    assert "recall@10" in result.output
+    assert "+0.500" in result.output  # 差值
+    assert "是" in result.output  # 显著
+
+
+def test_eval_compare_calls_noise_noise(tmp_path, monkeypatch):
+    """只有一道题变了 → 判为"看不出来"，而不是当成改进。"""
+    settings = _isolate(tmp_path, monkeypatch)
+    settings.ensure_dirs()
+    before = _insert_run(settings, recall_at_10=[0.0] * 20, name="a")
+    after = _insert_run(settings, recall_at_10=[0.0] * 19 + [1.0], name="b")
+
+    result = runner.invoke(app, ["eval", "compare", str(before), str(after)])
+    assert result.exit_code == 0, result.output
+    assert "否（跨 0）" in result.output
+
+
+def test_eval_compare_rejects_unknown_and_traceless_runs(tmp_path, monkeypatch):
+    """两条失败路径都要说明白：id 不存在、老运行没有逐题留痕。"""
+    settings = _isolate(tmp_path, monkeypatch)
+    settings.ensure_dirs()
+    run = _insert_run(settings, recall_at_10=[0.0] * 8, name="a")
+
+    missing = runner.invoke(app, ["eval", "compare", str(run), "999"])
+    assert missing.exit_code == 1
+    assert "没有 id=999 的评测记录" in missing.output
+
+    with open_db(settings.db_path) as conn:
+        legacy = repo.insert_eval_run(
+            conn,
+            eval_set_name="old",
+            corpus_sha256=None,
+            config_json="{}",
+            metrics_json=json.dumps({"retrieval": {"recall_at": {}}}),  # 没有 items
+            report_md="",
+        )
+    stale = runner.invoke(app, ["eval", "compare", str(run), str(legacy)])
+    assert stale.exit_code == 1
+    assert "没有逐题检索留痕" in stale.output
+
+
+def test_eval_compare_needs_enough_shared_questions(tmp_path, monkeypatch):
+    """共同题太少时拒绝出结论——3 道题算出来的区间没有意义。"""
+    settings = _isolate(tmp_path, monkeypatch)
+    settings.ensure_dirs()
+    before = _insert_run(settings, recall_at_10=[0.0] * 3, name="a")
+    after = _insert_run(settings, recall_at_10=[1.0] * 3, name="b")
+
+    result = runner.invoke(app, ["eval", "compare", str(before), str(after)])
+    assert result.exit_code == 1
+    assert "配不出有意义的结论" in result.output

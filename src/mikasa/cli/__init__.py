@@ -14,8 +14,9 @@ import contextlib
 import json
 import sys
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 import typer
 from rich.console import Console
@@ -668,6 +669,107 @@ def eval_list(
             (row["created_at"] or "")[:19],
         )
     console.print(table)
+
+
+@_eval_app.command(name="compare")
+def eval_compare(
+    before: Annotated[int, typer.Argument(help="基准运行 id（`eval list` 里的 ID）")],
+    after: Annotated[int, typer.Argument(help="对比运行 id")],
+    profile: PROFILE_OPT = "api",
+    config: CONFIG_OPT = None,
+) -> None:
+    """配对比较两次评测的检索层（同题库逐题配对 + bootstrap 置信区间）。
+
+    **为什么必须配对**：两次独立跑出来的均值差会被题间方差淹没——63 题里
+    几道难题的正常波动，比一次检索改动的真实效果还大。配对只看"同一道题
+    变了多少"，62 道没变的题自动抵消，剩下的是改动本身。
+
+    **怎么读**：区间不跨 0（`显著` 列）才算"这次改动有据可依"；跨 0 就是
+    "题库这个样本量还看不出来"。区间只对**这一批题**成立，它不是物理定律。
+
+    前置：两次运行都得是 2026-09-25 之后跑的（那之前的 metrics_json 没有
+    逐题留痕，配不了对）——缺了会直接说明，不猜。
+    """
+    from mikasa.eval.metrics import paired_bootstrap
+    from mikasa.storage import repo
+    from mikasa.storage.db import open_db
+
+    console = Console()
+    settings = load_settings(profile, config)
+    with open_db(settings.db_path) as conn:
+        runs = {rid: repo.get_eval_run(conn, rid) for rid in (before, after)}
+    found: dict[int, dict[str, Any]] = {}
+    for rid, row in runs.items():
+        if row is None:
+            console.print(f"[red]没有 id={rid} 的评测记录。先跑 `mikasa eval list` 看有哪些。[/]")
+            raise typer.Exit(code=1)
+        found[rid] = row
+
+    # 逐题留痕是配对的唯一依据（形状：题号 → {recall_at: {k: v}, ndcg_at: {...}, rr: v}）
+    items: dict[int, dict[str, dict[str, Any]]] = {}
+    for rid, row in found.items():
+        try:
+            metrics_data = json.loads(row["metrics_json"] or "{}")
+        except json.JSONDecodeError:
+            metrics_data = {}
+        per_item = (metrics_data.get("retrieval") or {}).get("items") or {}
+        if not per_item:
+            console.print(
+                f"[yellow]运行 {rid} 没有逐题检索留痕（2026-09-25 之前的运行没有），"
+                "重新跑一次即可。[/]"
+            )
+            raise typer.Exit(code=1)
+        items[rid] = per_item
+
+    shared = sorted(set(items[before]) & set(items[after]))
+    if len(shared) < 5:
+        console.print(f"[red]两次运行共同的可答题只有 {len(shared)} 道，配不出有意义的结论。[/]")
+        raise typer.Exit(code=1)
+
+    ks = sorted(
+        {int(k) for k in items[before][shared[0]]["recall_at"]}
+        & {int(k) for k in items[after][shared[0]]["recall_at"]}
+    )
+    if ks != sorted({int(k) for k in items[after][shared[0]]["recall_at"]}):
+        console.print("[yellow]警告：两次运行的 k 档不同，只比较共同档位。[/]")
+
+    def series(run_id: int, pick: Callable[[dict[str, Any]], float]) -> list[float]:
+        return [pick(items[run_id][qid]) for qid in shared]
+
+    # (指标名, 取值的键路径)：三个指标方向一致（越大越好），所以渲染可以共用一套颜色
+    def recall_of(record: dict[str, Any], k: int) -> float:
+        return float(record["recall_at"][str(k)])
+
+    metrics_spec: list[tuple[str, Callable[[dict[str, Any]], float]]] = [
+        (f"recall@{k}", partial(recall_of, k=k)) for k in ks
+    ]
+    metrics_spec.append(("MRR", lambda record: float(record["rr"])))
+
+    title = f"配对比较：#{before} → #{after}（{len(shared)} 道共同题）"
+    table = Table(title=title)
+    for col in ("指标", f"#{before} 均值", f"#{after} 均值", "差值", "95% CI（差值）", "显著"):
+        table.add_column(col)
+    for label, pick in metrics_spec:
+        old, new = series(before, pick), series(after, pick)
+        result = paired_bootstrap(old, new)
+        if result is None:  # pragma: no cover - shared 已保证非空且等长
+            continue
+        lo, hi, delta = float(result["lo"]), float(result["hi"]), float(result["delta"])
+        # 变好绿、变差红、看不出来黄——三个指标都是越大越好，所以一套配色够
+        style = "yellow" if not result["significant"] else ("green" if delta > 0 else "red")
+        table.add_row(
+            label,
+            f"{sum(old) / len(old):.3f}",
+            f"{sum(new) / len(new):.3f}",
+            Text(f"{delta:+.3f}", style=style),
+            Text(f"[{lo:+.3f}, {hi:+.3f}]", style=style),
+            Text("是" if result["significant"] else "否（跨 0）", style=style),
+        )
+    console.print(table)
+    console.print(
+        "[dim]口径：逐题配对 + bootstrap 2000 次重采样（种子固定，同数据同结果）；"
+        "区间读作「若另抽一批同分布的题，差值均值大概落在哪」。[/]"
+    )
 
 
 # ---- index 子命令组（index stats / index rebuild 由 ingest --reindex 覆盖） ----

@@ -435,7 +435,12 @@ class EvalRunner:
             hits, _lat = retriever.retrieve(item.question)
             ranked = [self._require_chunk_id(hit) for hit in hits]
             # 可答题必然带难度（题本校验保证），此处兜底仅满足类型收窄
-            metrics.add_item(ranked, set(item.gold_chunk_ids), item.difficulty or "unknown")
+            metrics.add_item(
+                ranked,
+                set(item.gold_chunk_ids),
+                item.difficulty or "unknown",
+                item_id=item.id,  # 逐题留痕：`eval compare` 的配对键
+            )
         return metrics
 
     # ------------------------------------------------------------------

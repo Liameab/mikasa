@@ -16,7 +16,7 @@ from datetime import datetime
 
 from mikasa.config.settings import Settings
 from mikasa.eval.golden import GoldenSet
-from mikasa.eval.metrics import summarize
+from mikasa.eval.metrics import bootstrap_ci, summarize
 from mikasa.eval.runner import EvalResult, ItemRecord
 
 # 报告列宽口径：markdown 管道表不换行，数值列统一对齐
@@ -293,25 +293,38 @@ def _judge_policy_text(settings: Settings, judge_model: str) -> str:
     )
 
 
-def _stat_row(label: str, values: list[float]) -> list[str]:
-    """一行描述统计（mean / p50 / p95 / n）——三类指标同一套口径。"""
+def _stat_row(label: str, values: list[float], *, with_ci: bool = False) -> list[str]:
+    """一行描述统计（mean / p50 / p95 / n，可选 95% 置信区间）。
+
+    区间只给**阶段 A**（`with_ci=True`）：那是"改检索有没有变好"的决策面。
+    阶段 B/C 的样本量受拒答与裁判一致性影响，区间会更宽且更容易被误读。
+    """
     stats = summarize(values)
-    return [
+    row = [
         label,
         _fmt(float(stats["mean"])),
         _fmt(float(stats["p50"])),
         _fmt(float(stats["p95"])),
         str(stats["n"]),
     ]
+    if with_ci:
+        ci = bootstrap_ci(values)
+        row.append("—" if ci is None else f"[{_fmt(ci[0])}, {_fmt(ci[1])}]")
+    return row
 
 
 def _retrieval_overview_table(result: EvalResult) -> str:
-    """阶段 A 总表：recall@k / MRR / nDCG@k 的描述统计。"""
+    """阶段 A 总表：recall@k / MRR / nDCG@k 的描述统计 + 均值的 95% 置信区间。
+
+    **区间读作**："若从同一分布的题库里另抽一批题，均值大概会落在哪"。
+    它不覆盖语料变动与模型版本漂移（那些归指纹核对管，见 evaluation.md）。
+    随机种子写死（见 metrics.bootstrap_ci），所以同一份数据两次渲染同一结果。
+    """
     metrics = result.retrieval
-    rows = [_stat_row(f"recall@{k}", metrics.recall[k].values) for k in metrics.ks]
-    rows.append(_stat_row("MRR", metrics.rr.values))
-    rows += [_stat_row(f"nDCG@{k}", metrics.ndcg[k].values) for k in metrics.ks]
-    return _table(["指标", "mean", "p50", "p95", "n"], rows)
+    rows = [_stat_row(f"recall@{k}", metrics.recall[k].values, with_ci=True) for k in metrics.ks]
+    rows.append(_stat_row("MRR", metrics.rr.values, with_ci=True))
+    rows += [_stat_row(f"nDCG@{k}", metrics.ndcg[k].values, with_ci=True) for k in metrics.ks]
+    return _table(["指标", "mean", "p50", "p95", "n", "95% CI（均值）"], rows)
 
 
 def _retrieval_difficulty_rows(result: EvalResult) -> list[list[str]]:

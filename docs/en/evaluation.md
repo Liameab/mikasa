@@ -2,7 +2,7 @@
 
 > Companion code: `src/mikasa/eval/` (orchestration plus `synth.py`, the question
 > generator), `tools/build_golden.py`, `evals/questions.yaml`, `evals/golden_set.json`.
-> Commands: `mikasa eval run | list`; **the synthesized bank is generated from the web
+> Commands: `mikasa eval run | list | compare`; **the synthesized bank is generated from the web
 > evaluation page**, not from the CLI.
 
 Evaluation is not meant to answer "is the model any good." It answers three
@@ -115,6 +115,36 @@ Per-item values accumulate in a `_Mean` container, and `summarize` reports mean 
 p50 / p95 / min / max / n at report time. Difficulty strata and the overall
 figures are computed from the same raw per-item data, keeping the methodology
 transparent.
+
+### 3b. Uncertainty: confidence intervals and paired comparisons (2026-09-25)
+
+A single number over 63 questions carries **no uncertainty** — when a retrieval
+change moves recall@10 from 0.98 to 0.99, those two numbers alone cannot answer
+"is this better, or is it noise". Two additions:
+
+- **A 95% confidence interval on the mean** (a new column in the stage A table):
+  bootstrap resampling over the **question bank** (2000 draws, fixed seed). It
+  reads as "if another bank were drawn from the same distribution, the mean would
+  probably land here". **The seed is fixed on purpose**: rendering the same data
+  twice must give the same interval, otherwise "0.82 last time, 0.79 this time"
+  cannot be attributed to the model rather than to the resampling. It does *not*
+  cover corpus changes or model-version drift — those belong to fingerprint
+  checks and per-item validation, not to statistics.
+- **`mikasa eval compare <old> <new>`: a paired, per-question comparison.** This
+  is the stronger and more useful test: **the difference of two independent run
+  means is drowned by between-question variance** (the normal wobble of the few
+  hard questions is larger than the real effect of a retrieval change), while a
+  paired test only looks at "how much did *this* question move" — unchanged
+  questions cancel out. It prints the mean difference, its 95% interval, and a
+  `significant` flag (the interval does not cross zero).
+
+**Two boundaries, stated plainly**: (1) the interval holds for **this bank**;
+the bank is itself a sample, and this is not a law of physics. (2) Pairing
+requires per-question traces on both runs (only runs from 2026-09-25 onward have
+them), and with fewer than five shared questions the command refuses to draw a
+conclusion rather than computing one anyway. Strata with small samples (hard has
+12 questions) get much wider intervals — check the interval before reading
+anything into "hard dropped two points".
 
 ## 4. The semantic judge (stage C) and its three bias corrections
 
@@ -234,7 +264,10 @@ identically, differing only in configuration.
 `eval_runs` table (the report_md column). Fixed sections:
 
 - **Stage A table**: check first whether recall@10 is ≥0.95 — if not, look at
-  chunking and retrieval before touching the model;
+  chunking and retrieval before touching the model. The **95% CI (mean)** column
+  in the same table is that number's uncertainty (see §3b): when the interval
+  straddles your decision line, enlarge the bank or use a paired comparison
+  instead of reading the second decimal place;
 - **Stage B table**: false refusals > 0 → check whether "the refusal threshold is
   too tight"; answers with no citations that were not refusals > 0 → check the
   citation prompt; refusal accuracy < 1 → go to the anomaly detail and read the

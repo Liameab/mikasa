@@ -20,10 +20,86 @@
 from __future__ import annotations
 
 import math
+import random
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 _EPS = 1e-9
+
+# bootstrap 的默认参数。**种子写死**：同一份数据两次跑必须得到同一个区间，
+# 否则报告会随运行抖动，"上次看到 0.82、这次 0.79" 就分不清是模型变了还是
+# 重采样变了——评测工具最怕这种事。2000 次重采样对 63 题规模够用（区间
+# 端点的抖动远小于 0.01），再多是白花时间。
+_BOOTSTRAP_N = 2000
+_BOOTSTRAP_SEED = 20260925
+_BOOTSTRAP_CONFIDENCE = 0.95
+
+
+def bootstrap_ci(
+    values: list[float],
+    *,
+    n: int = _BOOTSTRAP_N,
+    confidence: float = _BOOTSTRAP_CONFIDENCE,
+    seed: int = _BOOTSTRAP_SEED,
+) -> tuple[float, float] | None:
+    """均值的 bootstrap 置信区间（percentile 法）；样本为空 → None。
+
+    **为什么需要它**（2026-09-25）：63 题上的单点数字没有不确定度，改一次
+    检索拿到 recall@10 从 0.98 到 0.99 时，没人答得上"这是变好了还是噪声"。
+    区间回答的正是这句；`paired_bootstrap` 回答更强的那个版本。
+
+    **口径要说清**：这里的重采样对象是**题库**，不是语料——区间读作
+    "若从同一分布的题库里另抽一批题，均值大概会落在哪"。它不覆盖
+    语料变动、模型版本漂移这些系统性因素（那些不在统计里，在指纹核对里）。
+    """
+    if not values:
+        return None
+    rng = random.Random(seed)
+    count = len(values)
+    means = []
+    for _ in range(n):
+        means.append(sum(values[rng.randrange(count)] for _ in range(count)) / count)
+    means.sort()
+    lo = means[max(0, int((1 - confidence) / 2 * n) - 1)]
+    hi = means[min(n - 1, int((1 + confidence) / 2 * n))]
+    return (lo, hi)
+
+
+def paired_bootstrap(
+    before: list[float],
+    after: list[float],
+    *,
+    n: int = _BOOTSTRAP_N,
+    confidence: float = _BOOTSTRAP_CONFIDENCE,
+    seed: int = _BOOTSTRAP_SEED,
+) -> dict[str, float | int | bool] | None:
+    """配对 bootstrap：同一批题在两次运行下的逐条差值，均值 + 置信区间。
+
+    调用方保证 `before[i]` 与 `after[i]` 是**同一道题**——配对是这里的全部
+    价值：不配对的两次独立区间会被题间方差淹没，而配对只看"同一题变了多少"，
+    在 63 题的规模上才看得出 1-2 个点的真实变化。
+
+    返回 `{n, delta, lo, hi, significant}`：
+      - delta = mean(after - before)；正的 = 变好；
+      - `significant` = 区间**不跨 0**。这是"这一次改动有没有效果"的判据，
+        但它只对**这一批题**成立——题库本身就是样本，别把它读成物理定律。
+    """
+    if len(before) != len(after):
+        return None
+    if not before:
+        return None
+    deltas = [b - a for a, b in zip(before, after, strict=True)]
+    ci = bootstrap_ci(deltas, n=n, confidence=confidence, seed=seed)
+    assert ci is not None  # deltas 非空（上面已判）
+    lo, hi = ci
+    return {
+        "n": len(deltas),
+        "delta": sum(deltas) / len(deltas),
+        "lo": lo,
+        "hi": hi,
+        "significant": lo > 0 or hi < 0,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +196,10 @@ class RetrievalMetrics:
     ndcg: dict[int, _Mean]
     # 分层（难度）口径：k 取最大档，value 为逐条值列表
     by_difficulty: dict[str, dict[int, list[float]]] = field(default_factory=dict)
+    # 逐题原料：题号 → {recall_at: {k: v}, rr: v, ndcg_at: {k: v}}
+    # 上面的 _Mean 只保序不保名，配不了对；比较两次运行必须认得出"同一道题"
+    # （`eval compare` 与 paired_bootstrap 都读这里）。
+    items: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def final(self) -> dict[str, object]:
         out: dict[str, object] = {
@@ -131,9 +211,13 @@ class RetrievalMetrics:
             out["by_difficulty"] = {
                 d: {k: summarize(v) for k, v in kv.items()} for d, kv in self.by_difficulty.items()
             }
+        if self.items:
+            out["items"] = self.items
         return out
 
-    def add_item(self, ranked: list[int], gold: set[int], difficulty: str) -> None:
+    def add_item(
+        self, ranked: list[int], gold: set[int], difficulty: str, *, item_id: str = ""
+    ) -> None:
         for k in self.ks:
             self.recall[k].add(recall_at(ranked, gold, k))
             self.ndcg[k].add(ndcg_at(ranked, gold, k))
@@ -141,6 +225,12 @@ class RetrievalMetrics:
                 recall_at(ranked, gold, k)
             )
         self.rr.add(reciprocal_rank(ranked, gold))
+        if item_id:
+            self.items[item_id] = {
+                "recall_at": {k: recall_at(ranked, gold, k) for k in self.ks},
+                "ndcg_at": {k: ndcg_at(ranked, gold, k) for k in self.ks},
+                "rr": reciprocal_rank(ranked, gold),
+            }
 
 
 def make_retrieval_metrics(ks: tuple[int, ...]) -> RetrievalMetrics:

@@ -8,12 +8,16 @@
 
 from __future__ import annotations
 
+import random
+
 import pytest
 
 from mikasa.eval.metrics import (
     _Mean,
+    bootstrap_ci,
     make_retrieval_metrics,
     ndcg_at,
+    paired_bootstrap,
     recall_at,
     reciprocal_rank,
     shape_stats,
@@ -177,3 +181,67 @@ def test_shape_stats_empty_and_plain():
     assert shape_stats("")["chars"] == 0
     plain = shape_stats("就是一句话，没有任何形态。")
     assert plain == {"chars": 13, "sections": 0, "tables": 0, "formulas": 0, "bullets": 0}
+
+
+# ---------------------------------------------------------------------------
+# bootstrap：单次运行的置信区间 + 两次运行的配对比较（2026-09-25）
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_ci_is_deterministic_and_brackets_the_mean():
+    """同一份数据两次调用必须得到**同一个**区间（种子写死），且包住均值。"""
+    values = [0.0, 1.0, 1.0, 0.5, 1.0, 0.0, 1.0, 1.0]
+    first = bootstrap_ci(values)
+    second = bootstrap_ci(values)
+    assert first == second, "同一份数据两次渲染必须一致，否则报告会随运行抖动"
+    assert first is not None
+    lo, hi = first
+    mean = sum(values) / len(values)
+    assert lo <= mean <= hi
+
+
+def test_bootstrap_ci_degenerate_and_empty():
+    """全同值 → 区间退化成那个值本身；空样本 → None（不是抛）。"""
+    assert bootstrap_ci([]) is None
+    assert bootstrap_ci([1.0] * 20) == (1.0, 1.0)
+
+
+def test_bootstrap_ci_narrows_as_samples_grow():
+    """同一分布下样本越多区间越窄——这是"再攒点题能不能看出差别"的直觉。"""
+    rng = random.Random(7)
+    small = [rng.choice([0.0, 0.5, 1.0]) for _ in range(10)]
+    large = [rng.choice([0.0, 0.5, 1.0]) for _ in range(400)]
+    small_ci, large_ci = bootstrap_ci(small), bootstrap_ci(large)
+    assert small_ci is not None and large_ci is not None
+    assert (large_ci[1] - large_ci[0]) < (small_ci[1] - small_ci[0])
+
+
+def test_paired_bootstrap_finds_a_consistent_shift():
+    """每道题都 +0.1 → 区间不跨 0、判定显著，且 delta 就是 0.1。"""
+    before = [0.0] * 20 + [1.0] * 20
+    after = [v + 0.1 for v in before]
+    result = paired_bootstrap(before, after)
+    assert result is not None
+    assert result["n"] == 40
+    assert abs(float(result["delta"]) - 0.1) < 1e-9
+    assert result["significant"] is True
+
+
+def test_paired_bootstrap_treats_noise_as_noise():
+    """改动只影响个别题（其余不动）→ 区间跨 0，判为"看不出来"。
+
+    这正是非配对比较会骗人的地方：两边各自的区间会重叠得看不出所以然，
+    而配对之后剩下的差值仍然是噪声。
+    """
+    before = [0.0] * 40
+    after = [0.0] * 39 + [1.0]  # 只有一道题变了
+    result = paired_bootstrap(before, after)
+    assert result is not None
+    assert result["significant"] is False
+    assert float(result["lo"]) <= 0 <= float(result["hi"])
+
+
+def test_paired_bootstrap_rejects_mismatched_lengths():
+    """配对的前提是同一批题——长度不一致说明调用方拿错了数据，返回 None 而不是硬算。"""
+    assert paired_bootstrap([1.0, 0.0], [1.0]) is None
+    assert paired_bootstrap([], []) is None
