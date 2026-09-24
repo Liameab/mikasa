@@ -31,6 +31,8 @@ _PRIVATE = {
     # 考研复试准备材料（2026-09-24 加入）：个人使用、.gitignore 排除、无英文镜像
     "interview-handbook.md",
     "advisor-readme.md",
+    # 技术路线提案（2026-09-25 加入）：Claude ↔ Codex 的协商稿，同上
+    "tech-roadmap-proposal.md",
 }
 
 # 检查链接的范围：仓库根的门面 + 两棵文档树
