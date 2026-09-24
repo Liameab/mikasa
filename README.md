@@ -18,7 +18,7 @@ schema 迁移 v1→v2，见 ADR-0004 修订段）→ 语料文件夹 v3 → 表�
 → M5 前全量排查（修 23 项，含 4 项数据安全级）→ 安装版打包 → 设置面板模型接入 → 向量模型随包携带（首次入库不再联网，ADR-0030）
 → 文生图（问答页直接出图，ADR-0031）→ 模型来源补齐 Claude / OpenAI + 本机模型在应用内拉取（ADR-0032）
 → 浏览器 / 局域网访问 + 访问口令（ADR-0033）→ 阅读器「边看边问」（ADR-0034）。
-当前 **1063 tests 全绿**，ruff + mypy clean，覆盖率 ~92%。已发布 Windows 免安装包与安装向导
+当前 **1085 tests 全绿**，ruff + mypy clean，覆盖率 ~92%。已发布 Windows 免安装包与安装向导
 （v0.1.0 → v0.1.12），应用内自带「检查更新 → 一键下载安装」——下载支持断点续传，
 关掉弹窗/切页/刷新都不会打断，进度落在顶栏胶囊上（ADR-0024）。
 
@@ -205,7 +205,7 @@ http://127.0.0.1:8000/docs 。
   英文镜像在 [README.en.md](README.en.md) 与 [`docs/en/`](docs/en/)——两棵树同名文件一一对应，
   有护栏测试盯着（`tests/unit/web/test_docs_trees.py`）；ruff + mypy 三绿基线
   `ruff format src tests && ruff check src tests && mypy src`；
-- 测试与覆盖率：**1063 单测**，覆盖率 ~92%（见 evaluation.md 回归门禁）；
+- 测试与覆盖率：**1085 单测**，覆盖率 ~92%（见 evaluation.md 回归门禁）；
 - 零编译安装：Windows + CPython 3.13 全部依赖均有预编译 wheel
   （版本锁定理由见 pyproject.toml 注释与 ADR-0006/0008）。
 

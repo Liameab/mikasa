@@ -48,7 +48,7 @@
 | E1 | local 语义质量对照 | local 档 judge 关闭（ADR-0014 ③），语义质量无裁判确认——复查需先接本地裁判或与 api 档对照 | 待排期 |
 | E2 | eval 真跑耗时 | local 档全量 63 题 ~25–35 分钟（api 档 4–5 分钟）——CI 只跑 offline 协议层 | 已接受，记录于 evaluation.md §5 |
 | E3 | mock LLM 边界 | offline 场次无语义（协议自检），误答 7/16 是 mock 局限实证 | 已接受，记录于 evaluation.md §5 + limitations §三 |
-| E4 | 覆盖率基线守护 | 基线 91%——M4.5 新增模块需回归测量并在 evaluation.md 更新 | 已更新：**92%**（2026-09-24 v0.1.12 收尾全量重测：8123 语句、1063 passed + 2 skipped；上一版 93% 是 09-09 的 3469 语句口径，见 evaluation.md） |
+| E4 | 覆盖率基线守护 | 基线 91%——M4.5 新增模块需回归测量并在 evaluation.md 更新 | 已更新：**92%**（2026-09-25 全量重测：8190 语句、1085 passed + 2 skipped；上一版 93% 是 09-09 的 3469 语句口径，见 evaluation.md） |
 
 ## 四、当前明确不做（防反复翻案）
 
