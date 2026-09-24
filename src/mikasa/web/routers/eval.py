@@ -104,9 +104,9 @@ def _run_eval_job(settings: Settings, golden: GoldenSet, manager: EvalJobManager
     """后台任务体：跑完全程（run_and_persist，与 CLI 同编排）并收尾槽位。
 
     任何异常（含结构性二次校验失败）都进 manager.fail——错误消息随
-    状态给轮询端展示，CLI 语义一致（红字信息不回吞）。失败任务不改
-    eval_runs 表：占位行由 run_and_persist 内部插入，未及回填即失败时
-    遗留的"无报告"行是历史留痕，列表以 status=incomplete 标注。
+    状态给轮询端展示，CLI 语义一致（红字信息不回吞）。**失败的运行不进
+    eval_runs 表**（`run_and_persist` 是跑完才插行的），所以历史列表里
+    只会有真正跑完的那些；失败现场以作业状态为准，事后追溯看日志。
     """
     try:
         persisted = run_and_persist(settings, golden, on_item=manager.on_item)

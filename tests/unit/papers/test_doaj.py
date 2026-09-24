@@ -102,6 +102,36 @@ def test_year_filter_goes_into_the_query(monkeypatch):
     assert "bibjson.year:[2015 TO 2026]" in query
 
 
+@pytest.mark.parametrize(
+    ("date_from", "date_to", "expected"),
+    [
+        # 只填一边时，另一边走默认——**按含义取界，不按"填了几个"**（2026-09-24 修）。
+        # 修前只填 date_to 会被当下界使（`[2020 TO 2100]`），"检索 2020 年以前"
+        # 返回的正好是补集，且 caps.year=True 不产生降级提示，静默错。
+        ("2015-03-01", None, "bibjson.year:[2015 TO 2100]"),
+        (None, "2020-12-31", "bibjson.year:[1900 TO 2020]"),
+        ("2015-03-01", "2026-09-19", "bibjson.year:[2015 TO 2026]"),
+    ],
+)
+def test_year_bounds_are_per_side(monkeypatch, date_from, date_to, expected):
+    captured: dict[str, str] = {}
+    _stub_get(monkeypatch, {"total": 0, "results": []}, captured)
+
+    doaj.DoajSource().search("充填体", 0, 5, filters=PaperFilters(date_from, date_to))
+
+    assert expected in urllib.parse.unquote(captured["url"])
+
+
+def test_no_year_filter_means_no_clause(monkeypatch):
+    """两边都不填时**不拼子句**（不是拼一个 `[1900 TO 2100]`）。"""
+    captured: dict[str, str] = {}
+    _stub_get(monkeypatch, {"total": 0, "results": []}, captured)
+
+    doaj.DoajSource().search("充填体", 0, 5, filters=None)
+
+    assert "bibjson.year" not in urllib.parse.unquote(captured["url"])
+
+
 def test_pdf_link_is_detected_only_when_it_really_ends_with_pdf(monkeypatch):
     row = _row(
         link=[

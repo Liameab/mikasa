@@ -160,15 +160,13 @@ def _to_frames(
     mode 透传给 ask_stream：守卫（free+mock → ConfigError）在生成器
     首个 yield 前抛出 → try 兜底产出恰一帧 error、零 meta（前端契约）。
 
-    new_session：本次提问刚建的会话。若一个事件都没产出就失败（空库 /
-    守卫拒绝 / 上游立刻报错），把这条空会话删掉——与 CLI chat 的
-    "早失败不落审计轨迹"同款纪律，否则用户每失败一次就在树里多一条
-    空对话（2026-09-11 修复）。
+    new_session：本次提问刚建的会话。只要它**一条消息都没落库**就删掉——
+    早失败（空库 / 守卫拒绝 / 上游立刻报错）与中途断开（用户看到一半关页）
+    都算，两者都会让会话树里多一条空对话（2026-09-11 首次修复，
+    2026-09-24 补上中断那条路径）。
     """
-    produced = False
     try:
         for ev in services.ask.ask_stream(question, session_id=session_id, mode=mode):
-            produced = True
             if ev.kind == "meta":
                 yield sse_event("meta", {"session_id": ev.session_id})
             elif ev.kind == "delta":
@@ -189,9 +187,16 @@ def _to_frames(
     finally:
         # 清理必须放 finally：客户端中途断开（关标签页/刷新，前端没有 AbortController，
         # 只能这样中断）时生成器被 close()，抛的是 **GeneratorExit**——它是
-        # BaseException，`except Exception` 接不住，于是"一个事件都没产出"的空会话
-        # 会留在会话树里（2026-09-11 审查发现）。
-        if new_session and not produced:
+        # BaseException，`except Exception` 接不住，空会话会留在会话树里
+        # （2026-09-11 审查发现）。
+        #
+        # **无条件调用，不判"产出了几个事件"**（2026-09-24 修）：原先的条件是
+        # `not produced`，而 meta 帧在**检索成功后就发**——用户在"已经看到回答在
+        # 往外冒"时关页/刷新，produced 已为真、落库却没发生，于是每中断一次就
+        # 在会话树里多一条空对话。`_drop_session_if_empty` 自己会查消息表，
+        # 有落库消息时是空操作，所以这里根本不需要前置判断（非流式路径
+        # `ask()` 一直就是这么调的）。
+        if new_session:
             _drop_session_if_empty(settings, session_id)
 
 

@@ -166,10 +166,14 @@ def token_ok(data_dir: Path, token: str, *, now: float | None = None) -> bool:
         return False
     expires_text, _, signature = token.partition(".")
     try:
+        # .encode 也在 try 里：`int()` 认全角数字（`int("１２３") == 123`），
+        # 于是 `Cookie: mikasa_session=１２３.x` 会通过 int 而在 encode 处抛
+        # UnicodeEncodeError——畸形 Cookie 让口令门 500 而不是 401（2026-09-24 修）。
         expires = int(expires_text)
-    except ValueError:
+        signed = expires_text.encode("ascii")
+    except (ValueError, UnicodeEncodeError):
         return False
-    expected = hmac.new(secret, expires_text.encode("ascii"), hashlib.sha256).hexdigest()
+    expected = hmac.new(secret, signed, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected, signature):
         return False
     return expires > int(now if now is not None else time.time())

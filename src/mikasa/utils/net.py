@@ -22,6 +22,9 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+import urllib.error
+import urllib.request
+from collections.abc import Callable
 from typing import Any
 
 # 各协议的默认端口（解析用；与 papers/download.py 的取值一致）
@@ -69,3 +72,54 @@ def reject_reason(
 def default_port(scheme: str) -> int:
     """协议默认端口（未知协议给 0：调用方应先做协议白名单）。"""
     return _DEFAULT_PORTS.get(scheme, 0)
+
+
+def port_of(parts: Any) -> int:
+    """URL 的端口（缺省走协议默认值）；写错时抛带中文的 ValueError。
+
+    `urlsplit().port` 在端口越界或非数字时抛 ValueError——用户在面板地址栏
+    多敲一位数字（`http://localhost:114344/v1`）就够触发。裸取的两处 guard
+    会把它变成 500，而它们的契约是"恒 200 + ok:false"（2026-09-24 修）。
+    所以取端口一律走这里，由调用方翻成自己那层的错误类型。
+    """
+    try:
+        return parts.port or default_port(parts.scheme)
+    except ValueError as exc:
+        raise ValueError(f"地址里的端口不合法（{exc}）") from exc
+
+
+_MAX_REDIRECTS = 3
+
+
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """重定向逐跳复验 + 跳数上限（重定向是 SSRF 的第二个入口）。
+
+    入口校验只看得到用户给的那个 URL，302 之后去的地方没人看——所以每一跳都要
+    再问一遍调用方自己的策略函数 `validate(url)`（不通过就抛，整条下载中止；
+    返回值不参与判断，所以各家的 `_validate_*` 直接传进来即可）。
+    跳数计数器是**每个 handler 一份**（每次 build_opener 新建）：重试不该吃掉配额。
+
+    两个下载器（论文 PDF / 应用更新）原先各写了一份一字不差的实现，差异只在
+    validate 里，故合并到此（2026-09-24）。**策略本身仍各在各处**——这里只管
+    "每一跳都过一遍它"。
+    """
+
+    def __init__(
+        self, validate: Callable[[str], Any], *, max_redirects: int = _MAX_REDIRECTS
+    ) -> None:
+        super().__init__()
+        self._validate = validate
+        self._max_redirects = max_redirects
+        self._hops = 0
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001 - 覆写 stdlib 签名
+        self._hops += 1
+        if self._hops > self._max_redirects:
+            raise urllib.error.HTTPError(req.full_url, 502, "重定向次数超过上限", headers, fp)
+        self._validate(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def safe_opener(validate: Callable[[str], Any], *, max_redirects: int = _MAX_REDIRECTS) -> Any:
+    """带逐跳复验重定向的 opener（validate 由调用方带上自己的策略）。"""
+    return urllib.request.build_opener(SafeRedirectHandler(validate, max_redirects=max_redirects))

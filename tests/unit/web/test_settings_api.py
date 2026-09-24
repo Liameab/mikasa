@@ -530,3 +530,24 @@ def test_probe_rejects_lan_addresses(client):
     # 回环（本机 Ollama / 假源）必须照常放行——只是探测结果由下游如实给
     ok = c.get("/api/settings/ollama/models?base_url=http://127.0.0.1:9/v1")
     assert ok.status_code in (200, 502), ok.text
+
+
+def test_probe_with_an_illegal_port_is_422_not_500(client):
+    """端口写错（越界/非数字）是用户输入问题：422，不是 500。
+
+    2026-09-24 修：`urlsplit().port` 对 `:114344` 会抛 ValueError，
+    而这几处 guard 裸取端口没接——用户在地址栏多敲一位数字点「测试连接」，
+    拿到的就是"服务器内部错误"；更糟的是错值还能被写进覆盖层，之后每次
+    出图都 500。这几个端点的契约是"恒 200 + ok:false"，500 直接破坏契约。
+    """
+    c, _ = client
+    for bad in (
+        "http://localhost:114344/v1",  # > 65535
+        "http://api.example.com:port/v1",  # 非数字
+    ):
+        resp = c.post(
+            "/api/settings/model/test",
+            json={"backend": "api", "base_url": bad, "model": "m", "api_key": "sk-x"},
+        )
+        assert resp.status_code == 422, f"{bad} 应是 422：{resp.status_code} {resp.text}"
+        assert "端口不合法" in resp.json()["detail"]

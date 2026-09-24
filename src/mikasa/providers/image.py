@@ -34,7 +34,7 @@ from mikasa.errors import ConfigError, ProviderError
 from mikasa.providers.llm import normalize_base_url
 from mikasa.providers.vision import ext_for_mime, sniff_image_mime  # noqa: F401 - ext 供调用方用
 from mikasa.utils.logging import get_logger
-from mikasa.utils.net import reject_reason
+from mikasa.utils.net import port_of, reject_reason
 
 logger = get_logger("providers.image")
 
@@ -95,9 +95,13 @@ def _guard_url(url: str, what: str) -> None:
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise ConfigError(f"{what}不是一个可用的 http(s) 地址：{url}")
+    try:
+        port = port_of(parts)
+    except ValueError as exc:  # 端口写错 → 可照做的配置错误，不是崩
+        raise ConfigError(f"{what}的地址里端口不合法：{url}") from exc
     reason = reject_reason(
         parts.hostname,
-        parts.port or (443 if parts.scheme == "https" else 80),
+        port,
         allow_loopback=True,
         strict_resolution=False,
     )

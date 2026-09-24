@@ -57,6 +57,29 @@ def test_token_roundtrip_expiry_and_tamper(tmp_path):
     assert auth.token_ok(tmp_path, "不是个令牌", now=1030.0) is False
 
 
+@pytest.mark.parametrize(
+    "token",
+    [
+        "１２３.abc",  # 全角数字：int() 认（== 123），但 .encode("ascii") 抛
+        "٣.abc",  # 阿拉伯-印度数字：同上
+        "1_0.abc",  # int() 认下划线分隔符
+        "-1.abc",
+        "0x10.abc",
+    ],
+)
+def test_token_with_non_ascii_digits_is_false_not_500(tmp_path, token):
+    """畸形 Cookie 只能得到 False（→401），绝不能抛。
+
+    2026-09-24 修：`int()` 认全角/阿拉伯-印度数字甚至 `1_0`，但随后的
+    `.encode("ascii")` 会抛 UnicodeEncodeError——而这道门在 `--host 0.0.0.0`
+    下是**未鉴权就能到达**的：同网段任何人发一个
+    `Cookie: mikasa_session=１２３.x` 就能稳定打出 500 + 服务端堆栈日志，
+    本该一律 401。同类问题本仓库早有既定做法（app.py 的 _drop_surrogates）。
+    """
+    auth.set_password(tmp_path, PASSWORD)
+    assert auth.token_ok(tmp_path, token, now=1000.0) is False
+
+
 def test_changing_password_invalidates_old_sessions(tmp_path):
     """换口令 = 换会话密钥 → 旧会话立刻失效（"改密码"该有的语义）。"""
     auth.set_password(tmp_path, PASSWORD)

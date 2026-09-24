@@ -663,6 +663,29 @@ def test_cross_site_write_is_rejected(client):
     assert c.post("/api/eval/runs").status_code != 403  # 无 Origin
 
 
+def test_same_site_handles_ipv6_and_malformed_hosts():
+    """判据两侧都要能解析 IPv6 字面量，且畸形输入一律按跨站（不是 500）。
+
+    2026-09-24 修：Host 侧原先是 `host.split(":")[0]`，对 `[::1]:8000` 切出
+    `[`、strip 后成空串 → 判假 → `serve --host ::1` 或访问 `http://[::1]:8000/`
+    时**所有写请求 403**，整个界面变只读，而提示语只说"请从 Mikasa 自己的页面操作"。
+    另外 Origin 与 Host 都是客户端可控输入，畸形值（`[`）会让 urlsplit 抛
+    ValueError——抛出去就是"任何人一个请求头打 500"。
+    """
+    from mikasa.web.origin_guard import same_site
+
+    assert same_site("http://[::1]:8000", "[::1]:8000")
+    assert same_site("http://[fd00::1]:8000", "[fd00::1]:8000")
+    assert same_site("http://127.0.0.1:8000", "127.0.0.1:8000")
+    # 不同主机（含 v4 vs v6）照旧判不同
+    assert not same_site("http://[::1]:8000", "[::2]:8000")
+    assert not same_site("https://evil.example", "[::1]:8000")
+    # 畸形输入：判假而不是抛（Host 是任意客户端能发的头）
+    assert not same_site("http://[::1", "[::1]:8000")
+    assert not same_site("http://[::1]:8000", "[::1")
+    assert not same_site("http://[::1]:8000", "[:")
+
+
 def test_cross_site_read_is_allowed(client):
     """只拦写：GET 带跨站 Origin 不拒（读端点本来也没有副作用）。"""
     c, _ = client

@@ -289,8 +289,18 @@ def import_paper(
     # （2026-09-20 审查实测）。先换斜杠再净化还有个副作用是堵住同一个点的路径
     # 穿越：`..` 也在那个 id 正则的允许集里（`sanitize_filename` 只取 basename，
     # 不先换斜杠的话 `cs/0701001` 会把 `arxiv ` 前缀整段丢掉）。
-    safe_title = sanitize_filename(result.title[:_TITLE_CAP] or "(无标题)")
-    safe_id = sanitize_filename(f"{result.source} {result.id}".replace("/", "-").replace("\\", "-"))
+    # 净化可能抛 ValueError——`or "(无标题)"` 只挡空串，挡不住"全是保留字符"的
+    # 脏标题（上游把标题写成 `???` / `...` / 纯空白时净化后为空）。不接就是
+    # 一条脏元数据换一个 500，而这是用户输入层的问题（2026-09-24 修）。
+    try:
+        safe_title = sanitize_filename(result.title[:_TITLE_CAP] or "(无标题)")
+        safe_id = sanitize_filename(
+            f"{result.source} {result.id}".replace("/", "-").replace("\\", "-")
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"这篇论文的标题无法用作文件名，请改用「打开」跳转原页：{exc}"
+        ) from exc
     safe_name = f"{safe_title} ({safe_id}).pdf"
 
     tmp_path = settings.data_dir / "web-tmp" / uuid.uuid4().hex / safe_name

@@ -22,6 +22,7 @@ import os
 import re
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -37,7 +38,6 @@ from mikasa.config.settings import (
     format_validation_error,
     load_settings,
     write_api_key,
-    write_llm_overlay,
     write_section_overlay,
 )
 from mikasa.errors import ProviderError, ZhiwenError, strip_paths
@@ -45,7 +45,7 @@ from mikasa.providers.image import OpenAICompatImage
 from mikasa.providers.llm import OpenAICompatLLM
 from mikasa.providers.ollama import OllamaNativeLLM, fetch_ollama_tags, pull_model
 from mikasa.providers.vision import OpenAICompatVision
-from mikasa.utils.net import default_port, reject_reason
+from mikasa.utils.net import port_of, reject_reason
 from mikasa.web.deps import get_services, get_settings
 from mikasa.web.schemas import (
     ImageSettingsIn,
@@ -138,9 +138,13 @@ def _guard_base_url(base_url: str) -> None:
     parts = urlsplit(base_url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise HTTPException(status_code=422, detail="API 地址必须是 http(s)://… 的完整地址")
+    try:
+        port = port_of(parts)
+    except ValueError as exc:  # 端口写错是用户输入问题，不是服务器故障
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     reason = reject_reason(
         parts.hostname,
-        parts.port or default_port(parts.scheme),
+        port,
         allow_loopback=True,
         # 解析不了不算拒绝：探测端点"恒 200 + ok:false"的契约要保住，
         # 让用户看到"连不上"而不是参数错误（见 utils/net.py 的说明）
@@ -196,21 +200,128 @@ def _validated_llm_fields(body: ModelSettingsIn) -> dict[str, Any]:
     return fields
 
 
-def _apply_api_key(env_name: str, body: ModelSettingsIn) -> None:
-    """密钥三段语义落盘 + 同步进程环境（api_key=None 时整段跳过）。
+def _apply_api_key(env_name: str, value: str | None) -> None:
+    """密钥三段语义落盘 + 同步进程环境（value=None 时整段跳过）。
 
     只动**本次提交的这一个变量**：换供应商也绝不顺手清旧变量——api 档的
     SILICONFLOW_API_KEY 被 embedding/reranker/judge 共用，误清会连带打挂
     检索侧，且表现为"检索结果变差"这种最难联想到密钥的静默降级。
     """
-    if body.api_key is None or not env_name:
+    if value is None or not env_name:
         return
-    if body.api_key == "":
+    if value == "":
         clear_api_key(env_name)
         os.environ.pop(env_name, None)  # 进程内的旧值也要摘：否则"清除"只对新进程生效
         return
-    write_api_key(env_name, body.api_key)
-    os.environ[env_name] = body.api_key  # 立即可用（load_dotenv 不覆盖已存在变量）
+    write_api_key(env_name, value)
+    os.environ[env_name] = value  # 立即可用（load_dotenv 不覆盖已存在变量）
+
+
+def _apply_section_key(env_name: str, value: str | None) -> None:
+    """视觉 / 图像段的密钥：**只写不删**（清除是模型段的职责）。
+
+    这两段的 `api_key` 没有空串=清除的约定（见各自的 SettingsIn），所以
+    不能复用模型段那套三段语义——"没填"与"要清掉"在两段里是两件事。
+    两段原先各写了一份一字不差的实现，2026-09-24 合并。
+    """
+    if value is None or not env_name:
+        return
+    write_api_key(env_name, value)
+    os.environ[env_name] = value  # 立即可用（load_dotenv 不覆盖已存在变量）
+
+
+def _reject_when_config_locked(settings: Settings) -> None:
+    """配置来自显式文件时拒绝面板保存。
+
+    覆盖层只对"基底是 profile 文件"的启动方式生效（见 load_settings），
+    底座是 `--config` / `config.yaml` 时写下去没人读——所以宁可明确拒绝，
+    也不静默写一份不生效的覆盖层（用户会以为保存成功了）。
+    """
+    if settings.config_path is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"当前配置来自显式配置文件（{settings.config_path}）："
+                "设置面板的改动会被它覆盖。请直接编辑该文件，或改用默认 profile 启动。"
+            ),
+        )
+
+
+def _save_section(
+    section: str,
+    *,
+    fields: dict[str, Any],
+    apply_key: Callable[[str], None],
+    rebuild: Callable[[AppServices], None],
+    request: Request,
+    settings: Settings,
+) -> Settings:
+    """三段共用的"保存并热生效"骨架（模型 / 视觉 / 图像）。
+
+    段与段之间只有两处真差异，由调用方以闭包传入：**密钥怎么落**（模型段支持
+    "空串=清除"，另两段只写不删）与**重建哪个服务**。其余（配置锁 → 写覆盖层 →
+    重载 → 换服务 → 重建 → 换 app.state）一字不差，原先抄了三遍（2026-09-24 合并）。
+
+    顺序敏感：`rebuild_*` 读的是 `services.settings`，所以必须先换 settings 再重建。
+    """
+    _reject_when_config_locked(settings)
+    with _APPLY_LOCK:
+        write_section_overlay(section, fields)
+        apply_key(fields.get("api_key_env") or "")
+        new_settings = load_settings(settings.profile, data_dir=settings.data_dir)
+        services = get_services(request)
+        services.settings = new_settings
+        rebuild(services)
+        request.app.state.settings = new_settings
+    return new_settings
+
+
+def _probe_inputs(body: Any, what: str) -> tuple[str, str]:
+    """探测端点的公共入参检查：模型名 / 地址非空 + 出网闸门。
+
+    `what` 只影响 422 文案（"" / "视觉" / "出图"）。SSRF 闸门三个端点都要过：
+    它们任何网页都能触发（见 `_guard_base_url` 的说明）。
+    """
+    model = body.model.strip()
+    base_url = body.base_url.strip()
+    if not model:
+        raise HTTPException(status_code=422, detail=f"{what}模型名不能为空")
+    if not base_url:
+        raise HTTPException(status_code=422, detail="API 地址（base_url）不能为空")
+    _guard_base_url(base_url)
+    return model, base_url
+
+
+def _probe_key(body: Any, fallback: str | None = None) -> str | None:
+    """探测用的密钥：请求体 > 该槽位的环境变量 > 调用方给的兜底（当前生效配置）。"""
+    if body.api_key:
+        return body.api_key
+    env_name = body.api_key_env.strip()
+    if env_name:
+        return os.environ.get(env_name) or None
+    return fallback
+
+
+def _run_probe(model: str, key: str | None, probe: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    """探测端点的公共骨架：临时密钥槽 → 跑 probe() → **恒 200** 的结果体。
+
+    异常在**这里**统一翻译，不让它们穿到异常处理器："连不上"是预期内的探测
+    结果、不是服务端错误（前端一个 pill 直接渲染）。业务错误（ZhiwenError）
+    回显脱敏文案，其余异常按类型名回显——探测端点吞掉细节就等于"点了没反应"。
+
+    `_PROBE_LOCK` 是必需的：三段共用同一个临时变量名，并发时一个请求的 finally
+    会摘掉另一个正在用的值。
+    """
+    with _PROBE_LOCK:
+        os.environ[_TEST_KEY_ENV] = key or ""
+        try:
+            return probe()
+        except ZhiwenError as exc:
+            return {"ok": False, "model": model, "error": strip_paths(str(exc))}
+        except Exception as exc:  # noqa: BLE001 - 探测端点：任何异常都是"连不通"的一种
+            return {"ok": False, "model": model, "error": f"{type(exc).__name__}: {exc}"}
+        finally:
+            os.environ.pop(_TEST_KEY_ENV, None)
 
 
 @router.get("/api/settings/model")
@@ -226,25 +337,14 @@ def save_model_settings(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """保存模型配置并热生效（免重启，见模块头说明）。"""
-    if settings.config_path is not None:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"当前配置来自显式配置文件（{settings.config_path}）："
-                "设置面板的改动会被它覆盖。请直接编辑该文件，或改用默认 profile 启动。"
-            ),
-        )
-
-    fields = _validated_llm_fields(body)
-    with _APPLY_LOCK:
-        write_llm_overlay(fields)
-        _apply_api_key(fields["api_key_env"], body)
-        new_settings = load_settings(settings.profile, data_dir=settings.data_dir)
-        services = get_services(request)
-        # 顺序敏感：rebuild_ask 用 self.settings 重建，必须先换 settings
-        services.settings = new_settings
-        services.rebuild_ask()
-        request.app.state.settings = new_settings
+    new_settings = _save_section(
+        "llm",
+        fields=_validated_llm_fields(body),
+        apply_key=lambda env: _apply_api_key(env, body.api_key),
+        rebuild=lambda services: services.rebuild_ask(),
+        request=request,
+        settings=settings,
+    )
     return _model_payload(new_settings)
 
 
@@ -259,67 +359,48 @@ def test_model_settings(
     响应恒为 200（ok 布尔在体内）——"连不上"是预期内的探测结果而非服务端
     错误，前端一个 pill 直接渲染，不用去解错误壳。
     """
-    model = body.model.strip()
-    base_url = body.base_url.strip()
-    if not model:
-        raise HTTPException(status_code=422, detail="模型名不能为空")
-    if not base_url:
-        raise HTTPException(status_code=422, detail="API 地址（base_url）不能为空")
-    _guard_base_url(base_url)  # SSRF：内网段拒绝（见 helper docstring）
-
-    env_name = body.api_key_env.strip()
-    if body.api_key:
-        key: str | None = body.api_key
-    elif env_name:
-        key = os.environ.get(env_name) or None
-    else:
-        key = settings.llm.api_key if body.backend == settings.llm.backend else None
-
+    model, base_url = _probe_inputs(body, "")
+    key = _probe_key(
+        body,
+        # 兜底：用户没改 backend 时用当前生效配置里那把钥匙
+        settings.llm.api_key if body.backend == settings.llm.backend else None,
+    )
     if body.backend == "api" and not key:
         # 预检：不构造 LLMConfig 就给结果，避免临时变量名泄进 ConfigError 文案
         return {"ok": False, "model": model, "error": "未填写 API 密钥（本机 Ollama 不需要密钥）"}
 
-    with _PROBE_LOCK:
-        os.environ[_TEST_KEY_ENV] = key or ""
-        try:
-            cfg = LLMConfig(
-                backend=body.backend,
-                base_url=base_url,
-                api_key_env=_TEST_KEY_ENV,
-                model=model,
-                temperature=0.0,
-                max_tokens=8,  # 探测只要"有回应"，不求内容
-                timeout_seconds=20.0,
-                # 带上用户当前的两个本机旋钮：否则本机思考型模型会把 20 秒预算
-                # 全花在推理上（实测 qwen3:8b 光推理就 14 秒），探测必然超时
-                think=body.think,
-                num_ctx=body.num_ctx,
-            )
-            # 走**与正式问答同一条通道**：local 用 Ollama 原生接口（思考/上下文
-            # 两个参数只有它认），api 用 OpenAI 兼容客户端。探测的意义正是"这条路
-            # 通不通"，选错通道会给出与真实使用不符的结论。
-            llm = (
-                OllamaNativeLLM(cfg)
-                if body.backend == "local"
-                else OpenAICompatLLM(cfg, max_retries=0)  # 硬上限：一次 20s，不排队重试
-            )
-            started = time.monotonic()
-            result = llm.complete(
-                [{"role": "user", "content": "你好"}], temperature=0.0, max_tokens=8
-            )
-            latency_ms = int((time.monotonic() - started) * 1000)
-            return {
-                "ok": True,
-                "model": model,
-                "latency_ms": latency_ms,
-                "reply": result.text.strip()[:60],
-            }
-        except ZhiwenError as exc:
-            return {"ok": False, "model": model, "error": strip_paths(str(exc))}
-        except Exception as exc:  # noqa: BLE001 - 探测端点：任何异常都是"连不通"的一种
-            return {"ok": False, "model": model, "error": f"{type(exc).__name__}: {exc}"}
-        finally:
-            os.environ.pop(_TEST_KEY_ENV, None)
+    def probe() -> dict[str, Any]:
+        cfg = LLMConfig(
+            backend=body.backend,
+            base_url=base_url,
+            api_key_env=_TEST_KEY_ENV,
+            model=model,
+            temperature=0.0,
+            max_tokens=8,  # 探测只要"有回应"，不求内容
+            timeout_seconds=20.0,
+            # 带上用户当前的两个本机旋钮：否则本机思考型模型会把 20 秒预算
+            # 全花在推理上（实测 qwen3:8b 光推理就 14 秒），探测必然超时
+            think=body.think,
+            num_ctx=body.num_ctx,
+        )
+        # 走**与正式问答同一条通道**：local 用 Ollama 原生接口（思考/上下文
+        # 两个参数只有它认），api 用 OpenAI 兼容客户端。探测的意义正是"这条路
+        # 通不通"，选错通道会给出与真实使用不符的结论。
+        llm = (
+            OllamaNativeLLM(cfg)
+            if body.backend == "local"
+            else OpenAICompatLLM(cfg, max_retries=0)  # 硬上限：一次 20s，不排队重试
+        )
+        started = time.monotonic()
+        result = llm.complete([{"role": "user", "content": "你好"}], temperature=0.0, max_tokens=8)
+        return {
+            "ok": True,
+            "model": model,
+            "latency_ms": int((time.monotonic() - started) * 1000),
+            "reply": result.text.strip()[:60],
+        }
+
+    return _run_probe(model, key, probe)
 
 
 @router.get("/api/settings/ollama/models")
@@ -406,14 +487,6 @@ def _validated_vision_fields(body: VisionSettingsIn) -> dict[str, Any]:
     return fields
 
 
-def _apply_vision_key(env_name: str, body: VisionSettingsIn) -> None:
-    """视觉段的密钥**只写不删**（清除是模型段的职责，见 VisionSettingsIn）。"""
-    if body.api_key is None or not env_name:
-        return
-    write_api_key(env_name, body.api_key)
-    os.environ[env_name] = body.api_key  # 立即可用（load_dotenv 不覆盖已存在变量）
-
-
 @router.get("/api/settings/vision")
 def get_vision_settings(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
     """当前视觉模型配置（密钥永不下发，只回 has_api_key）。"""
@@ -427,24 +500,14 @@ def save_vision_settings(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """保存视觉配置并热生效（免重启；顺序与模型段同款）。"""
-    if settings.config_path is not None:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"当前配置来自显式配置文件（{settings.config_path}）："
-                "设置面板的改动会被它覆盖。请直接编辑该文件，或改用默认 profile 启动。"
-            ),
-        )
-    fields = _validated_vision_fields(body)
-    with _APPLY_LOCK:
-        write_section_overlay("vision", fields)
-        _apply_vision_key(fields.get("api_key_env", ""), body)
-        new_settings = load_settings(settings.profile, data_dir=settings.data_dir)
-        services = get_services(request)
-        # 顺序敏感（同模型段）：rebuild_vision 读 self.settings，必须先换它
-        services.settings = new_settings
-        services.rebuild_vision()
-        request.app.state.settings = new_settings
+    new_settings = _save_section(
+        "vision",
+        fields=_validated_vision_fields(body),
+        apply_key=lambda env: _apply_section_key(env, body.api_key),
+        rebuild=lambda services: services.rebuild_vision(),
+        request=request,
+        settings=settings,
+    )
     return _vision_payload(new_settings)
 
 
@@ -480,50 +543,31 @@ def _probe_png(size: int = 64) -> bytes:
 @router.post("/api/settings/vision/test")
 def test_vision_settings(body: VisionTestIn) -> dict[str, Any]:
     """发一张真图片验证"这组参数能不能识图"。响应恒 200（ok 在体内）。"""
-    model = body.model.strip()
-    base_url = body.base_url.strip()
-    if not model:
-        raise HTTPException(status_code=422, detail="视觉模型名不能为空")
-    if not base_url:
-        raise HTTPException(status_code=422, detail="API 地址（base_url）不能为空")
-    _guard_base_url(base_url)  # SSRF：内网段拒绝（见 helper docstring）
-    env_name = body.api_key_env.strip()
-    if body.api_key:
-        key: str | None = body.api_key
-    elif env_name:
-        key = os.environ.get(env_name) or None
-    else:
-        key = None
+    model, base_url = _probe_inputs(body, "视觉")
+    key = _probe_key(body)
     if body.backend == "api" and not key:
         return {"ok": False, "model": model, "error": "未填写 API 密钥（本机 Ollama 不需要密钥）"}
 
-    with _PROBE_LOCK:
-        os.environ[_TEST_KEY_ENV] = key or ""
-        try:
-            cfg = VisionConfig(
-                backend=body.backend,
-                base_url=base_url,
-                api_key_env=_TEST_KEY_ENV,
-                model=model,
-                max_tokens=32,  # 探测只要"有回应"，不求内容
-                timeout_seconds=30.0,
-            )
-            vision = OpenAICompatVision(cfg, max_retries=0)  # 硬上限：一次 30s，不排队重试
-            started = time.monotonic()
-            result = vision.describe(_probe_png(), mime="image/png")
-            latency_ms = int((time.monotonic() - started) * 1000)
-            return {
-                "ok": True,
-                "model": model,
-                "latency_ms": latency_ms,
-                "reply": result.text.strip()[:60],
-            }
-        except ZhiwenError as exc:
-            return {"ok": False, "model": model, "error": strip_paths(str(exc))}
-        except Exception as exc:  # noqa: BLE001 - 探测端点：任何异常都是"连不通"的一种
-            return {"ok": False, "model": model, "error": f"{type(exc).__name__}: {exc}"}
-        finally:
-            os.environ.pop(_TEST_KEY_ENV, None)
+    def probe() -> dict[str, Any]:
+        cfg = VisionConfig(
+            backend=body.backend,
+            base_url=base_url,
+            api_key_env=_TEST_KEY_ENV,
+            model=model,
+            max_tokens=32,  # 探测只要"有回应"，不求内容
+            timeout_seconds=30.0,
+        )
+        vision = OpenAICompatVision(cfg, max_retries=0)  # 硬上限：一次 30s，不排队重试
+        started = time.monotonic()
+        result = vision.describe(_probe_png(), mime="image/png")
+        return {
+            "ok": True,
+            "model": model,
+            "latency_ms": int((time.monotonic() - started) * 1000),
+            "reply": result.text.strip()[:60],
+        }
+
+    return _run_probe(model, key, probe)
 
 
 # ---------------------------------------------------------------------------
@@ -601,14 +645,6 @@ def _validated_image_fields(body: ImageSettingsIn) -> dict[str, Any]:
     return fields
 
 
-def _apply_image_key(env_name: str, body: ImageSettingsIn) -> None:
-    """图像段的密钥**只写不删**（清除是模型段的职责，见 ImageSettingsIn）。"""
-    if body.api_key is None or not env_name:
-        return
-    write_api_key(env_name, body.api_key)
-    os.environ[env_name] = body.api_key  # 立即可用（load_dotenv 不覆盖已存在变量）
-
-
 @router.get("/api/settings/image")
 def get_image_settings(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
     """当前图像生成配置（密钥永不下发，只回 has_api_key）。"""
@@ -622,24 +658,14 @@ def save_image_settings(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """保存出图配置并热生效（免重启；顺序与模型段同款）。"""
-    if settings.config_path is not None:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"当前配置来自显式配置文件（{settings.config_path}）："
-                "设置面板的改动会被它覆盖。请直接编辑该文件，或改用默认 profile 启动。"
-            ),
-        )
-    fields = _validated_image_fields(body)
-    with _APPLY_LOCK:
-        write_section_overlay("image", fields)
-        _apply_image_key(fields.get("api_key_env", ""), body)
-        new_settings = load_settings(settings.profile, data_dir=settings.data_dir)
-        services = get_services(request)
-        # 顺序敏感（同模型段）：rebuild_image 读 self.settings，必须先换它
-        services.settings = new_settings
-        services.rebuild_image()
-        request.app.state.settings = new_settings
+    new_settings = _save_section(
+        "image",
+        fields=_validated_image_fields(body),
+        apply_key=lambda env: _apply_section_key(env, body.api_key),
+        rebuild=lambda services: services.rebuild_image(),
+        request=request,
+        settings=settings,
+    )
     return _image_payload(new_settings)
 
 
@@ -649,60 +675,39 @@ def test_image_settings(body: ImageTestIn) -> dict[str, Any]:
 
     响应恒 200（ok 在体内），与其余探测端点同一契约。
     """
-    model = body.model.strip()
-    base_url = body.base_url.strip()
-    if not model:
-        raise HTTPException(status_code=422, detail="出图模型名不能为空")
-    if not base_url:
-        raise HTTPException(status_code=422, detail="API 地址（base_url）不能为空")
-    _guard_base_url(base_url)  # SSRF：内网段拒绝（见 helper docstring）
-    env_name = body.api_key_env.strip()
-    if body.api_key:
-        key: str | None = body.api_key
-    elif env_name:
-        key = os.environ.get(env_name) or None
-    else:
-        key = None
+    model, base_url = _probe_inputs(body, "出图")
+    key = _probe_key(body)
     if not key:
         return {"ok": False, "model": model, "error": "未填写 API 密钥"}
 
-    with _PROBE_LOCK:
-        os.environ[_TEST_KEY_ENV] = key
-        try:
-            cfg = ImageConfig(
-                backend="api",
-                base_url=base_url,
-                api_key_env=_TEST_KEY_ENV,
-                model=model,
-                timeout_seconds=20.0,
-            )
-            started = time.monotonic()
-            names = OpenAICompatImage(cfg).list_models()
-            latency_ms = int((time.monotonic() - started) * 1000)
-            if not names:
-                return {
-                    "ok": True,
-                    "model": model,
-                    "latency_ms": latency_ms,
-                    "error": "地址与密钥可用；该服务没有 /models 列表，"
-                    "模型名是否有效要等真出图才知道",
-                }
-            present = model in names
+    def probe() -> dict[str, Any]:
+        cfg = ImageConfig(
+            backend="api",
+            base_url=base_url,
+            api_key_env=_TEST_KEY_ENV,
+            model=model,
+            timeout_seconds=20.0,
+        )
+        started = time.monotonic()
+        names = OpenAICompatImage(cfg).list_models()
+        latency_ms = int((time.monotonic() - started) * 1000)
+        if not names:
             return {
                 "ok": True,
                 "model": model,
                 "latency_ms": latency_ms,
-                "model_available": present,
-                "error": ""
-                if present
-                else f"连通正常，但模型列表里没有「{model}」（可能名字写错）",
+                "error": "地址与密钥可用；该服务没有 /models 列表，模型名是否有效要等真出图才知道",
             }
-        except ZhiwenError as exc:
-            return {"ok": False, "model": model, "error": strip_paths(str(exc))}
-        except Exception as exc:  # noqa: BLE001 - 探测端点：任何异常都是"连不通"的一种
-            return {"ok": False, "model": model, "error": f"{type(exc).__name__}: {exc}"}
-        finally:
-            os.environ.pop(_TEST_KEY_ENV, None)
+        present = model in names
+        return {
+            "ok": True,
+            "model": model,
+            "latency_ms": latency_ms,
+            "model_available": present,
+            "error": "" if present else f"连通正常，但模型列表里没有「{model}」（可能名字写错）",
+        }
+
+    return _run_probe(model, key, probe)
 
 
 # ---------------------------------------------------------------------------

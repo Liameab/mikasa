@@ -764,3 +764,96 @@ negative was tried**: rolling the frontend back to the old logic turns the E2E r
 selected" are two different questions**. Any field in a panel that echoes state should be asked
 "which copy does this state describe" — rendering the selection state from the effective state
 produces exactly the symptom of "the user thinks their data is gone".
+
+---
+
+## 11. The 2026-09-24 full review: what was fixed and why it is worth recording
+
+> Context: one round of "bring the docs up to date and re-check the code" (four documents —
+> README / architecture / evaluation / design system — checked against reality, plus two parallel
+> code-review passes). The stale documentation items are recorded in the documents themselves;
+> this section keeps only the **code-side** fixes and their lessons. Every one of them had a
+> **real trigger path** found before anything was touched.
+
+### DOAJ year filter: filling in only the "to" date inverts the range
+
+**Symptom** (a silent wrong result, the most dangerous kind): the user fills in only the end date
+on the papers page → DOAJ returns papers **after** that year, exactly the complement of what was
+asked for — and because `caps.year=True` there is no degradation note, so it all looks normal.
+
+**Truth**: `_year_clause` decided the bounds by **list position** rather than by **meaning** —
+`bounds[0]` became the lower bound, so with only one entry that entry was the *end* year and the
+upper bound defaulted to `2100`. The other three sources default per side (arxiv `1900/2100`,
+core two independent clauses, openalex two independent parameters); **only this one packed both
+sides into a single range**.
+
+**Fix**: take the defaults per side the way arxiv does, and emit no clause when neither side is
+given.
+
+**Guard**: `test_year_bounds_are_per_side` (one case per way of filling the form) plus a "nothing
+filled in means no clause" case.
+
+**Lesson**: **"how many were filled in" and "which field" are two different questions.** A field
+interpreted positionally happens to be right only when both are present — and the test, of
+course, only covered the case where both were present.
+
+### The client disconnects after the meta frame → an empty conversation stays in the tree
+
+**Symptom**: the user closes the tab or reloads while "the answer is visibly streaming", and a
+blank conversation appears in the left-hand tree. That is exactly what the 2026-09-11 fix set out
+to eliminate; it just missed the interruption path.
+
+**Truth**: the guard read `if new_session and not produced`, but the **meta frame is emitted as
+soon as retrieval succeeds** (not after the answer is generated), while persistence happens just
+before the done frame — so "events have been produced but not a single message is stored" is a
+real window, and it is precisely the window in which the user sees content and interrupts.
+
+**Fix**: drop the `produced` precondition and call `_drop_session_if_empty` **unconditionally** —
+it checks the message table itself and is a no-op when something was stored (the non-streaming
+`ask()` path has always called it that way).
+
+**Guard**: two tests, **and the negative was tried**: reverting the fix turns
+`test_disconnect_after_meta_leaves_no_empty_session` red immediately, and the counter-case ("a run
+that completes must keep its conversation") lives in the same file.
+
+**Lesson**: **a guard's criterion should be the final fact, not an intermediate signal.** "Events
+were produced" is process; "is there a stored message" is the question the guard means to ask —
+and the one correct criterion is usually already implemented inside the function being called.
+
+### An IPv6 literal makes the cross-site gate say "different" → the whole UI goes read-only
+
+**Symptom**: after `mikasa serve --host ::1` (loopback, so no password is required), opening
+`http://[::1]:8000/` makes **every write request 403** — upload, ask, delete and settings-save all
+dead, while the message only says "please use Mikasa's own page". Home broadband widely has an
+IPv6 prefix, so LAN use hits this too.
+
+**Truth**: the Origin side used `urlsplit().hostname` (which strips the brackets correctly), but
+the Host side used `split(":")[0]` — for `[::1]:8000` that yields `[`, which strips to the empty
+string → judged different. **The same question was answered with two different parsers.**
+
+**Fix**: hand the Host side to `urlsplit` as well (prefixing `//` so it parses as a netloc), and
+wrap both sides in try/except for `ValueError` — Origin and Host are both **client-controlled
+input**, and letting a malformed value raise is "anyone can 500 us with one request header".
+
+**Guard**: `test_same_site_handles_ipv6_and_malformed_hosts` (positive, negative and malformed
+cases).
+
+**Lesson**: **if something can be parsed, do not slice the string.** Every "get the hostname out
+of this URL" site should go through the same parser, or the differences in IPv6 / ports / brackets
+will erupt in whichever branch forgot.
+
+### Three holes where user input could produce a 500
+
+This batch also contained three instances of the same shape, **all rooted in "taking a property or
+calling a function that raises, with nothing catching it"**:
+
+| Site | Trigger | Fix |
+| --- | --- | --- |
+| `_guard_base_url` / `_guard_url` | one extra digit in the address bar (`:114344`) → `urlsplit().port` raises ValueError → 500, in endpoints whose contract is "always 200 + ok:false" | new `port_of()` in `utils/net.py` translates it into a Chinese ValueError; each guard converts that into its own layer's error type |
+| `auth.token_ok` | `Cookie: mikasa_session=１２３.x` → `int()` accepts full-width digits while `encode("ascii")` raises → a 500 reachable **without authenticating** | move the `.encode` into the same try (with `--host 0.0.0.0` this gate is reachable from the network) |
+| Paper import | the upstream returns a title made entirely of `?`/`.`/whitespace → `sanitize_filename` raises → 500 | catch ValueError → 422 with an actionable message (the upload and note paths already had fallbacks; only this one was missed) |
+
+**Lesson**: **"which properties and functions raise" deserves a checklist.** `urlsplit().port`,
+`int()` paired with `encode("ascii")`, and filename sanitizing are all of the form "never raises on
+normal input, always raises on dirty input" — and dirty input comes from users and upstreams. Fix
+the **root** (`port_of`), not one try per endpoint.

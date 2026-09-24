@@ -31,6 +31,11 @@ _EMPTY_ANSWER_HINT = (
     "到右上角 ⚙ →「模型」把「思考模式」关掉，或把 max_tokens 调大。"
 )
 
+# 模型拉取的**读**超时（秒）：只管"多久没收到下一帧"，不管总时长。
+# 180 秒是留足了余量的值——单层 sha256 校验大文件时那一帧之间的间隔最长；
+# 真有更慢的机器/更慢的链路，调大这个常量即可（唯一的旋钮）。
+_PULL_READ_TIMEOUT = 180.0
+
 
 def ollama_api_root(base_url: str) -> str:
     """OpenAI 兼容 base_url（…/v1）→ Ollama 原生 API 根（…/api）。
@@ -50,10 +55,6 @@ def fetch_ollama_tags(base_url: str) -> list[str]:
     IPv6 回环（localhost→::1 连不上），给 OLLAMA_BASE_URL 逃生口指引
     （http://127.0.0.1:11434/v1）。3s 超时：本地服务探测不等网络。
     """
-    import json
-    import urllib.error
-    import urllib.request
-
     url = f"{ollama_api_root(base_url)}/tags"
     try:
         with urllib.request.urlopen(url, timeout=3) as resp:
@@ -105,7 +106,12 @@ def pull_model(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request) as resp:  # 拉 5GB：不设读超时
+        # 读超时的作用是**兜住挂死的链路**，不是限制总时长：一拉就是 5GB、
+        # 几十分钟很正常，但 NDJSON 是持续吐进度的流，正常永远不会有这么长的
+        # 静默期（最大的一段是单层 sha256 校验，仍会先发一帧 status）。
+        # 不设的话，对端"既不吐数据也不 reset"时这个线程会永久阻塞在里面，
+        # 槽永远是 running、POST 永远 409，用户只能重启应用（2026-09-24 修）。
+        with urllib.request.urlopen(request, timeout=_PULL_READ_TIMEOUT) as resp:
             for raw in resp:
                 if callable(is_cancelled) and is_cancelled():
                     resp.close()
@@ -132,6 +138,11 @@ def pull_model(
         if exc.code == 404:
             raise ProviderError(f"Ollama 里没有这个模型：{model}（{detail}）") from exc
         raise ProviderError(f"拉取模型失败（HTTP {exc.code}）：{detail}") from exc
+    except TimeoutError as exc:  # 读超时（socket.timeout 自 3.10 起就是它）
+        raise ProviderError(
+            f"拉取模型超时：连续 {_PULL_READ_TIMEOUT:.0f} 秒没有收到任何进度。"
+            "已下载的分层留在 Ollama 缓存里，再点一次「拉取」会接着下。"
+        ) from exc
     except urllib.error.URLError as exc:
         raise ProviderError(f"连不上 Ollama（{url}）：{exc.reason}") from exc
 

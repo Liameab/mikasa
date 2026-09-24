@@ -38,8 +38,18 @@ def same_site(origin: str, host: str) -> bool:
     端口不比：同一台机器上不同端口互发请求在本机服务里没有安全含义，
     而 Host 与 Origin 的端口写法（省略默认端口等）容易不一致。
     """
-    origin_host = (urlsplit(origin).hostname or "").strip("[]").lower()
-    req_host = host.split(":")[0].strip("[]").lower()
+    # 两侧都交给 urlsplit 拆，且**解析失败一律按跨站处理**：Origin 与 Host 都是
+    # 客户端可控输入，畸形值（`Origin: http://[::1`、`Host: [`）会让 urlsplit 抛
+    # ValueError——抛出去就成了"任何人一个请求头打 500"。
+    #
+    # Host 侧为什么要解析而不是 `split(":")[0]`：对 IPv6 字面量 `[::1]:8000`
+    # 会切出 `[`，strip 后成空串 → 判假 → `serve --host ::1` 或访问
+    # `http://[::1]:8000/` 时**所有写请求 403**，整个界面变只读（2026-09-24 修）。
+    try:
+        origin_host = (urlsplit(origin).hostname or "").lower()
+        req_host = (urlsplit(f"//{host}").hostname or "").lower()
+    except ValueError:
+        return False
     if not origin_host or not req_host:
         return False
     return origin_host == req_host

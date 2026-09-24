@@ -34,14 +34,10 @@ from __future__ import annotations
 import json
 import os
 import re
-import threading
-import time
-import urllib.error
 import urllib.parse
-import urllib.request
 
 from mikasa.papers.errors import PaperError
-from mikasa.papers.http import USER_AGENT, with_retry
+from mikasa.papers.http import ThrottledClient
 from mikasa.papers.sources import PaperFilters, PaperResult, SourceCaps
 from mikasa.utils.text import strip_markup
 
@@ -59,38 +55,21 @@ _MAX_PER_PAGE = 100
 # 深翻页上限：官方没写明，按与 OpenAlex 同量级保守取（见 openalex._MAX_OFFSET）
 _MAX_OFFSET = 10_000
 
-_throttle = threading.Lock()
-_last_ok = 0.0
-
 
 def _base_url() -> str:
     """检索 API 根（调用时读环境变量：E2E 可整体换成本地假源）。"""
     return os.environ.get("MIKASA_PAPERS_DOAJ_BASE", "https://doaj.org/api/search/articles")
 
 
-def _read(url: str, timeout: float) -> bytes:
-    """裸 HTTP 调用（重试包裹的那一层）。"""
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+# HTTP 纪律在 papers/http.py（三源共用）。
+_client = ThrottledClient(
+    "DOAJ", _DOAJ_MIN_INTERVAL, busy_hint="DOAJ 请求过于频繁（HTTP 429），请稍等片刻再试"
+)
 
 
 def _http_get(url: str, timeout: float) -> bytes:
     """唯一网络缝：GET 并读全部字节；发起前按自律间隔等够，失败重试一次。"""
-    global _last_ok
-    with _throttle:
-        wait = _last_ok + _DOAJ_MIN_INTERVAL - time.monotonic()
-        if wait > 0:
-            time.sleep(wait)
-        _last_ok = time.monotonic()
-    try:
-        return with_retry(lambda: _read(url, timeout))
-    except urllib.error.HTTPError as exc:
-        if exc.code == 429:
-            raise PaperError("DOAJ 请求过于频繁（HTTP 429），请稍等片刻再试") from exc
-        raise PaperError(f"DOAJ 服务返回错误（HTTP {exc.code}），请稍后重试") from exc
-    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
-        raise PaperError("无法连接 DOAJ（网络不可达或超时），请稍后重试") from exc
+    return _client.get(url, timeout)
 
 
 def _load_json(data: bytes) -> dict:
@@ -189,18 +168,20 @@ def _normalize(row: dict) -> PaperResult:
 
 
 def _year_clause(filters: PaperFilters | None) -> str:
-    """年份区间拼进查询串（DOAJ 的 filter 参数不存在，语法在 query 里）。"""
+    """年份区间拼进查询串（DOAJ 的 filter 参数不存在，语法在 query 里）。
+
+    **逐边取默认值，不按"填了几个"定上下界**（2026-09-24 修）：这里原先按
+    列表位置取界——只填「至」时那唯一的年份成了下界、上界兜底 2100，于是
+    "检索 2020 年以前"返回的是 2020 年**以后**的（正好是补集，且 `caps.year=True`
+    不产生降级提示，静默错）。另外三个来源都是逐边默认（arxiv 1900/2100、
+    core 两条独立子句、openalex 两个独立参数），这里对齐它们。
+    """
     if filters is None:
         return ""
-    bounds = []
-    if filters.date_from is not None:
-        bounds.append(filters.date_from[:4])
-    if filters.date_to is not None:
-        bounds.append(filters.date_to[:4])
-    if not bounds:
-        return ""
-    low = bounds[0]
-    high = bounds[1] if len(bounds) > 1 else "2100"
+    low = filters.date_from[:4] if filters.date_from else "1900"
+    high = filters.date_to[:4] if filters.date_to else "2100"
+    if low == "1900" and high == "2100":
+        return ""  # 两边都没给：不拼子句（与原先"空条件返回空串"一致）
     return f" AND bibjson.year:[{low} TO {high}]"
 
 
