@@ -4,9 +4,12 @@
 > *A personal document QA workspace — local-first RAG with citation tracing and automated evaluation.*
 > *[English README](README.en.md)*
 
-Mikasa是一个**从零手写**的 RAG 应用：检索（自实现 BM25 + 向量 + RRF 融合）、
-中文结构化分块、引用溯源、三阶段自动化评测全部自研，不套 RAG 框架——
-代码是透明的、评测口径是可复现的。
+Mikasa 是一个**不套 RAG 框架**的本地文档问答工作台：BM25、向量检索、
+RRF 融合、中文结构化分块、引用协议、三阶段自动化评测都在本仓里实现——
+没有 LangChain / LlamaIndex 那一层。这么做换来了算法透明与口径可复现，
+代价是检索质量得自己扛：每个取舍、代价与踩过的坑都记在
+[设计决策记录](docs/design-decisions.md) 与
+[失败档案](docs/limitations-and-failures.md) 里。
 
 **项目状态**：M0 骨架 → M1 核心管道 → M2 自动化评测 → M3 Web 界面 →
 M3.5 问答双模式 → M4 本地推理 profile → M4.5 会话管理升级（含首次真实

@@ -4,10 +4,13 @@
 > *[中文说明见 README.md](README.md) —— 本仓库以中文为主，这一页是英文版
 > （Chinese is the primary language of this repository; this is the English edition）.*
 
-Mikasa is a **from-scratch** RAG application: retrieval (self-implemented BM25 + dense vectors + RRF
-fusion), Chinese-aware structural chunking, citation tracing, and a three-stage automated evaluation
-pipeline — all hand-written, **no RAG framework**. The code is transparent and the evaluation numbers
-are reproducible.
+Mikasa is a local document-QA workbench that **does not sit on a RAG framework**: BM25, dense
+retrieval, RRF fusion, Chinese-aware structural chunking, the citation protocol and the three-stage
+automated evaluation are all implemented in this repository — there is no LangChain / LlamaIndex
+layer. That buys transparent algorithms and reproducible numbers, and costs us owning retrieval
+quality ourselves: every trade-off, price and mistake is written up in the
+[design decisions](docs/en/design-decisions.md) and the
+[failure archive](docs/en/limitations-and-failures.md).
 
 **Status**: M0 skeleton → M1 core pipeline → M2 automated evaluation → M3 web UI → M3.5 dual QA
 modes → M4 local profile → M4.5 session management (including the first real schema migration v1→v2)
