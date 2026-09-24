@@ -33,6 +33,10 @@ _PRIVATE = {
     "advisor-readme.md",
     # 技术路线提案（2026-09-25 加入）：Claude ↔ Codex 的协商稿，同上
     "tech-roadmap-proposal.md",
+    # 技术路线回复（2026-09-25 加入）：Codex 的逐条判断，同上
+    "tech-roadmap-response.md",
+    # 技术路线回复的回复（2026-09-25 加入）：Claude 的采纳/更正/补充，同上
+    "tech-roadmap-reply.md",
 }
 
 # 检查链接的范围：仓库根的门面 + 两棵文档树
