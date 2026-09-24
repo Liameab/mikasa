@@ -11,6 +11,7 @@ complete() 返回 Completion（文本 + token 用量）：qa_messages 的成本
 
 from __future__ import annotations
 
+import difflib
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -308,17 +309,18 @@ class MockLLM:
 
     @staticmethod
     def _run(question: str, text: str) -> int:
-        """问题与文本的最长公共连续子串长度（< min_run 一律视为 0 级）。
+        """问题与文本的最长公共连续子串长度。
 
-        从长到短探测：找到的第一个长度即最长。问题/资料都在几百字符内，
-        平方级窗口探测足够快（每段 O(len(q)²) 次 C 级子串查找）。
+        交给 `difflib.SequenceMatcher`（标准库就是干这个的）——原先手写的
+        "从长到短逐长度探测"是同一件事的三重循环。**`autojunk=False` 必须带**：
+        默认的 junk 启发式会把长序列里的高频字当噪声丢掉，中文上尤其明显。
+        两个调用点各自拿 `min_run` 兜底（`< min_run` → 拒答 / 不算引用），
+        所以这里返回真实长度即可，不必再自己截断到"0 级"。
         """
-        upper = min(len(question), len(text))
-        for length in range(upper, 3, -1):
-            for start in range(0, len(question) - length + 1):
-                if question[start : start + length] in text:
-                    return length
-        return 0
+        match = difflib.SequenceMatcher(None, question, text, autojunk=False).find_longest_match(
+            0, len(question), 0, len(text)
+        )
+        return match.size
 
     def complete(
         self, messages: list[dict[str, str]], *, temperature: float, max_tokens: int

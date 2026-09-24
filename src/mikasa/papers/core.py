@@ -27,14 +27,10 @@ from __future__ import annotations
 import json
 import os
 import re
-import threading
-import time
-import urllib.error
 import urllib.parse
-import urllib.request
 
 from mikasa.papers.errors import PaperError
-from mikasa.papers.http import USER_AGENT, with_retry
+from mikasa.papers.http import ThrottledClient
 from mikasa.papers.sources import PaperFilters, PaperResult, SourceCaps
 
 # 官方文档未见明确限速，但实测连打 5~6 次即 429 → 保守取 2 秒
@@ -52,44 +48,23 @@ _CORE_ID_RE = re.compile(r"^\d{1,20}$")
 # 年份合法区间：脏值（710300/202022）一律判 None
 _YEAR_MIN, _YEAR_MAX = 1900, 2100
 
-_throttle = threading.Lock()
-_last_ok = 0.0
-
 
 def _base_url() -> str:
     """API 根（调用时读环境变量：E2E 可整体换成本地假源）。"""
     return os.environ.get("MIKASA_PAPERS_CORE_BASE", "https://api.core.ac.uk/v3")
 
 
+# HTTP 纪律在 papers/http.py（三源共用）。CORE 限流最紧，429 文案多一句说明。
+_client = ThrottledClient(
+    "CORE",
+    _CORE_MIN_INTERVAL,
+    busy_hint="CORE 请求过于频繁（HTTP 429），请稍等半分钟再试（该来源限流较紧）",
+)
+
+
 def _http_get(url: str, timeout: float) -> bytes:
-    """唯一网络缝：GET 并读全部字节；**发起前**按实测限速等够间隔。
-
-    与 arxiv.py 同构：节流记在发起前、成功失败都算一次请求——CORE 限流更紧，
-    "失败不付等待成本"会让重试把额度越打越死（2026-09-16 实测踩过）。
-    """
-    global _last_ok
-    with _throttle:
-        wait = _last_ok + _CORE_MIN_INTERVAL - time.monotonic()
-        if wait > 0:
-            time.sleep(wait)
-        _last_ok = time.monotonic()
-    try:
-        return with_retry(lambda: _read(url, timeout))
-    except urllib.error.HTTPError as exc:
-        if exc.code == 429:
-            raise PaperError(
-                "CORE 请求过于频繁（HTTP 429），请稍等半分钟再试（该来源限流较紧）"
-            ) from exc
-        raise PaperError(f"CORE 服务返回错误（HTTP {exc.code}），请稍后重试") from exc
-    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
-        raise PaperError("无法连接 CORE（网络不可达或超时），请稍后重试") from exc
-
-
-def _read(url: str, timeout: float) -> bytes:
-    """裸 HTTP 调用（重试包裹的那一层）。"""
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+    """唯一网络缝：GET 并读全部字节；**发起前**按实测限速等够间隔。"""
+    return _client.get(url, timeout)
 
 
 def validate_id(paper_id: str) -> bool:

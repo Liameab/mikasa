@@ -84,9 +84,6 @@ class SynthProgress:
     total: int
     stage: str  # "可答题" / "不可答题"
 
-    def to_dict(self) -> dict[str, object]:
-        return {"done": self.done, "total": self.total, "stage": self.stage}
-
 
 def golden_path(settings: Settings) -> Path:
     """自动题库存放位置：数据目录下的 eval/（用户数据，不进仓库）。"""

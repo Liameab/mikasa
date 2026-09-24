@@ -348,8 +348,17 @@ def test_validate_maps_dns_failure_to_readable_error() -> None:
 # 所以 Range 必须经 `headers=` 下发；这条不变量断了，续传跨 302 就静默失效。
 
 
+def _redirect_handler():
+    """逐跳复验的骨架在 utils/net（两个下载器共用），策略仍由本模块提供。"""
+    from mikasa.utils.net import SafeRedirectHandler
+
+    return SafeRedirectHandler(
+        lambda u: install_mod._validate_asset_url(u, resolve=_public_resolve)
+    )
+
+
 def test_redirect_keeps_range_on_the_next_hop() -> None:
-    handler = install_mod._SafeRedirectHandler(resolve=_public_resolve)
+    handler = _redirect_handler()
     req = urllib.request.Request(
         "https://github.com/Liameab/mikasa/releases/download/v9.9.9/x.exe",
         headers={"User-Agent": "x", "Range": "bytes=1048576-"},

@@ -4,29 +4,14 @@
 - 二者在 Windows 上均无预编译 wheel（faiss-cpu 仅 conda；hnswlib 仅源码），
   与"零编译安装"约束冲突；
 - 个人知识库规模（<10 万 chunk）numpy 矩阵乘实测 <500ms，精确检索无近似误差，
-  评测里的 recall 是"真"recall，实验结论干净；
-- 接口（VectorStore Protocol）保留切换 ANN 后端的扩展点，ADR 里写清理由。
+  评测里的 recall 是"真"recall，实验结论干净。
 """
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
-
 import numpy as np
 
 from mikasa.errors import StorageError
-
-
-@runtime_checkable
-class VectorStore(Protocol):
-    """向量检索引擎的统一接口（当前唯一实现为 ExactVectorStore）。"""
-
-    def add(self, vectors: np.ndarray) -> None: ...
-
-    def search(self, query: np.ndarray, top_k: int) -> list[tuple[int, float]]: ...
-
-    @property
-    def size(self) -> int: ...
 
 
 class ExactVectorStore:

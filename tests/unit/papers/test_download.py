@@ -84,8 +84,15 @@ def _req(url: str) -> urllib.request.Request:
     return urllib.request.Request(url)
 
 
+def _redirect_handler(resolve):
+    """逐跳复验的骨架在 utils/net（两个下载器共用），策略仍由本模块提供。"""
+    from mikasa.utils.net import SafeRedirectHandler
+
+    return SafeRedirectHandler(lambda u: dl._validate_url(u, resolve=resolve))
+
+
 def test_redirect_revalidates_each_hop():
-    handler = dl._SafeRedirectHandler(resolve=lambda h, p, **k: _addrinfo("93.184.216.34"))
+    handler = _redirect_handler(lambda h, p, **k: _addrinfo("93.184.216.34"))
     # 公网 https：放行（返回 Request 即交给 stdlib 继续）
     out = handler.redirect_request(
         _req("https://a.com/x"), io.BytesIO(), 302, "Moved", {}, "https://b.com/y"
@@ -94,7 +101,7 @@ def test_redirect_revalidates_each_hop():
 
 
 def test_redirect_to_private_rejected():
-    handler = dl._SafeRedirectHandler(resolve=lambda h, p, **k: _addrinfo("10.0.0.8"))
+    handler = _redirect_handler(lambda h, p, **k: _addrinfo("10.0.0.8"))
     with pytest.raises(PaperError, match="安全策略"):
         handler.redirect_request(
             _req("https://a.com/x"), io.BytesIO(), 302, "Moved", {}, "https://10.0.0.8/y"
@@ -102,8 +109,8 @@ def test_redirect_to_private_rejected():
 
 
 def test_redirect_over_max_hops():
-    handler = dl._SafeRedirectHandler(resolve=lambda h, p, **k: _addrinfo("93.184.216.34"))
-    for _ in range(dl._MAX_REDIRECTS):
+    handler = _redirect_handler(lambda h, p, **k: _addrinfo("93.184.216.34"))
+    for _ in range(3):  # _MAX_REDIRECTS（utils/net 的默认值）
         handler.redirect_request(
             _req("https://a.com/x"), io.BytesIO(), 302, "Moved", {}, "https://b.com/y"
         )

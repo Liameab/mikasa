@@ -15,15 +15,11 @@ from __future__ import annotations
 
 import os
 import re
-import threading
-import time
-import urllib.error
 import urllib.parse
-import urllib.request
 import xml.etree.ElementTree as ET
 
 from mikasa.papers.errors import PaperError
-from mikasa.papers.http import USER_AGENT, with_retry
+from mikasa.papers.http import ThrottledClient
 from mikasa.papers.sources import PaperFilters, PaperResult, SourceCaps
 
 # 官方建议的最低请求间隔（秒）：礼貌限速，别把公共 API 打爆
@@ -50,45 +46,14 @@ def _pdf_base() -> str:
     return os.environ.get("MIKASA_PAPERS_ARXIV_PDF_BASE", "https://arxiv.org/pdf")
 
 
-# ---- 节流状态：模块级（单进程单服务，见 services.py 的进程约定） ----
-_throttle = threading.Lock()
-_last_ok = 0.0
+# HTTP 纪律（节流 + 重试 + 中文错误翻译）在 papers/http.py——三个来源共用一份。
+# 单测/E2E 仍从这个名字打桩（或覆盖 base URL），stdout 之外不再有第二处联网。
+_client = ThrottledClient("arXiv", _ARXIV_MIN_INTERVAL)
 
 
 def _http_get(url: str, timeout: float) -> bytes:
-    """唯一网络缝：GET 并读全部字节；**发起前**按官方限速等够间隔。
-
-    单测/E2E 都从这里打桩（或覆盖 base URL），stdout 之外不再有第二处联网。
-
-    **节流记在发起前，成功失败都算一次请求**（2026-09-16 修正）：原实现
-    "成功后补睡"，理由是"失败重试不该再付等待成本"——实测站不住：连打几次
-    后 arXiv 回 429，而它恰恰把**失败请求也算进配额**，于是"越失败越猛打"
-    把额度越打越死（当天三个源里两个被自己打成 429）。发前节流才是正确的
-    礼貌客户端行为。
-    """
-    global _last_ok
-    with _throttle:
-        wait = _last_ok + _ARXIV_MIN_INTERVAL - time.monotonic()
-        if wait > 0:
-            time.sleep(wait)
-        _last_ok = time.monotonic()
-    try:
-        # 重试在节流**之内**：重试的那一次距上一次发起已隔了一个超时周期
-        # （≥15 秒），远大于 3 秒节流，不必再等
-        return with_retry(lambda: _read(url, timeout))
-    except urllib.error.HTTPError as exc:
-        if exc.code == 429:
-            raise PaperError("arXiv 请求过于频繁（HTTP 429），请等半分钟再试") from exc
-        raise PaperError(f"arXiv 服务返回错误（HTTP {exc.code}），请稍后重试") from exc
-    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
-        raise PaperError("无法连接 arXiv（网络不可达或超时），请稍后重试") from exc
-
-
-def _read(url: str, timeout: float) -> bytes:
-    """裸 HTTP 调用（重试包裹的那一层）。"""
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+    """唯一网络缝：GET 并读全部字节；**发起前**按官方限速等够间隔。"""
+    return _client.get(url, timeout)
 
 
 def _local(tag: str) -> str:

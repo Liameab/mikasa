@@ -254,16 +254,6 @@ class AskService:
         self._record(session_id, question, answer)
         return answer
 
-    def chat_stream(
-        self,
-        session_id: int,
-        question: str,
-        *,
-        mode: AnswerMode = "kb",
-    ) -> Iterator[StreamEvent]:
-        """会话内提问的流式版本：多轮续问复用会话（历史按 mode 分路）。"""
-        yield from self.ask_stream(question, session_id=session_id, mode=mode)
-
     def ask_doc_stream(
         self,
         document_id: int,

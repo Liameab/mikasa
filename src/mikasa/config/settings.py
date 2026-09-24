@@ -597,7 +597,10 @@ def load_settings(
         raise ConfigError(f"配置文件读取失败（{path}）：{exc}") from exc
     raw = expand_env_vars(raw)
 
-    merged = _deep_merge(_default_section_dict(), raw)
+    # 不需要"默认值基底"：`Settings(**raw)` 由 pydantic 自己给缺失字段填默认值，
+    # 原先先实例化每个配置段再 model_dump 只等于把默认值写了两遍
+    # （2026-09-24 删；用三个 profile 的 model_dump 逐字段核对过，结果一致）。
+    merged = dict(raw)
     if declared_path is None:
         # 基底是 profile 文件 → 叠加用户覆盖层（设置面板写的那份）；
         # --config / config.yaml 走"完整替换"，不叠（见 _load_user_overlay）
@@ -617,22 +620,6 @@ def load_settings(
     if isinstance(settings.chunking, ChunkingConfig):
         settings.chunking.validate_self()
     return settings
-
-
-def _default_section_dict() -> dict[str, Any]:
-    """各功能块的默认值；profile 文件只需覆盖差异字段。"""
-    return {
-        "profile": "offline",
-        "chunking": ChunkingConfig().model_dump(),
-        "retrieval": RetrievalConfig().model_dump(),
-        "reranker": RerankerConfig().model_dump(),
-        "llm": LLMConfig().model_dump(),
-        "vision": VisionConfig().model_dump(),
-        "embedding": EmbeddingConfig().model_dump(),
-        "judge": JudgeConfig().model_dump(),
-        "web": WebConfig().model_dump(),
-        "answer": AnswerConfig().model_dump(),
-    }
 
 
 def _dotenv_candidates() -> list[Path]:

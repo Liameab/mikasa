@@ -53,6 +53,7 @@ from mikasa.update.errors import UpdateError
 from mikasa.update.release import SETUP_ASSET_RE, Asset, ReleaseInfo
 from mikasa.utils.hashing import sha256_file
 from mikasa.utils.logging import get_logger
+from mikasa.utils.net import default_port, safe_opener
 
 logger = get_logger("update")
 
@@ -60,7 +61,6 @@ _CHUNK = 64 * 1024  # 进度上报粒度：256KB 在慢链路上要等好几分�
 _TIMEOUT = 60.0  # 连接与单块读超时（大文件按块读，每块各自计时）
 _MAX_ASSET_BYTES = 600 * 1024 * 1024  # 安装包上限（实测 ~90MB，留足余量）
 _MAX_SUMS_BYTES = 1024 * 1024  # 校验和文件上限（实测几百字节）
-_MAX_REDIRECTS = 3
 _USER_AGENT = "Mikasa/0.1 (update-download)"
 
 _PART_SUFFIX = ".part"  # 半成品后缀（**只能是后缀**，见 _part_path）
@@ -90,7 +90,6 @@ _ALLOWED_HOSTS = frozenset(
     }
 )
 _ALLOWED_HOST_SUFFIX = ".githubusercontent.com"
-_DEFAULT_PORTS = {"https": 443, "http": 80}
 
 
 def _validate_asset_url(url: str, *, resolve=socket.getaddrinfo) -> None:
@@ -110,7 +109,7 @@ def _validate_asset_url(url: str, *, resolve=socket.getaddrinfo) -> None:
     # 逃生门。回环打不到内网，SSRF 保证不因它松动——这一条同时挡住
     # "API 响应被换成任意公网主机"的情况（那是最容易被利用的方向）。
     if parts.scheme == "http":
-        port = parts.port or _DEFAULT_PORTS["http"]
+        port = parts.port or default_port("http")
         try:
             infos = resolve(host, port, type=socket.SOCK_STREAM)
         except OSError as exc:
@@ -122,28 +121,11 @@ def _validate_asset_url(url: str, *, resolve=socket.getaddrinfo) -> None:
     raise UpdateError("更新下载目标不是 GitHub 官方域名，已拒绝（安全策略）")
 
 
-class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """重定向逐跳复验 + 上限（重定向是绕过入口校验的第二入口）。
-
-    跳数计数器是**每个 opener 一份**（_open 每次新建）：重试不该吃掉配额。
-    """
-
-    def __init__(self, *, max_redirects: int = _MAX_REDIRECTS, resolve=socket.getaddrinfo) -> None:  # noqa: ANN001
-        super().__init__()
-        self._max_redirects = max_redirects
-        self._resolve = resolve
-        self._hops = 0
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001 - 覆写 stdlib 签名
-        self._hops += 1
-        if self._hops > self._max_redirects:
-            raise urllib.error.HTTPError(req.full_url, 502, "重定向次数超过上限", headers, fp)
-        _validate_asset_url(newurl, resolve=self._resolve)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
 def _open(url: str, timeout: float, *, range_start: int | None = None):
     """网络缝（带安全重定向处理器）：单测打桩点。
+
+    逐跳复验的骨架在 `utils/net.SafeRedirectHandler`（与论文下载器共用），
+    这里只把自己的入口策略 `_validate_asset_url` 交给它。
 
     range_start 走 `headers=` 下发（普通头）：stdlib 的重定向只复制普通头，
     `add_unredirected_header` 那类**不会被继承**——续传跨 302 就断了。
@@ -152,7 +134,7 @@ def _open(url: str, timeout: float, *, range_start: int | None = None):
     headers = {"User-Agent": _USER_AGENT, "Accept-Encoding": "identity"}
     if range_start:
         headers["Range"] = f"bytes={range_start}-"
-    opener = urllib.request.build_opener(_SafeRedirectHandler())
+    opener = safe_opener(_validate_asset_url)
     req = urllib.request.Request(url, headers=headers)
     return opener.open(req, timeout=timeout)
 

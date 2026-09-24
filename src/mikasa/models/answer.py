@@ -55,8 +55,3 @@ class Answer(BaseModel):
     latency_ms: dict[str, float] = {}  # {"retrieve":…, "rerank":…, "generate":…}
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
-
-    @property
-    def body(self) -> str:
-        """无标记正文（用于评测的纯文本视图）。"""
-        return self.text

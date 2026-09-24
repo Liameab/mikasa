@@ -2,6 +2,6 @@
 
 from mikasa.index.bm25 import BM25Index
 from mikasa.index.hybrid import rrf_fuse
-from mikasa.index.vector_store import ExactVectorStore, VectorStore
+from mikasa.index.vector_store import ExactVectorStore
 
-__all__ = ["BM25Index", "ExactVectorStore", "VectorStore", "rrf_fuse"]
+__all__ = ["BM25Index", "ExactVectorStore", "rrf_fuse"]

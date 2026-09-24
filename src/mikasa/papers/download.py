@@ -32,17 +32,13 @@ from pathlib import Path
 
 from mikasa.papers.errors import PaperError
 from mikasa.papers.http import USER_AGENT
-from mikasa.utils.net import reject_reason
+from mikasa.utils.net import port_of, reject_reason, safe_opener
 
 _PDF_MAX_BYTES = 50 * 1024 * 1024
 _DOWNLOAD_TIMEOUT = 90.0
-_MAX_REDIRECTS = 3
 _CHUNK = 64 * 1024
 # 与检索源共用一份 UA（带项目主页：出版商的机器人策略也更认可识别的客户端）
 _USER_AGENT = USER_AGENT
-
-# 各来源共用的默认端口（urlsplit 不带端口时补上，供 getaddrinfo 用）
-_DEFAULT_PORTS = {"https": 443, "http": 80}
 
 
 def _check_host(host: str, port: int, *, resolve=socket.getaddrinfo) -> None:
@@ -67,7 +63,10 @@ def _check_http_host(host: str, port: int, *, resolve=socket.getaddrinfo) -> Non
 
 
 def _validate_url(url: str, *, resolve=socket.getaddrinfo) -> urllib.parse.SplitResult:
-    """下载前校验：协议白名单 + 无内嵌凭据 + 主机解析安全检查。"""
+    """下载前校验：协议白名单 + 无内嵌凭据 + 主机解析安全检查。
+
+    resolve 可注入：单测传假 addrinfo，零真实 DNS。
+    """
     parts = urllib.parse.urlsplit(url)
     if parts.scheme not in ("https", "http"):
         raise PaperError("论文下载仅支持 http/https 链接")
@@ -75,7 +74,7 @@ def _validate_url(url: str, *, resolve=socket.getaddrinfo) -> urllib.parse.Split
         raise PaperError("论文下载链接不允许内嵌凭据")
     if not parts.hostname:
         raise PaperError("论文下载链接缺少主机名")
-    port = parts.port or _DEFAULT_PORTS[parts.scheme]
+    port = port_of(parts)
     if parts.scheme == "https":
         _check_host(parts.hostname, port, resolve=resolve)
     else:  # http：公网放行（中文论文的全文链接多是明文 http，见模块头）+ 回环例外
@@ -83,34 +82,13 @@ def _validate_url(url: str, *, resolve=socket.getaddrinfo) -> urllib.parse.Split
     return parts
 
 
-class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """重定向逐跳复验 + 上限 3 跳（重定向是 SSRF 的第二入口）。
-
-    resolve 可注入：单测传假 addrinfo，重定向校验零真实 DNS。
-    """
-
-    def __init__(
-        self,
-        *,
-        max_redirects: int = _MAX_REDIRECTS,
-        resolve=socket.getaddrinfo,  # noqa: ANN001 - 默认参数保持可注入
-    ) -> None:
-        super().__init__()
-        self._max_redirects = max_redirects
-        self._resolve = resolve
-        self._hops = 0
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001 - 覆写 stdlib 签名
-        self._hops += 1
-        if self._hops > self._max_redirects:
-            raise urllib.error.HTTPError(req.full_url, 502, "重定向次数超过上限", headers, fp)
-        _validate_url(newurl, resolve=self._resolve)  # 校验不过抛 PaperError，整条下载中止
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
 def _open_url(url: str, timeout: float):
-    """网络缝（带上安全重定向处理器）：单测打桩点。"""
-    opener = urllib.request.build_opener(_SafeRedirectHandler())
+    """网络缝（带上安全重定向处理器）：单测打桩点。
+
+    逐跳复验的骨架在 `utils/net.SafeRedirectHandler`（与更新下载器共用），
+    这里只把自己的入口策略 `_validate_url` 交给它。
+    """
+    opener = safe_opener(_validate_url)
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     return opener.open(req, timeout=timeout)
 

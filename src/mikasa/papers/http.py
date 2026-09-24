@@ -13,10 +13,14 @@ arxiv.py 的节流注释：当天三个源里两个被自己打成了 429）。
 
 from __future__ import annotations
 
+import threading
 import time
 import urllib.error
+import urllib.request
 from collections.abc import Callable
 from typing import TypeVar
+
+from mikasa.papers.errors import PaperError
 
 # 带项目主页的 UA：arxiv 的 API 条款要求可识别的客户端，实测也确实是
 # "带主页的 UA 更快更稳"（0.8s vs 15s 超时）。三源 + PDF 下载共用一份。
@@ -58,3 +62,55 @@ def with_retry(
                 time.sleep(delay)
     assert last is not None  # 循环只有两条出路：返回或抛错
     raise last
+
+
+class ThrottledClient:
+    """一个来源的 HTTP 纪律：**发起前**节流 + 网络级重试 + 中文错误翻译。
+
+    arXiv / CORE / DOAJ 原先各写了一份一字不差的 `_http_get` + `_read`，
+    差异只有标签、最小间隔和 429 文案（2026-09-24 合并）。每个来源一个实例，
+    节流状态随之从模块级全局变成实例属性。
+
+    **节流记在发起前，成功失败都算一次请求**（2026-09-16 修正）：原实现
+    "成功后补睡"，理由是"失败重试不该再付等待成本"——实测站不住：连打几次
+    后 arXiv 回 429，而它恰恰把**失败请求也算进配额**，于是"越失败越猛打"
+    把额度越打越死（当天三个源里两个被自己打成 429）。发前节流才是正确的
+    礼貌客户端行为。
+    """
+
+    def __init__(self, label: str, min_interval: float, *, busy_hint: str = "") -> None:
+        self._label = label
+        self._min_interval = min_interval
+        self._busy_hint = busy_hint or f"{label} 请求过于频繁（HTTP 429），请等半分钟再试"
+        self._lock = threading.Lock()
+        self._last_ok = 0.0
+
+    def reset(self) -> None:
+        """清空节流状态（单测用：不想让上一条用例的等待渗进来）。"""
+        with self._lock:
+            self._last_ok = 0.0
+
+    def get(self, url: str, timeout: float) -> bytes:
+        """唯一网络缝：GET 并读全部字节；发起前按该来源的限速等够间隔。"""
+        with self._lock:
+            wait = self._last_ok + self._min_interval - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            self._last_ok = time.monotonic()
+        try:
+            # 重试在节流**之内**：重试那一次距上次发起已隔一个超时周期
+            # （≥15 秒），远大于各源的节流间隔，不必再等
+            return with_retry(lambda: self._read(url, timeout))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                raise PaperError(self._busy_hint) from exc
+            raise PaperError(f"{self._label} 服务返回错误（HTTP {exc.code}），请稍后重试") from exc
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            raise PaperError(f"无法连接 {self._label}（网络不可达或超时），请稍后重试") from exc
+
+    @staticmethod
+    def _read(url: str, timeout: float) -> bytes:
+        """裸 HTTP 调用（重试包裹的那一层）。"""
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()

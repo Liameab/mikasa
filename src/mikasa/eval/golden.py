@@ -29,13 +29,61 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 Difficulty = Literal["easy", "medium", "hard"]
 UnanswerReason = Literal["unrelated", "insufficient", "hallucination_bait"]
+
+
+# 成品题（GoldenItem）与草稿题（QuestionDraft）共享的校验。两套模型一字不差地
+# 各写一遍是 2026-09-20 审查点名的"该抽没抽"——改一处漏另一处，报错文案还会悄悄分叉。
+def _check_common(
+    item_id: str,
+    question: str,
+    kind: str,
+    difficulty: Difficulty | None,
+    reason: UnanswerReason | None,
+) -> None:
+    """题面非空 / 可答题标了难度 / 不可答题标了原因（载荷差异各查各的）。"""
+    from mikasa.errors import EvalError
+
+    if not question.strip():
+        raise EvalError(f"{item_id}: 题目不能为空（question 漏写或缩进错了吧？）")
+    if kind == "answerable":
+        if difficulty not in ("easy", "medium", "hard"):
+            raise EvalError(f"{item_id}: 可答题必须标注难度 easy/medium/hard")
+    elif reason not in ("unrelated", "insufficient", "hallucination_bait"):
+        raise EvalError(f"{item_id}: 不可答题必须标注 reason")
+
+
+def _check_item_list(items: list[Any], what: str) -> None:
+    """去重 id → 逐题校验 → 两类都得有（`what` 只影响报错里的名词）。"""
+    from mikasa.errors import EvalError
+
+    seen: set[str] = set()
+    for item in items:
+        if item.id in seen:
+            raise EvalError(f"重复的问题 id：{item.id}")
+        seen.add(item.id)
+        item.validate_kind()
+    if not any(i.kind == "answerable" for i in items) or not any(
+        i.kind == "unanswerable" for i in items
+    ):
+        raise EvalError(f"{what}必须同时包含可答题与不可答题")
+
+
+def _strip_question(value: str) -> str:
+    """question 字段校验器：只做去空白归一。
+
+    **空问题不在字段层替换成"？"**——那会把"YAML 里漏写 question"变成一个
+    看起来正常的题目：评测时阶段 A 必然零命中、阶段 B 记一次可答误拒，
+    全程无报错，只是分数悄悄变差（2026-09-20 审查实测）。
+    真正的拦截在 validate_kind（抛 EvalError、带题号）。
+    """
+    return value.strip()
 
 
 class GoldenItem(BaseModel):
@@ -54,23 +102,13 @@ class GoldenItem(BaseModel):
     notes: str = ""  # 期望答到的知识点 / 不可答原因说明（评分锚点与人工复核依据）
     reason: UnanswerReason | None = None  # 不可答题必填
 
-    @field_validator("question")
-    @classmethod
-    def _question_stripped(cls, value: str) -> str:
-        # 只做去空白归一。**空问题不在字段层替换成"？"**——那会把"YAML 里漏写
-        # question"变成一个看起来正常的题目：评测时阶段 A 必然零命中、阶段 B 记一次
-        # 可答误拒，全程无报错，只是分数悄悄变差（2026-09-20 审查实测）。
-        # 真正的拦截在 validate_kind（抛 EvalError、带题号）。
-        return value.strip()
+    _validate_question = field_validator("question")(_strip_question)
 
     def validate_kind(self) -> None:
         from mikasa.errors import EvalError
 
-        if not self.question.strip():
-            raise EvalError(f"{self.id}: 题目不能为空（question 漏写或缩进错了吧？）")
+        _check_common(self.id, self.question, self.kind, self.difficulty, self.reason)
         if self.kind == "answerable":
-            if self.difficulty not in ("easy", "medium", "hard"):
-                raise EvalError(f"{self.id}: 可答题必须标注难度 easy/medium/hard")
             if not self.gold_chunk_ids:
                 raise EvalError(f"{self.id}: 可答题必须有 gold_chunk_ids")
             if self.gold_hashes and len(self.gold_hashes) != len(self.gold_chunk_ids):
@@ -78,11 +116,8 @@ class GoldenItem(BaseModel):
                     f"{self.id}: gold_hashes 与 gold_chunk_ids 必须逐位对应"
                     f"（{len(self.gold_hashes)} vs {len(self.gold_chunk_ids)}）"
                 )
-        else:
-            if self.reason not in ("unrelated", "insufficient", "hallucination_bait"):
-                raise EvalError(f"{self.id}: 不可答题必须标注 reason")
-            if self.gold_chunk_ids:
-                raise EvalError(f"{self.id}: 不可答题不应携带 gold_chunk_ids")
+        elif self.gold_chunk_ids:
+            raise EvalError(f"{self.id}: 不可答题不应携带 gold_chunk_ids")
 
 
 class GoldenSet(BaseModel):
@@ -111,16 +146,7 @@ class GoldenSet(BaseModel):
         return [i for i in self.items if i.kind == "unanswerable"]
 
     def validate_items(self) -> None:
-        from mikasa.errors import EvalError
-
-        seen: set[str] = set()
-        for item in self.items:
-            if item.id in seen:
-                raise EvalError(f"重复的问题 id：{item.id}")
-            seen.add(item.id)
-            item.validate_kind()
-        if not self.answerable or not self.unanswerable:
-            raise EvalError("黄金集必须同时包含可答题与不可答题")
+        _check_item_list(self.items, "黄金集")
 
 
 @dataclass(frozen=True)
@@ -214,32 +240,19 @@ class QuestionDraft(BaseModel):
     notes: str = ""  # 期望答到的知识点 / 不可答原因（评分锚点与人工复核依据）
     reason: UnanswerReason | None = None  # 不可答题必填
 
-    @field_validator("question")
-    @classmethod
-    def _question_stripped(cls, value: str) -> str:
-        # 只做去空白归一。**空问题不在字段层替换成"？"**——那会把"YAML 里漏写
-        # question"变成一个看起来正常的题目：评测时阶段 A 必然零命中、阶段 B 记一次
-        # 可答误拒，全程无报错，只是分数悄悄变差（2026-09-20 审查实测）。
-        # 真正的拦截在 validate_kind（抛 EvalError、带题号）。
-        return value.strip()
+    _validate_question = field_validator("question")(_strip_question)
 
     def validate_kind(self) -> None:
         from mikasa.errors import EvalError
 
-        if not self.question.strip():
-            raise EvalError(f"{self.id}: 题目不能为空（question 漏写或缩进错了吧？）")
+        _check_common(self.id, self.question, self.kind, self.difficulty, self.reason)
         if self.kind == "answerable":
-            if self.difficulty not in ("easy", "medium", "hard"):
-                raise EvalError(f"{self.id}: 可答题必须标注难度 easy/medium/hard")
             if not self.anchors:
                 raise EvalError(f"{self.id}: 可答题必须给出 anchors（锚定原文句子）")
             if any(not anchor.strip() for anchor in self.anchors):
                 raise EvalError(f"{self.id}: anchors 中含空句子")
-        else:
-            if self.reason not in ("unrelated", "insufficient", "hallucination_bait"):
-                raise EvalError(f"{self.id}: 不可答题必须标注 reason")
-            if self.anchors:
-                raise EvalError(f"{self.id}: 不可答题不应携带 anchors")
+        elif self.anchors:
+            raise EvalError(f"{self.id}: 不可答题不应携带 anchors")
 
 
 class QuestionsYaml(BaseModel):
@@ -252,18 +265,7 @@ class QuestionsYaml(BaseModel):
     items: list[QuestionDraft]
 
     def validate_items(self) -> None:
-        from mikasa.errors import EvalError
-
-        seen: set[str] = set()
-        for item in self.items:
-            if item.id in seen:
-                raise EvalError(f"重复的问题 id：{item.id}")
-            seen.add(item.id)
-            item.validate_kind()
-        if not any(i.kind == "answerable" for i in self.items) or not any(
-            i.kind == "unanswerable" for i in self.items
-        ):
-            raise EvalError("黄金题必须同时包含可答题与不可答题")
+        _check_item_list(self.items, "黄金题")
 
 
 def load_questions_yaml(path: Path) -> QuestionsYaml:

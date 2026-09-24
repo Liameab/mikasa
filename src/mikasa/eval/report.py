@@ -293,42 +293,24 @@ def _judge_policy_text(settings: Settings, judge_model: str) -> str:
     )
 
 
+def _stat_row(label: str, values: list[float]) -> list[str]:
+    """一行描述统计（mean / p50 / p95 / n）——三类指标同一套口径。"""
+    stats = summarize(values)
+    return [
+        label,
+        _fmt(float(stats["mean"])),
+        _fmt(float(stats["p50"])),
+        _fmt(float(stats["p95"])),
+        str(stats["n"]),
+    ]
+
+
 def _retrieval_overview_table(result: EvalResult) -> str:
     """阶段 A 总表：recall@k / MRR / nDCG@k 的描述统计。"""
     metrics = result.retrieval
-    rows: list[list[str]] = []
-    for k in metrics.ks:
-        stats = summarize(metrics.recall[k].values)
-        rows.append(
-            [
-                f"recall@{k}",
-                _fmt(float(stats["mean"])),
-                _fmt(float(stats["p50"])),
-                _fmt(float(stats["p95"])),
-                str(stats["n"]),
-            ]
-        )
-    mrr = summarize(metrics.rr.values)
-    rows.append(
-        [
-            "MRR",
-            _fmt(float(mrr["mean"])),
-            _fmt(float(mrr["p50"])),
-            _fmt(float(mrr["p95"])),
-            str(mrr["n"]),
-        ]
-    )
-    for k in metrics.ks:
-        stats = summarize(metrics.ndcg[k].values)
-        rows.append(
-            [
-                f"nDCG@{k}",
-                _fmt(float(stats["mean"])),
-                _fmt(float(stats["p50"])),
-                _fmt(float(stats["p95"])),
-                str(stats["n"]),
-            ]
-        )
+    rows = [_stat_row(f"recall@{k}", metrics.recall[k].values) for k in metrics.ks]
+    rows.append(_stat_row("MRR", metrics.rr.values))
+    rows += [_stat_row(f"nDCG@{k}", metrics.ndcg[k].values) for k in metrics.ks]
     return _table(["指标", "mean", "p50", "p95", "n"], rows)
 
 

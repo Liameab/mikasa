@@ -148,13 +148,13 @@ def test_ask_stream_raises_on_empty_corpus(offline_settings):
         list(AskService(offline_settings).ask_stream("什么是线性代数？"))
 
 
-def test_chat_stream_reuses_session(tmp_path, offline_settings):
+def test_stream_into_an_existing_session_reuses_it(tmp_path, offline_settings):
     _seed(tmp_path, offline_settings)
     svc = AskService(offline_settings)
     with open_db(offline_settings.db_path) as conn:
         session_id = repo.create_session(conn, offline_settings.profile)
 
-    events = list(svc.chat_stream(session_id, "L2 正则化是什么？"))
+    events = list(svc.ask_stream("L2 正则化是什么？", session_id=session_id))
     assert events[0].kind == "meta" and events[0].session_id == session_id
     assert events[-1].kind == "done" and not events[-1].answer.refused
     assert _count(offline_settings, "qa_sessions") == 1  # 未新建会话
@@ -326,9 +326,9 @@ def test_free_guarded_on_mock_backend(offline_settings):
         svc.ask("讲讲太阳系", mode="free")
     with pytest.raises(ConfigError, match="api / local"):
         list(svc.ask_stream("讲讲太阳系", mode="free"))
-    # chat_stream 会话 id 是守卫的输入之一：守卫先于一切 DB 访问，假 id 亦报错
+    # 会话 id 是守卫的输入之一：守卫先于一切 DB 访问，假 id 亦报错
     with pytest.raises(ConfigError, match="api / local"):
-        list(svc.chat_stream(999, "讲讲太阳系", mode="free"))
+        list(svc.ask_stream("讲讲太阳系", session_id=999, mode="free"))
     with pytest.raises(ConfigError, match="未知问答模式"):  # 非法 mode 防御
         svc.ask("讲讲太阳系", mode="banana")
     # kb（缺省/显式）不受影响：mock 下仍走检索路径（空库 → 知识库为空）

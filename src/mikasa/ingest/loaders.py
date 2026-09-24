@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from pathlib import Path
 
 from mikasa.errors import IngestError
@@ -265,21 +266,7 @@ def load_markdown(path: Path) -> LoadedDocument:
 def load_txt(path: Path) -> LoadedDocument:
     """纯文本：空行分隔的段落；无标题结构（编码自动探测 GBK/UTF-8）。"""
     text = _read_text(path)
-    paragraphs: list[Para] = []
-    buffer: list[str] = []
-
-    def flush() -> None:
-        clean = _clean_line_buffer(buffer)
-        if clean:
-            paragraphs.append(Para(text=clean))
-        buffer.clear()
-
-    for raw in text.splitlines():
-        if raw.strip():
-            buffer.append(raw)
-        else:
-            flush()
-    flush()
+    paragraphs = [Para(text=clean) for clean in _para_texts(text)]
     return LoadedDocument(title=path.stem, file_type="txt", paragraphs=paragraphs)
 
 
@@ -308,19 +295,7 @@ def load_pdf(path: Path) -> LoadedDocument:
     for page_no, page_text in enumerate(cleaned, start=1):
         if not page_text.strip():
             continue
-        buffer: list[str] = []
-        for raw in page_text.splitlines():
-            if raw.strip():
-                buffer.append(raw)
-            elif buffer:
-                clean = _clean_line_buffer(buffer)
-                if clean:
-                    paragraphs.append(Para(text=clean, page=page_no))
-                buffer.clear()
-        if buffer:
-            clean = _clean_line_buffer(buffer)
-            if clean:
-                paragraphs.append(Para(text=clean, page=page_no))
+        paragraphs.extend(Para(text=clean, page=page_no) for clean in _para_texts(page_text))
 
     if not paragraphs:
         # 常见场景：扫描版 PDF 无文本层（真实失败案例，见 limitations 文档）
@@ -501,3 +476,27 @@ def _clean_line_buffer(lines: list[str]) -> str:
     """合并缓冲行 + 轻度清洗（原文保真：空白折叠/控制字符，标点不改）。"""
     joined = "\n".join(line.rstrip() for line in lines if line.strip())
     return normalize_text(joined)
+
+
+def _para_texts(text: str) -> Iterator[str]:
+    """按空行切段并清洗——三种格式的公共口径（非空行入缓冲，空行处出段）。
+
+    txt 与 pdf 原先各写了一遍同一套"攒行—出段"（pdf 那份还逐页复制了一次
+    页尾 flush），2026-09-24 合并到这里。调用方各自负责附元数据（page）与
+    "这段要不要收"；markdown 不适用（它的缓冲还要在标题处断开并换 heading_path，
+    见 load_markdown 的 flush_buffer）。
+    """
+    buffer: list[str] = []
+    for raw in text.splitlines():
+        if raw.strip():
+            buffer.append(raw)
+            continue
+        if buffer:
+            clean = _clean_line_buffer(buffer)
+            if clean:
+                yield clean
+            buffer.clear()
+    if buffer:
+        clean = _clean_line_buffer(buffer)
+        if clean:
+            yield clean

@@ -12,6 +12,7 @@ import urllib.parse
 import pytest
 
 import mikasa.papers.arxiv as arxiv
+import mikasa.papers.http as http
 import mikasa.papers.openalex as openalex
 from mikasa.papers.errors import PaperError
 from mikasa.papers.sources import PaperFilters, PaperResult
@@ -158,13 +159,17 @@ def test_arxiv_garbage_response(monkeypatch):
 
 
 def test_arxiv_throttle_sleeps_only_within_window(monkeypatch):
-    """成功后补睡到 ≥3s 间隔；间隔已过则零等待（打桩 time，不真睡）。"""
+    """发起前补睡到 ≥3s 间隔；间隔已过则零等待（打桩 time，不真睡）。
+
+    节流状态与实现自 2026-09-24 起在 `papers/http.ThrottledClient`（三源共用），
+    所以打桩点在 `papers.http.time`——那与 `arxiv.time` 是同一个模块对象。
+    """
     fake_time = {"now": 100.0, "slept": []}
     monkeypatch.setattr(arxiv.urllib.request, "urlopen", _FakeUrlopen(ARXIV_FEED))
-    monkeypatch.setattr(arxiv.time, "monotonic", lambda: fake_time["now"])
-    monkeypatch.setattr(arxiv.time, "sleep", lambda s: fake_time["slept"].append(s))
+    monkeypatch.setattr(http.time, "monotonic", lambda: fake_time["now"])
+    monkeypatch.setattr(http.time, "sleep", lambda s: fake_time["slept"].append(s))
 
-    arxiv._last_ok = 0.0  # noqa: SLF001 - 测试复位模块节流状态
+    arxiv._client.reset()  # 测试复位节流状态（节流状态现在挂在共享客户端上）
     arxiv.ArxivSource().search("x", 0, 1)
     assert fake_time["slept"] == []  # 首次请求不睡
     fake_time["now"] += 1.0

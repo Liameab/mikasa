@@ -69,10 +69,6 @@ class IngestSummary:
     chunks_added: int = 0
     chars_added: int = 0
 
-    @property
-    def total_files(self) -> int:
-        return len(self.ingested) + len(self.skipped) + len(self.failed)
-
 
 class IngestService:
     """一次运行持有一个 embedder；可被 CLI 与 Web 复用（每个实例一次生命周期）。"""
