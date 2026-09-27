@@ -335,6 +335,7 @@ offline 档没有可出题的模型，端点直接 400 拒绝而不是排队等�
 | Web | `mikasa serve [--config/--profile/--host/--port/--reload]` | 四页（问答/知识库/找论文/评测）+ 登录页，SSE |
 | 体检 | `mikasa doctor` | 依赖/密钥/**本地推理依赖（local 档门控 Ollama/fastembed）**/索引三方一致性，CI 冒烟用（口径见 limitations-and-failures.md） |
 | 评测真跑 | `mikasa eval run --profile api/local` | 63 题 × 三阶段，api 档 4-5 分钟/轮 |
+| MCP | `mikasa mcp [--config/--profile]` | 把库挂给 agent（Claude Code / Codex）：stdio + 三个只读工具 `search`/`read`/`ask`；**一次性子进程**，与 serve 的生命周期模型不同故不复用（ADR-0036） |
 
 三形态共享：同一份配置（profile 切换）、同一份 SQLite、同一份评测
 口径——offline 场次跑全流程零密钥（mock/none），正是 CI 与演示的

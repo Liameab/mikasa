@@ -16,7 +16,7 @@ quality ourselves: every trade-off, price and mistake is written up in the
 modes → M4 local profile → M4.5 session management (including the first real schema migration v1→v2)
 → corpus folders v3 → table rendering → cross-lingual retrieval → original + translation for cited
 English passages → document reader with citation jump → pre-M5 audit (23 fixes, 4 of them
-data-safety) → packaged installer → model settings in the panel → the embedding model shipped inside the package (first ingest is offline, ADR-0030) → text-to-image (draw straight from the ask page, ADR-0031) → Claude/OpenAI presets and in-app model pulling (ADR-0032) → browser/LAN access with an access password (ADR-0033) → ask-while-reading in the reader (ADR-0034). Currently **1085 tests passing**,
+data-safety) → packaged installer → model settings in the panel → the embedding model shipped inside the package (first ingest is offline, ADR-0030) → text-to-image (draw straight from the ask page, ADR-0031) → Claude/OpenAI presets and in-app model pulling (ADR-0032) → browser/LAN access with an access password (ADR-0033) → ask-while-reading in the reader (ADR-0034). Currently **1106 tests passing**,
 ruff + mypy clean, ~92% coverage. Windows portable zip and installer builds are published
 (v0.1.0 → v0.1.12) with in-app update checking — downloads resume across dropped connections, and
 closing the dialog, switching pages or reloading no longer interrupts them (progress lives in a
@@ -184,6 +184,24 @@ Open http://127.0.0.1:8000/ — four pages:
 
 API docs (Swagger) at http://127.0.0.1:8000/docs.
 
+## Handing the library to an agent: the MCP server (ADR-0036)
+
+The library is not only a web app — it can be attached to agents like Claude Code or Codex,
+so they can search your material:
+
+```bash
+# One command to register it (Claude Code; everything after -- starts the server)
+claude mcp add mikasa -- python -m mikasa mcp --profile local
+claude mcp list          # should report mikasa ✔ Connected
+```
+
+There are exactly three tools and **all of them are read-only** (no ingest / delete /
+settings, so an agent using your library has no blast radius): `search` returns snippets
+with provenance → `read` fetches a chunk and its two neighbours by `chunk_id` → `ask`
+returns an answer with `[n]` markers plus a citation list (document / section / page).
+Agent questions **leave no trace** in your Q&A history, and on the offline (mock) profile
+`ask` says plainly that only search / read are available instead of breaking the session.
+
 ## CLI
 
 | Command | Description |
@@ -196,6 +214,7 @@ API docs (Swagger) at http://127.0.0.1:8000/docs.
 | `chat` | Multi-turn conversation (kb mode with history summary, free mode raw history) |
 | `eval run/list` | Run the evaluation / browse past runs (`--profile offline` needs no keys) |
 | `auth set-password` / `clear-password` | Set / clear the access password — required before `serve --host 0.0.0.0` (ADR-0033) |
+| `mcp` | Expose the library to agents (MCP server over stdio): three read-only tools `search` / `read` / `ask` (ADR-0036) |
 
 ## Milestones
 
@@ -230,7 +249,7 @@ API docs (Swagger) at http://127.0.0.1:8000/docs.
 - Source comments and the README are written in **Chinese** (the project's working language; this
   page is the English edition); baseline gates are `ruff format`, `ruff check`, `mypy`, and
   `pytest`;
-- Current suite: **1085 tests**, coverage ~92% (see the regression gate in `docs/en/evaluation.md`);
+- Current suite: **1106 tests**, coverage ~92% (see the regression gate in `docs/en/evaluation.md`);
 - Zero-compilation install on Windows + CPython 3.13 (all dependencies ship prebuilt wheels;
   see `pyproject.toml` and ADR-0006/0008 for the version-pinning rationale).
 

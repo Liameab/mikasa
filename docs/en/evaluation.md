@@ -282,9 +282,10 @@ identically, differing only in configuration.
 
 Regression gate (CI): full `pytest -q` + `ruff` +
 `mypy` + `mikasa eval run --profile offline` as a smoke test. **Coverage baseline:
-92%** (8190 statements, full re-measurement on 2026-09-25:
-**1085 passed + 2 skipped in ~2 minutes**; `--cov=mikasa --cov-report=term`. The previous
-baseline was 93% = 3469 statements after M4.5 on 2026-09-09 — the statement count
+92%** (8363 statements, full re-measurement on 2026-09-27, the MCP round:
+**1106 passed + 2 skipped in ~2 minutes**; `--cov=mikasa --cov-report=term`. The previous
+baseline was 92% = 8190 statements / 1085 passed on 2026-09-25, and before that
+93% = 3469 statements after M4.5 on 2026-09-09 — the statement count
 nearly doubled while the percentage dropped one point, which is what "every new
 feature ships with its tests" looks like). Real quality acceptance (run manually before release): `--profile api`
 (DeepSeek generation + Qwen judge, stage C scoring); with the `local` profile the

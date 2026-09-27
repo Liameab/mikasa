@@ -54,6 +54,7 @@
 | ADR-0033 | 浏览器访问与访问口令：开给网络就必须设口令（fail closed） | Accepted |
 | ADR-0034 | 阅读器「边看边问」：就地提问 + 命中全给 + 即问即散 | Accepted |
 | ADR-0035 | 跨文档一跳：笔记 `[[互链]]` 落成 doc_links + 检索侧**默认关**的邻居扩展 | Accepted |
+| ADR-0036 | MCP server：手写 stdio JSON-RPC + 三个只读工具（`mikasa mcp`） | Accepted |
 
 ---
 
@@ -1800,3 +1801,63 @@ E2E `tools/chrome_reader_ask.py`（8 步真浏览器，截图 `tools/shots/reade
 `web/routers/documents.py`（`_ingest_note_file` 成功后同步互链）；
 测试 `tests/unit/ingest/test_wikilinks.py`（9 条）、
 `tests/unit/pipeline/test_retriever.py`（一跳扩展 3 条）。
+
+---
+
+## ADR-0036 MCP server：手写 stdio JSON-RPC + 三个只读工具（`mikasa mcp`）
+
+- 状态：Accepted ｜ 2026-09-27（用户拍板"手写、不落库、read 带邻块、只做 MCP"）
+- 关联：ADR-0013（kb/free 两种问答模式）、ADR-0033（口令门——本 ADR 明确**不碰**它）、
+  技术路线谈判稿（`tech-roadmap-reply.md` §5：MCP 排第一）
+
+**背景**：M8 之后的方向里，MCP 是唯一"新 + 能当场演示 + 不碰核心检索"的一条：
+把知识库封成一组工具，Claude Code / Codex 这类 agent 直接查你的资料。
+后端（HTTP API、检索、生成、引用协议）全都现成，缺的只是协议适配层。
+
+**决定**：
+
+1. **手写 JSON-RPC，不用官方 `mcp` SDK**。理由不是"自己写更酷"，而是**打包版**：
+   Mikasa 以 PyInstaller 分发，引 SDK 就要把它一起塞进安装包（安装包变大 +
+   hiddenimports 手工维护 + 版本一升就得重打包）；而 stdio 传输的协议面很小——
+   换行分隔的 JSON-RPC 2.0，`initialize` / `tools/list` / `tools/call` / `ping`
+   四个方法。零新依赖还带来一个副产物：CI 与打包版跑的是同一份代码，
+   不存在"只有装了 extra 的那台机器能测"。
+2. **三个工具，不是两个**：`search`（片段 + 出处）→ `read`（按 chunk_id 读全文，
+   带前后各一块）→ `ask`（带 [n] 的答案 + 结构化引用清单）。缺 `read` 的后果不是
+   "少一个功能"而是**链路是断的**：search 之后发现证据不足，agent 没有任何手段补读。
+3. **只读，一个写工具都不给**：不提供 ingest / delete / settings。理由不只是安全，
+   而是"agent 用你的库"这件事**没有破坏面**，用户才敢把客户端指过来。
+4. **只做 stdio**：HTTP transport 要接 ADR-0033 的口令门与会话语义（谁在问、算谁的
+   会话、口令怎么传），那是另一件事，这轮不做。
+5. **独立入口 `mikasa mcp`，不复用 `serve`**：serve 是"单进程 + 内存快照 + 任务槽"
+   的长期服务，MCP 客户端要的是一次性 stdio 子进程，生命周期模型不同，硬合会互相拖累。
+6. **档位从配置来**（`--profile` / `--config`），不进工具参数：客户端不该能替你切档。
+7. **agent 的提问不落库**（`AskService.answer()`）：与"只读"一致——它问的每一句都写进
+   你的问答历史，你就不敢把客户端指过来了。要回溯就去看客户端的会话记录。
+8. **探测不到模型时不许崩**：offline（mock）档下 `ask` 返回一句"本档只用 search /
+   read"，而不是抛异常——agent 会话被一次异常打断，比答不出来更糟。这是"失败提示
+   要如实"那条铁律在工具层的对应物。
+
+**代价与边界**：
+
+- **协议版本要自己跟**：钉在 `2025-06-18`，客户端给更新的版本时回本值（由客户端决定
+  是否继续）。协议若有不兼容变更，这里得手动跟进——这是选"手写"的已知代价。
+- **参数校验自己做**：`_require_str` / `_require_int` 挡住了空串、非整数，以及
+  `True` 这种"bool 是 int 子类"的经典坑（`chunk_id=True` 会静默变成 1 号块）。
+- **`read` 只给同文档的相邻块**：不给"整篇通读"入口——返回体积不可控，
+  容易一把把 agent 的上下文塞爆。真要通读就多次 read。
+- **`ask` 的两块输出**（正文 + 引用 JSON）不合并成一块：正文给人看、引用给 agent
+  逐条回原文核对，混在一起两边都别扭。
+- **没有鉴权**：stdio 本地子进程，能起它的人本来就坐在你机器前（与 ADR-0033 的判断
+  同源）。**将来若做 HTTP transport，口令门是前置条件，不是可选项。**
+
+**验证**（2026-09-27，本机实测）：`claude mcp list` 显示 `mikasa ✔ Connected`
+（真实客户端完成了握手与 `tools/list`）；无头会话里 agent 自主走了
+`search`（6 次换词）→ `read` → `ask` 的完整链路，在库里没有依据时如实拒答；
+`mikasa mcp --profile local` 下 `ask` 的 `[n]` 与引用清单（文档 / 章节 / chunk_id）
+逐条对得上。
+
+**代码**：`src/mikasa/mcp.py`（新：协议分派 + 三个工具 + stdio 循环）、
+`src/mikasa/cli/__init__.py`（`mcp` 命令）、`src/mikasa/pipeline/ask.py`
+（`answer()` 不落库入口、`search()` 纯检索入口）、`packaging/Mikasa.spec`
+（`mikasa.mcp` 进 hiddenimports）；测试 `tests/unit/mcp/test_mcp_server.py`（18 条）。

@@ -52,6 +52,7 @@ hiddenimports = [
     "mikasa.providers.embedding",
     "mikasa.providers.reranker",
     "mikasa.providers.llm",
+    "mikasa.mcp",  # `mikasa mcp` 在命令函数里延迟导入，静态分析看不见
     "pymupdf",  # PDF 解析（延迟导入）
     "docx",  # python-docx（延迟导入）
     "multipart",  # python-multipart：上传端点运行时依赖

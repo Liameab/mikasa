@@ -66,6 +66,46 @@ mikasa auth clear-password    # 取消后如果还绑着 0.0.0.0，下次启动�
 - **装的是安装版也一样**：把 `web.host: 0.0.0.0` 写进 `%LOCALAPPDATA%\Mikasa\config.yaml`
   即可（口令用 `Mikasa.exe auth set-password` 设）。
 
+## 2c. 把知识库挂给 agent 用（MCP）
+
+除了网页和命令行，Mikasa 还能作为 **MCP server** 挂到 Claude Code / Codex 这类
+agent 上——让它们直接查你的资料（ADR-0036）。
+
+**两条命令**：
+
+```bash
+# 1) 注册（Claude Code；`--` 后面是启动这个 server 的命令）
+claude mcp add mikasa -- python -m mikasa mcp --profile local
+#    源码版请把 python 换成仓库里的 .venv/Scripts/python.exe；
+#    安装版换成 Mikasa.exe 的完整路径（例如 "D:\项目\Mikasa\Mikasa.exe"）
+
+# 2) 验证：应显示 mikasa ✔ Connected
+claude mcp list
+```
+
+注册完**重开一次 Claude Code 会话**（MCP server 在会话启动时加载），然后直接
+提问即可，agent 会自己决定用哪个工具。
+
+**它给了 agent 什么**（只有三个工具，**全部只读**）：
+
+| 工具 | 干什么 |
+| --- | --- |
+| `search` | 在知识库里检索，返回带出处的片段（标题 / 章节 / 页码 / `chunk_id`），不生成答案 |
+| `read` | 按 `chunk_id` 读该块全文 + 前后各一块（补上下文） |
+| `ask` | 生成回答：正文带 `[n]` 标记，另附引用清单，可逐条回原文核对 |
+
+**几条要说清楚的**：
+
+- **只读**：没有入库 / 删除 / 改设置的工具——agent 用你的库这件事**没有破坏面**，
+  这正是可以放心把客户端指过来的原因。
+- **agent 的提问不落库**：它问的每一句都不会出现在你的问答历史里（要回溯看客户端的
+  会话记录）。这是刻意的：否则你的学习历史会被 agent 的提问淹掉。
+- **档位由你定，不由客户端定**：`--profile` 在注册命令里写死；工具参数里没有档位。
+- **offline（mock）档下 `ask` 会如实说"本档只用 search / read"**，而不是报错打断
+  agent 会话。想要生成式回答就用 `local` 或 `api` 档注册。
+- **它读的是哪个库**：源码版 = 仓库的 `data/`；安装版 = `%LOCALAPPDATA%\Mikasa`。
+  想在注册命令里固定，加 `-e MIKASA_DATA_DIR=<路径>`。
+
 ## 3. 页面导览
 
 顶栏四页：**问答**（主页）/ **知识库** / **找论文** / **评测**；右上角状态胶囊显示当前模型与连接实况。

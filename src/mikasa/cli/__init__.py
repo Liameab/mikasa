@@ -6,6 +6,7 @@
   ingest / list / index stats / ask / chat   —— M1 提供
   eval    评测体系                                 —— M2 提供
   serve   Web 服务                                 —— M3 提供
+  mcp     MCP server（把知识库挂给 agent 用，stdio） —— 2026-09-27 提供
 """
 
 from __future__ import annotations
@@ -1012,6 +1013,42 @@ def serve(
         )
     else:
         uvicorn.run(create_app(settings), host=listen_host, port=listen_port, ws="none")
+
+
+@app.command()
+def mcp(
+    profile: PROFILE_OPT = "api",
+    config: CONFIG_OPT = None,
+) -> None:
+    """把知识库挂给 agent 用（MCP server，stdio 传输）。
+
+    工具只有三个、全部只读（方括号按转义显示）：search（检索片段 + 出处）/
+    read（按 chunk_id 读原文，带前后各一块）/ ask（带 \\[n] 引用的答案 + 引用
+    清单）。不提供 ingest / delete / settings 任何写工具——"让 agent 用你的库"
+    必须没有破坏面。
+
+    客户端（Claude Code / Codex 等）负责拉起本进程：它是一次性的 stdio 子进程，
+    不是 `mikasa serve` 那个长期服务（生命周期模型不同，故不复用）。
+
+    档位从配置来（--profile / --config），不在工具参数里——客户端不该能替你
+    切档。offline（mock）档下 ask 会如实说"仅 search 可用"，而不是崩掉
+    agent 会话。
+
+    接入 Claude Code：claude mcp add mikasa -- <解释器> -m mikasa mcp
+    （打包版直接指向 Mikasa.exe，不要 -m）。
+    """
+    from mikasa.mcp import serve_stdio
+
+    # **stdout 只跑 JSON-RPC**：横幅、提示一律走 stderr，否则客户端解析失败
+    console = Console(stderr=True)
+    settings = load_settings(profile, config)
+    if settings.llm.backend == "mock":
+        console.print("[yellow]离线档（mock 模型）：ask 会返回说明，search / read 正常。[/]")
+    console.print(
+        f"[green]MCP server 已就绪[/]（stdio，profile={settings.profile}）",
+        highlight=False,
+    )
+    serve_stdio(settings)
 
 
 def _ensure_console_encoding() -> None:

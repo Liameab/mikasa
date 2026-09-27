@@ -43,6 +43,7 @@
 | F5 | Local reranker (local profile) | Enabling rerank requires a fastembed version survey first | ADR-0014 ②; the LocalReranker case in limitations §4 | Unscheduled |
 | F6 | Session-management follow-ups | Drag-and-drop moves, titles that keep updating as a thread grows, search / archive / pin, persisted expand state | The "explicitly out of scope" list from the M4.5 plan | Unscheduled |
 | F7 | Mobile (in the spirit of the DeepSeek / Doubao apps) | Explicitly "not polished, can wait". Two tiers: (1) same-Wi-Fi LAN access, which already works (`serve --host 0.0.0.0` plus a firewall rule, then open it in a phone browser) → (2) away from home: cloud server plus domain (paid, standalone milestone, domain and HTTPS solved together) | The essence is "which machine runs the service the phone can reach" — a web UI needs no app | Unscheduled |
+| F8 | Two follow-ups for MCP | (1) **HTTP transport** (it would have to take on ADR-0033's password gate and the session semantics: who is asking, whose session, how the password travels — ADR-0036 already states it is "a precondition, not an option") → (2) **tool-call evaluation** (roadmap §4-B: tool-selection accuracy, number of calls per answered question, whether citations survive a round trip, failure-mode taxonomy). The 2026-09-27 headless run already produced the first trace: six rephrasings of `search` found nothing, so `ask` refused honestly (refused=true, empty citations) | ADR-0036; the schedule is in `tech-roadmap-reply.md` §5 (MCP is item 1, now done) | Unscheduled |
 
 ## 3. Engineering candidates (re-runs and hardening)
 
@@ -51,7 +52,7 @@
 | E1 | Local semantic-quality comparison | The judge is disabled in the local profile (ADR-0014 ③), so semantic quality has no judge confirmation — re-checking needs a local judge or a side-by-side comparison against the api profile | Unscheduled |
 | E2 | Eval wall-clock cost | A full 63-question local run takes ~25–35 minutes (4–5 on api) — CI only runs the offline protocol layer | Accepted; recorded in evaluation.md §5 |
 | E3 | Mock-LLM boundary | Offline runs carry no semantics (protocol self-check only); 7/16 unanswerable questions mis-answered is evidence of the mock's limits | Accepted; recorded in evaluation.md §5 and limitations §3 |
-| E4 | Coverage baseline guard | The baseline was 91% — new M4.5 modules need a fresh measurement and an update in evaluation.md | Updated: 93% (M4.5 wrap-up, 2026-09-09; see evaluation.md) |
+| E4 | Coverage baseline guard | The baseline was 91% — new M4.5 modules need a fresh measurement and an update in evaluation.md | Updated: **92%** (re-measured on 2026-09-27 during the MCP round: 8363 statements, 1106 passed + 2 skipped; the previous 92% was 8190 statements / 1085 passed — see evaluation.md) |
 
 ## 4. Explicitly not doing (so it does not get re-litigated)
 

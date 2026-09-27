@@ -234,6 +234,37 @@ class AskService:
                 self._record(session_id, question, event.answer)
             yield event
 
+    def answer(self, question: str) -> Answer:
+        """单轮问答，**不建会话、不落库**（MCP server 等只读调用方用）。
+
+        与 ask() 的差异只有两处：不带历史摘要、不写 qa_sessions/qa_messages；
+        检索 → 生成 → 引用解析与 ask 完全同轨（同一个 `_answer`）。
+        为什么要有这条路：让 agent 用知识库这件事必须没有副作用——
+        它问的每一句都写进用户的问答历史，用户就不敢把客户端指过来了。
+        """
+        question = question.strip()
+        if not question:
+            raise StorageError("问题为空")
+        return self._answer(question, None)
+
+    def search(
+        self,
+        question: str,
+        *,
+        top_k: int = 5,
+        document_id: int | None = None,
+    ) -> list[RetrievedChunk]:
+        """纯检索（不生成、不落库）：MCP 的 search 工具用。
+
+        与 ask 走同一条检索链路——跨语言第二路、语料为空检查、索引快照缓存
+        都在 `_retrieve` 里，这里只是砍掉生成段并按 top_k 截断。
+        """
+        question = question.strip()
+        if not question:
+            raise StorageError("问题为空")
+        hits, _latency, _t0 = self._retrieve(question, document_id=document_id)
+        return hits[:top_k]
+
     def chat(
         self,
         session_id: int,

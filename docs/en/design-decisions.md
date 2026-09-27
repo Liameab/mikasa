@@ -61,6 +61,7 @@
 | ADR-0033 | Browser access and a shared password: exposing the service requires a password (fail closed) | Accepted |
 | ADR-0034 | Reader "ask as you read": ask in place, show every hit, nothing persists | Accepted |
 | ADR-0035 | Cross-document one hop: note `[[wiki links]]` become doc_links, plus an **off-by-default** neighbour expansion | Accepted |
+| ADR-0036 | MCP server: hand-written stdio JSON-RPC and three read-only tools (`mikasa mcp`) | Accepted |
 
 ---
 
@@ -2263,3 +2264,83 @@ allow-list parameterisation of `oneside`), `config/settings.py`
 `web/routers/documents.py` (syncs links after a successful `_ingest_note_file`);
 tests `tests/unit/ingest/test_wikilinks.py` (9 cases) and
 `tests/unit/pipeline/test_retriever.py` (3 hop cases).
+
+---
+
+## ADR-0036 MCP server: hand-written stdio JSON-RPC and three read-only tools (`mikasa mcp`)
+
+- Status: Accepted | 2026-09-27 (the user chose: hand-written, no session records,
+  `read` returns neighbours, MCP only for this round)
+- Related: ADR-0013 (the kb/free answer modes), ADR-0033 (the password gate — this
+  ADR deliberately **does not touch it**), the roadmap negotiation notes
+  (`tech-roadmap-reply.md` §5, where MCP comes first)
+
+**Background**: among the post-M8 directions, MCP is the only one that is **new,
+demoable on the spot, and does not touch core retrieval**: wrap the library in a set
+of tools so agents like Claude Code or Codex can query your material directly. The
+backend (HTTP API, retrieval, generation, the citation protocol) all exists — what
+was missing is the protocol layer.
+
+**Decision**:
+
+1. **Hand-written JSON-RPC, no official `mcp` SDK.** Not for the aesthetics: it is
+   about the **packaged build**. Mikasa ships through PyInstaller, so pulling in the
+   SDK means bundling it into the installer (a bigger download, hand-maintained
+   hiddenimports, and a repack on every SDK bump). The stdio surface is small —
+   newline-delimited JSON-RPC 2.0 with `initialize` / `tools/list` / `tools/call` /
+   `ping`. Zero new dependencies also means CI and the packaged build run the exact
+   same code, instead of "only the machine with the extra installed can test it".
+2. **Three tools, not two**: `search` (snippets plus provenance) → `read` (full text
+   by chunk_id, with one neighbour on each side) → `ask` (an answer with `[n]` markers
+   plus a structured citation list). Missing `read` does not mean "one feature less",
+   it means **the agent's chain is broken**: after a search that did not find enough,
+   it has no way to read more.
+3. **Read-only, not a single write tool**: no ingest / delete / settings. The reason is
+   not only safety — it is that "an agent uses your library" then **has no blast
+   radius**, which is what makes it acceptable to point a client at it at all.
+4. **stdio only**: an HTTP transport would have to take on ADR-0033's password gate and
+   the session semantics (who is asking, whose session is it, how the password travels).
+   That is a separate piece of work, not this round.
+5. **A separate entry point, `mikasa mcp`, not a mode of `serve`**: serve is a long-lived
+   service (single process, in-memory snapshots, job slots); an MCP client wants a
+   one-shot stdio child process. Different lifecycles — merging them would only drag
+   both down.
+6. **The profile comes from configuration** (`--profile` / `--config`), never from tool
+   arguments: a client should not be able to switch profiles on your behalf.
+7. **Agent questions leave no trace** (`AskService.answer()`): consistent with read-only —
+   if every question an agent asked were written into your Q&A history, you would not
+   point a client at it. For an audit trail, read the client's own transcript.
+8. **Never crash when no model is reachable**: on the offline (mock) profile `ask`
+   returns "this profile has search / read only" instead of raising — an agent session
+   being cut off by an exception is worse than an answer it does not get. This is the
+   tool-layer counterpart of the project's "failure messages must be honest" rule.
+
+**Costs and boundaries**:
+
+- **We track the protocol ourselves**: pinned at `2025-06-18`; a client offering a newer
+  revision gets this one back and decides whether to continue. If the protocol ever
+  changes incompatibly, this file has to follow by hand — the known price of hand-writing it.
+- **Argument validation is ours to write**: `_require_str` / `_require_int` reject empty
+  strings and non-integers, including the classic "bool is an int subclass" trap
+  (`chunk_id=True` would silently have become chunk 1).
+- **`read` only offers neighbours inside the same document**: there is no "dump the whole
+  document" entry, because the response size would be unbounded and would blow up the
+  agent's context in one go. To read it all, call `read` repeatedly.
+- **`ask` returns two blocks** (the answer, then citations as JSON) rather than one: the
+  prose is for the human, the citation list is for the agent to verify each claim against
+  the original — merging them reads badly on both sides.
+- **No authentication**: it is a local stdio child process, and whoever can start it is
+  already sitting at your machine (the same reasoning as ADR-0033). **If an HTTP transport
+  ever lands, the password gate is a precondition, not an option.**
+
+**Verification** (measured on this machine, 2026-09-27): `claude mcp list` reports
+`mikasa ✔ Connected` (a real client completed the handshake and `tools/list`); in a
+headless session the agent drove `search` (six rephrasings) → `read` → `ask` on its own
+and honestly refused when the library held no evidence; under
+`mikasa mcp --profile local` each `[n]` in the answer maps back to its citation entry
+(document, section, chunk_id).
+
+**Code**: `src/mikasa/mcp.py` (new: dispatch, the three tools, the stdio loop),
+`src/mikasa/cli/__init__.py` (the `mcp` command), `src/mikasa/pipeline/ask.py`
+(`answer()` for the no-record path, `search()` for retrieval-only), `packaging/Mikasa.spec`
+(`mikasa.mcp` added to hiddenimports); tests `tests/unit/mcp/test_mcp_server.py` (18 cases).

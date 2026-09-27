@@ -440,6 +440,7 @@ questions with, so that endpoint rejects with a 400 outright rather than queuein
 | Web | `mikasa serve [--config/--profile/--host/--port/--reload]` | Four pages (Q&A / library / papers / evaluation) plus a login page, SSE |
 | Health check | `mikasa doctor` | Dependencies / API keys / **local inference dependencies (the local profile gates on Ollama/fastembed)** / three-way index consistency; used as the CI smoke test (methodology in limitations-and-failures.md) |
 | Real eval run | `mikasa eval run --profile api/local` | 63 questions × three stages; the api profile takes 4-5 minutes per round |
+| MCP | `mikasa mcp [--config/--profile]` | Hands the library to an agent (Claude Code / Codex): stdio plus three read-only tools `search`/`read`/`ask`; a **one-shot child process**, so it does not reuse serve (different lifecycle, ADR-0036) |
 
 All three profiles share one configuration (switched by profile), one SQLite
 database, and one evaluation methodology — an offline session runs the entire flow

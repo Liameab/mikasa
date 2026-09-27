@@ -46,9 +46,20 @@ ollamamodels/
 docs/ideas-and-backlog.md
 # Codex 会话的交接文档：给下一个会话读的"我这摊还差什么"，同属内部工作文档
 docs/codex-handover.md
+# 技术路线协商稿与回复（Claude ↔ Codex）：过程材料，不进公开仓库
+docs/tech-roadmap-proposal.md
+docs/tech-roadmap-response.md
+docs/tech-roadmap-reply.md
 # 考研复试准备材料（个人材料，不进公开仓库）：项目手册 + 面向评审的 README 草稿
 docs/interview-handbook.md
 docs/advisor-readme.md
+# 个人简历（含联系方式与照片路径，不进公开仓库）
+docs/resume-zhangzhixuan.html
+docs/resume-zhangzhixuan.docx
+docs/resume-job-zhangzhixuan.docx
+docs/resume-photo.jpg
+# 技术路线提案（Claude ↔ Codex 的协商稿）：内部工作文档，不进公开仓库
+docs/tech-roadmap-proposal.md
 
 # ===== 本地工具产物与配置 =====
 # 无头 Chrome 验收截图

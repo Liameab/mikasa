@@ -43,7 +43,7 @@ def _isolate(cli: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
 def test_help_lists_commands():
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    for cmd in ("init", "doctor", "ingest", "list", "ask", "chat", "index"):
+    for cmd in ("init", "doctor", "ingest", "list", "ask", "chat", "index", "mcp"):
         assert cmd in result.output
 
 

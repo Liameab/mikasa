@@ -71,6 +71,51 @@ mikasa auth clear-password    # after this, a 0.0.0.0 bind is refused again
   `%LOCALAPPDATA%\Mikasa\config.yaml` (and set the password with
   `Mikasa.exe auth set-password`).
 
+## 2c. Handing the library to an agent (MCP)
+
+Besides the web app and the CLI, Mikasa can run as an **MCP server** for agents such as
+Claude Code or Codex, so they can search your material directly (ADR-0036).
+
+**Two commands**:
+
+```bash
+# 1) Register it (Claude Code; everything after `--` starts the server)
+claude mcp add mikasa -- python -m mikasa mcp --profile local
+#    From a source checkout use the repo's .venv/Scripts/python.exe instead;
+#    for the installed build use the full path to Mikasa.exe.
+
+# 2) Verify: it should report mikasa ✔ Connected
+claude mcp list
+```
+
+Start a **new Claude Code session** afterwards (MCP servers load at session start), then
+just ask — the agent decides which tool to use on its own.
+
+**What the agent gets** (three tools, **all read-only**):
+
+| Tool | What it does |
+| --- | --- |
+| `search` | Retrieves snippets with provenance (title / section / page / `chunk_id`); no answer |
+| `read` | Fetches a chunk in full plus one neighbour on each side, by `chunk_id` |
+| `ask` | Generates an answer whose `[n]` markers match a citation list you can verify entry by entry |
+
+**Things worth knowing**:
+
+- **Read-only**: there is no tool for ingesting, deleting or changing settings — an agent
+  using your library **has no blast radius**, which is exactly why pointing a client at it
+  is safe.
+- **Agent questions leave no trace**: nothing it asks shows up in your Q&A history (look at
+  the client's transcript instead). This is deliberate — otherwise agent traffic would drown
+  your own study history.
+- **The profile is yours to set, not the client's**: `--profile` is fixed in the registration
+  command; there is no profile argument on any tool.
+- **On the offline (mock) profile `ask` says plainly that only search / read are available**
+  instead of raising and breaking the agent session. Register with `local` or `api` if you
+  want generated answers.
+- **Which library it reads**: a source checkout uses the repo's `data/`; the installed build
+  uses `%LOCALAPPDATA%\Mikasa`. To pin it, add `-e MIKASA_DATA_DIR=<path>` to the
+  registration command.
+
 ## 3. Page Tour
 
 Four pages in the top bar: **Chat** (home) / **Library** / **Papers** / **Evaluation**; the status pill in the top right shows the current model and the live connection state.
