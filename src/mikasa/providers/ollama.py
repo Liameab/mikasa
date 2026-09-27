@@ -19,6 +19,7 @@ from typing import Any
 
 from mikasa.config.settings import LLMConfig
 from mikasa.errors import ConfigError, ProviderError
+from mikasa.pipeline.prompts import STRUCTURED_SCHEMA  # 与提示词契约同源（llm.py 已有同款依赖）
 from mikasa.providers.llm import Completion, normalize_base_url
 from mikasa.utils.logging import get_logger
 
@@ -168,6 +169,11 @@ class OllamaNativeLLM:
         self._config = config
         self.model = config.model
         self._timeout = timeout if timeout is not None else config.timeout_seconds
+        # 最近一次流式调用的用量（B2，2026-09-27）：NDJSON 的收尾帧本来就有
+        # prompt_eval_count / eval_count，此前读都没读——网页问答那条路的 token
+        # 恒为 None，"我花了多少"在主力路径上看不见。不是 Protocol 方法
+        # （加进协议会波及十来处测试替身，见 ADR-0038）。
+        self.last_usage: tuple[int | None, int | None] = (None, None)
 
     # ---- 内部：请求组装与发送 ----
 
@@ -184,11 +190,18 @@ class OllamaNativeLLM:
         temperature: float,
         max_tokens: int,
         stream: bool,
+        structured: bool = False,
     ) -> dict[str, Any]:
         """请求体：思考模式与上下文长度只在**显式配置**时才带上。
 
         不写 `think` 时由模型自己决定（qwen3 默认思考）；不写 `num_ctx` 时用
         Ollama 的默认上下文（本机实测 4096）——"没配置"与"关掉"是两件事。
+
+        `format: <JSON schema>` 是**受约束解码**（token 级保证符合结构，Ollama 0.5+
+        起支持；本机 0.34.2 实测可用）——这是 local 档与 api 档（DeepSeek 只有
+        json_object）在结构化输出上的**本质差别**，A/B 的结论必须分开说（ADR-0037）。
+        只由**调用方显式要求**（答案生成那一次）且**非流式**时带上：辅助调用
+        （查询翻译 / 双语对照 / 标题提炼）与流式一律走文本标记。
         """
         options: dict[str, Any] = {"temperature": temperature, "num_predict": max_tokens}
         if self._config.num_ctx:
@@ -201,6 +214,8 @@ class OllamaNativeLLM:
         }
         if self._config.think is not None:
             body["think"] = self._config.think
+        if structured and not stream:
+            body["format"] = STRUCTURED_SCHEMA
         return body
 
     def _open(self, body: dict[str, Any]):
@@ -233,9 +248,20 @@ class OllamaNativeLLM:
     # ---- 协议实现 ----
 
     def complete(
-        self, messages: list[dict[str, str]], *, temperature: float, max_tokens: int
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float,
+        max_tokens: int,
+        structured: bool = False,
     ) -> Completion:
-        body = self._body(messages, temperature=temperature, max_tokens=max_tokens, stream=False)
+        body = self._body(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=False,
+            structured=structured,
+        )
         with self._open(body) as resp:
             try:
                 data = json.loads(resp.read().decode("utf-8", "replace"))
@@ -256,7 +282,12 @@ class OllamaNativeLLM:
     def stream(
         self, messages: list[dict[str, str]], *, temperature: float, max_tokens: int
     ) -> Iterator[str]:
-        """NDJSON 流：只把 `message.content` 当答案增量；`message.thinking` 计数留证。"""
+        """NDJSON 流：只把 `message.content` 当答案增量；`message.thinking` 计数留证。
+
+        收尾帧（`done: true`）带 `prompt_eval_count` / `eval_count`——顺手记进
+        `last_usage`，让流式问答也有 token 数字（2026-09-27，ADR-0038）。
+        """
+        self.last_usage = (None, None)
         body = self._body(messages, temperature=temperature, max_tokens=max_tokens, stream=True)
         thinking_chars = 0
         answered = 0
@@ -280,6 +311,10 @@ class OllamaNativeLLM:
                     answered += len(piece)
                     yield piece
                 if chunk.get("done"):
+                    self.last_usage = (
+                        chunk.get("prompt_eval_count"),
+                        chunk.get("eval_count"),
+                    )
                     break
         if answered or not thinking_chars:
             return

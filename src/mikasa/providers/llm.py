@@ -45,9 +45,20 @@ class LLMProvider(Protocol):
     model: str
 
     def complete(
-        self, messages: list[dict[str, str]], *, temperature: float, max_tokens: int
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float,
+        max_tokens: int,
+        structured: bool = False,
     ) -> Completion:  # noqa: E501
-        """非流式补全：返回文本与 token 用量。"""
+        """非流式补全：返回文本与 token 用量。
+
+        `structured=True` 表示"这次调用要的是 `[n]` 协议的 JSON 承载"——
+        **只有答案生成那一次调用该带它**（2026-09-27 实踩：把开关挂在 provider
+        配置上时，查询翻译、双语对照、会话标题提炼**全都**被切成了 JSON 模式，
+        跨语言第二路整场静默失效）。辅助调用一律不传，默认 False。
+        """
         ...
 
     def stream(
@@ -148,6 +159,10 @@ class OpenAICompatLLM:
         self.model = config.model
         self._max_retries = max_retries
         self._client: Any = None  # openai.OpenAI，惰性构造
+        # 最近一次**流式**调用的用量（B2，2026-09-27）：流式响应原先拿不到
+        # usage，网页问答那条路的 token 恒为 None，"我花了多少"在主力路径上看不见。
+        # 这里不是 Protocol 方法——加进协议会波及十来处测试替身（ADR-0038）。
+        self.last_usage: tuple[int | None, int | None] = (None, None)
 
     def _get_client(self) -> Any:
         if self._client is None:
@@ -155,10 +170,31 @@ class OpenAICompatLLM:
         return self._client
 
     def _create(
-        self, messages: list[dict[str, str]], *, temperature: float, max_tokens: int, stream: bool
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float,
+        max_tokens: int,
+        stream: bool,
+        structured: bool = False,
+        include_usage: bool = True,
     ) -> Any:  # noqa: E501
-        """统一入口：把 openai SDK 的异常翻译为可读的 ProviderError。"""
+        """统一入口：把 openai SDK 的异常翻译为可读的 ProviderError。
+
+        - `response_format=json_object`：只由**调用方**显式要求时带（`structured`），
+          且仅非流式（结构化输出只做非流式，流式仍走文本标记，见 ADR-0037）。
+          DeepSeek 只认 json_object，不像 OpenAI 的 json_schema 那样受约束解码——
+          符合 schema 靠提示词 + 客户端校验，靠得住靠不住由评测的"格式失败率"回答。
+          **不加到配置上**：那样会让翻译/提炼这些辅助调用也被切成 JSON，
+          2026-09-27 实测整场跨语言第二路静默失效。
+        - `stream_options.include_usage`：仅流式，让末帧带用量。
+        """
         client = self._get_client()
+        extra: dict[str, Any] = {}
+        if structured and not stream:
+            extra["response_format"] = {"type": "json_object"}
+        elif stream and include_usage:
+            extra["stream_options"] = {"include_usage": True}
         try:
             return client.chat.completions.create(
                 model=self.model,
@@ -166,6 +202,7 @@ class OpenAICompatLLM:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 stream=stream,
+                **extra,
             )
         except Exception as exc:  # openai 抛出的鉴权/限流/网络/超时异常
             raise ProviderError(
@@ -174,10 +211,19 @@ class OpenAICompatLLM:
             ) from exc
 
     def complete(
-        self, messages: list[dict[str, str]], *, temperature: float, max_tokens: int
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float,
+        max_tokens: int,
+        structured: bool = False,
     ) -> Completion:  # noqa: E501
         response = self._create(
-            messages, temperature=temperature, max_tokens=max_tokens, stream=False
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=False,
+            structured=structured,
         )
         usage = getattr(response, "usage", None)
         if not response.choices:
@@ -196,9 +242,23 @@ class OpenAICompatLLM:
     def stream(
         self, messages: list[dict[str, str]], *, temperature: float, max_tokens: int
     ) -> Iterator[str]:  # noqa: E501
-        response = self._create(
-            messages, temperature=temperature, max_tokens=max_tokens, stream=True
-        )
+        self.last_usage = (None, None)
+        try:
+            response = self._create(
+                messages, temperature=temperature, max_tokens=max_tokens, stream=True
+            )
+        except ProviderError:
+            # 有些 OpenAI 兼容服务不认 stream_options（直接 400）。这里退一步重试
+            # "不带用量"的正常流式：丢的只是 token 数字，不该丢整个回答
+            # （2026-09-27；DeepSeek / SiliconFlow 两家都认，但兼容面说不准）。
+            logger.debug("上游不接受 stream_options.include_usage，改为不带用量重试")
+            response = self._create(
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=True,
+                include_usage=False,
+            )
         return self._iter_stream(response)
 
     def _iter_stream(self, response: Any) -> Iterator[str]:
@@ -208,9 +268,18 @@ class OpenAICompatLLM:
         （长回答很常见）原先原样抛出 → 上层判不出 ZhiwenError → 用户只看到
         "服务器内部错误"，而非流式路径同样失败时却给得出"模型/地址/原因"
         （2026-09-20 审查实测）。空候选帧同理（部分网关会在末尾补一帧空 choices）。
+
+        用量收尾帧（2026-09-27）：带 include_usage 时，末帧是"空 choices + 带
+        usage"，所以在 continue 之前先把用量抠出来存进 last_usage。
         """
         try:
             for chunk in response:
+                usage = getattr(chunk, "usage", None)
+                if usage is not None:
+                    self.last_usage = (
+                        getattr(usage, "prompt_tokens", None),
+                        getattr(usage, "completion_tokens", None),
+                    )
                 if not chunk.choices:
                     continue  # 心跳/收尾帧：没有候选就跳过，不算失败
                 yield chunk.choices[0].delta.content or ""
@@ -323,9 +392,16 @@ class MockLLM:
         return match.size
 
     def complete(
-        self, messages: list[dict[str, str]], *, temperature: float, max_tokens: int
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float,
+        max_tokens: int,
+        structured: bool = False,
     ) -> Completion:  # noqa: E501
-        del temperature, max_tokens  # mock 输出确定性，忽略采样参数
+        # mock 输出确定性，忽略采样参数；structured 同理——它产不出 JSON，
+        # Generator 在 mock 档本来就会退回标记路径（见 generator._structured）
+        del temperature, max_tokens, structured
         question: str | None = None
         for message in reversed(messages):
             if message["role"] == "user":

@@ -117,6 +117,19 @@ export function fmtLatency(latency, totalSec = null) {
   return head ? `${head}（${items.join(" · ")}）` : items.join(" · ");
 }
 
+/** 用量文案：`输入 1,234 / 输出 567 tokens`（2026-09-27，ADR-0038）。
+ *
+ * 两个数都为 null 时返回空串——**"没测到"不显示成 0**：2026-09-27 之前的
+ * 流式回答本来就拿不到 usage，把它们写成 "0 tokens" 是在编数字。
+ * 只有一个数有值时也照实显示（另一个写 "—"）。
+ */
+export function fmtTokens(promptTokens, completionTokens) {
+  const has = (v) => v !== null && v !== undefined;
+  if (!has(promptTokens) && !has(completionTokens)) return "";
+  const num = (v) => (has(v) ? Number(v).toLocaleString("en-US") : "—");
+  return `输入 ${num(promptTokens)} / 输出 ${num(completionTokens)} tokens`;
+}
+
 /* ------------------------------------------------------------------ */
 /* 页级瞬时消息                                                        */
 /* ------------------------------------------------------------------ */

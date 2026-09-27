@@ -55,3 +55,9 @@ class Answer(BaseModel):
     latency_ms: dict[str, float] = {}  # {"retrieve":…, "rerank":…, "generate":…}
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    # 结构化输出（ADR-0037）的两个附加字段：老载荷没有它们也能照常读（有默认值）。
+    # structured 让评测知道"这一场走的是哪条承载路径"；format_ok 是**结构化路径
+    # 专有**的可观测信号——JSON 解析/校验是否通过（标记路径恒 None：那条路的
+    # "格式失败"表现为"没有标记"，由 no_citation 覆盖，两者分母不同不可直接比）。
+    structured: bool = False
+    format_ok: bool | None = None

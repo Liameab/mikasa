@@ -419,7 +419,18 @@ class AskService:
             parts.append(piece)
             yield StreamEvent(kind="delta", text=piece)
 
-        answer = generator.build_answer("".join(parts), question, hits, titles)
+        # 流式用量（2026-09-27，ADR-0038）：provider 在流尽后把末帧的用量放在
+        # `last_usage` 上（协议方法会波及十来处测试替身，所以用属性 + getattr）。
+        # 拿不到就是 (None, None)，界面显示"—"，不假装是 0。
+        prompt_tokens, completion_tokens = getattr(self._llm, "last_usage", (None, None))
+        answer = generator.build_answer(
+            "".join(parts),
+            question,
+            hits,
+            titles,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
         answer = answer.model_copy(update={"latency_ms": self._finalize_latency(latency, t0)})
         # 双语块作为额外 delta 在 done 前流出：保证 delta 拼接 === done.text
         # （流式契约测试锁定），且落库 content 已是含块的终态

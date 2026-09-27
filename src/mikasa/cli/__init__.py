@@ -7,6 +7,7 @@
   eval    评测体系                                 —— M2 提供
   serve   Web 服务                                 —— M3 提供
   mcp     MCP server（把知识库挂给 agent 用，stdio） —— 2026-09-27 提供
+  usage   本机累计 token 用量（问答 + 评测）        —— 2026-09-27 提供
 """
 
 from __future__ import annotations
@@ -386,6 +387,107 @@ def ingest(
         raise typer.Exit(code=1)
 
 
+@app.command()
+def usage(
+    profile: PROFILE_OPT = "api",
+    config: CONFIG_OPT = None,
+) -> None:
+    """本机累计用量：问答与评测各烧了多少 token（不报钱，见下）。
+
+    数据来自两处**本地**记录：`qa_messages` 的两列用量（每次问答落库时写），
+    与评测报告里逐题的 token（`metrics_json`）。全是本机数字，不上传任何地方。
+
+    **只报 token、不折算价格**：模型单价随时在变（DeepSeek 一年内改过三次计价，
+    还有峰谷差价），写死一个汇率等于在报告里埋一个注定过期的数字。要算钱，
+    拿这里的 token 乘你所用模型的现行单价即可。
+
+    "没测到"与"0 token"分开算：流式响应在 2026-09-27 之前拿不到用量（ADR-0038），
+    那部分消息不计入条数，也不当成 0。
+    """
+    from mikasa.storage import repo
+    from mikasa.storage.db import open_db
+
+    console = Console()
+    settings = load_settings(profile, config)
+    with open_db(settings.db_path) as conn:
+        qa_rows = repo.usage_by_profile(conn)
+        eval_runs = repo.list_all_eval_runs(conn)
+
+    qa_total = (sum(r[1] for r in qa_rows), sum(r[2] for r in qa_rows), sum(r[3] for r in qa_rows))
+    console.print(f"[bold]用量汇总[/]（本机数据目录：{settings.data_dir}）\n")
+
+    if qa_rows:
+        table = Table(title="问答（按 profile）")
+        for col in ("profile", "条数", "输入 tokens", "输出 tokens", "合计"):
+            table.add_column(col)
+        for name, prompt, completion, count in qa_rows:
+            table.add_row(
+                name, str(count), f"{prompt:,}", f"{completion:,}", f"{prompt + completion:,}"
+            )
+        console.print(table)
+    else:
+        console.print("[yellow]问答侧还没有可统计的用量记录。[/]")
+    console.print("")
+
+    eval_rows: list[tuple[int, str, int, int, int]] = []
+    for row in eval_runs:
+        try:
+            data = json.loads(row.get("metrics_json") or "{}")
+        except json.JSONDecodeError:
+            continue
+        gen = data.get("generation") or {}
+        prompt = int(gen.get("prompt_tokens") or 0)
+        completion = int(gen.get("completion_tokens") or 0)
+        if prompt or completion:
+            eval_rows.append(
+                (
+                    int(row["id"]),
+                    str(row.get("eval_set_name") or "—"),
+                    prompt,
+                    completion,
+                    int(gen.get("token_samples") or 0),
+                )
+            )
+    if eval_rows:
+        table = Table(title="评测（按场次）")
+        for col in ("run", "场次", "题数", "输入 tokens", "输出 tokens", "合计"):
+            table.add_column(col)
+        for run_id, set_name, prompt, completion, samples in eval_rows:
+            table.add_row(
+                f"#{run_id}",
+                set_name,
+                str(samples),
+                f"{prompt:,}",
+                f"{completion:,}",
+                f"{prompt + completion:,}",
+            )
+        console.print(table)
+    else:
+        console.print("[yellow]评测侧还没有可统计的用量（老报告没有逐题 token）。[/]")
+    console.print("")
+
+    eval_total = (
+        sum(r[2] for r in eval_rows),
+        sum(r[3] for r in eval_rows),
+        sum(r[4] for r in eval_rows),
+    )
+    console.print(
+        Panel(
+            f"[bold]问答[/]  输入 {qa_total[0]:,} ／ 输出 {qa_total[1]:,}"
+            f" ／ 合计 {qa_total[0] + qa_total[1]:,} tokens（{qa_total[2]} 条）\n"
+            f"[bold]评测[/]  输入 {eval_total[0]:,} ／ 输出 {eval_total[1]:,}"
+            f" ／ 合计 {eval_total[0] + eval_total[1]:,} tokens（{eval_total[2]} 题）\n"
+            f"[bold]总计[/]  {qa_total[0] + qa_total[1] + eval_total[0] + eval_total[1]:,} tokens",
+            title="[bold]本机累计[/]",
+            border_style="green",
+        )
+    )
+    console.print(
+        "[dim]口径：只报 token 不报钱（模型单价会变）；条数只算**有用量记录**的那些，"
+        "流式响应在 2026-09-27 前没采集用量，不计入也不当 0。[/]"
+    )
+
+
 @app.command(name="list")
 def list_documents(
     profile: PROFILE_OPT = "api",
@@ -548,12 +650,19 @@ def run(
     ] = resource_root() / "evals" / "golden_set.json",
     profile: PROFILE_OPT = "api",
     config: CONFIG_OPT = None,
+    name: Annotated[
+        str | None,
+        typer.Option("--name", help="场次标签（落库名与报告文件名；如 api-json）"),
+    ] = None,
 ) -> None:
     """执行一次完整评测并落库 eval_runs（报告同时写入 data/eval-reports/）。
 
     前置：语料已导入 + 黄金集已冻结（tools/build_golden.py）。
     语料变动只跳过受影响的那几道题（报告里逐条写明）；全部可答题都对不上
     才会报错并提示重建题库。
+
+    --name 用来区分"同一份题库、同一档配置下的多次跑"（A/B 对照、改提示词前后），
+    落库名与文件名都带上它，报告头部也会写明——两组数字不该被当成同一场比。
     """
     from mikasa.eval.golden import load_golden
     from mikasa.eval.service import run_and_persist
@@ -575,12 +684,13 @@ def run(
         f"[bold]开始评测[/] 黄金集=[cyan]{golden_set.name}[/]"
         f" 题量={len(golden_set.items)}（可答 {len(golden_set.answerable)}"
         f"/ 不可答 {len(golden_set.unanswerable)}） profile={settings.profile}"
+        + (f" 场次=[cyan]{name}[/]" if name else "")
     )
 
     # ---- 编排复用层：执行 → 落库 → 渲染回填 → 写报告 ----
     # （cli 与 Web 后台任务共用；题库全对不上/空库在此翻译为红字退出）
     try:
-        persisted = run_and_persist(settings, golden_set)
+        persisted = run_and_persist(settings, golden_set, name=name)
     except ZhiwenError as exc:
         # 捕到基类：评测阶段 A/B 会真的调 LLM/嵌入，上游失败（密钥错/限流/
         # Ollama 未启动）抛 ProviderError——它不在 EvalError/StorageError 的
@@ -771,6 +881,93 @@ def eval_compare(
         "[dim]口径：逐题配对 + bootstrap 2000 次重采样（种子固定，同数据同结果）；"
         "区间读作「若另抽一批同分布的题，差值均值大概落在哪」。[/]"
     )
+
+    # ---- 生成层配对（2026-09-27 起）----
+    # 检索层回答"找得全不全"，生成层回答"引用守不守纪律"——A/B（结构化输出、
+    # 改提示词）主要动的是后者，没有这一段就只能比检索数字。
+    # 与检索层不同：**每道题的分母不一样**（有的题没引用、有的题走了另一条
+    # 序列化路径），所以逐题取值 + 求交集，并把实际配上的题数写进表里。
+    raw_metrics: dict[int, dict[str, Any]] = {}
+    for rid, row in found.items():
+        try:
+            raw_metrics[rid] = json.loads(row["metrics_json"] or "{}")
+        except json.JSONDecodeError:
+            raw_metrics[rid] = {}
+    gen_items: dict[int, dict[str, dict[str, Any]]] = {
+        rid: {
+            str(record["id"]): record
+            for record in (data.get("items") or [])
+            if isinstance(record, dict) and "id" in record
+        }
+        for rid, data in raw_metrics.items()
+    }
+
+    def citation_gold_of(record: dict[str, Any]) -> float | None:
+        """引用命中 gold 的比例（只对"未拒答且有引用"的题有定义）。"""
+        if record.get("refused") or not record.get("citations"):
+            return None
+        return float(record.get("gold_hits", 0)) / float(record["citations"])
+
+    def out_of_range_of(record: dict[str, Any]) -> float | None:
+        """越界/自造编号占比（只对"未拒答且带标记"的题有定义）。"""
+        markers = record.get("markers") or []
+        if record.get("refused") or not markers:
+            return None
+        return (len(markers) - int(record.get("in_range", 0))) / len(markers)
+
+    def format_pass_of(record: dict[str, Any]) -> float | None:
+        """结构化格式通过率（1/0）；文本标记那组没有这个信号 → 不参与配对。"""
+        value = record.get("format_ok")
+        return None if value is None else (1.0 if value else 0.0)
+
+    gen_spec: list[tuple[str, Callable[[dict[str, Any]], float | None], bool]] = [
+        ("citation gold ↑", citation_gold_of, False),
+        ("引用越界率 ↓", out_of_range_of, True),
+        ("结构化格式通过率 ↑", format_pass_of, False),
+    ]
+    gen_table = Table(title=f"生成层配对：#{before} → #{after}")
+    for col in (
+        "指标",
+        "共同题",
+        f"#{before} 均值",
+        f"#{after} 均值",
+        "差值",
+        "95% CI（差值）",
+        "显著",
+    ):
+        gen_table.add_column(col)
+    gen_rows = 0
+    for label, gen_pick, lower_is_better in gen_spec:
+        old_map = {q: v for q, r in gen_items[before].items() if (v := gen_pick(r)) is not None}
+        new_map = {q: v for q, r in gen_items[after].items() if (v := gen_pick(r)) is not None}
+        qids = sorted(set(old_map) & set(new_map))
+        if len(qids) < 5:
+            continue  # 配上的题太少：给不出有意义的区间，直接不列（不是 0）
+        old = [old_map[q] for q in qids]
+        new = [new_map[q] for q in qids]
+        result = paired_bootstrap(old, new)
+        if result is None:  # pragma: no cover - qids 已保证非空且等长
+            continue
+        lo, hi, delta = float(result["lo"]), float(result["hi"]), float(result["delta"])
+        better = delta < 0 if lower_is_better else delta > 0
+        style = "yellow" if not result["significant"] else ("green" if better else "red")
+        gen_table.add_row(
+            label,
+            str(len(qids)),
+            f"{sum(old) / len(old):.3f}",
+            f"{sum(new) / len(new):.3f}",
+            Text(f"{delta:+.3f}", style=style),
+            Text(f"[{lo:+.3f}, {hi:+.3f}]", style=style),
+            Text("是" if result["significant"] else "否（跨 0）", style=style),
+        )
+        gen_rows += 1
+    if gen_rows:
+        console.print(gen_table)
+        console.print(
+            "[dim]生成层口径：共同题按**两个场次都算出该指标**的题求交集"
+            "（未拒答才有引用/越界，格式通过率只对结构化场次有定义）；"
+            "「共同题」列就是这一行实际配上的题数，与检索层的 47 道不是一个分母。[/]"
+        )
 
 
 # ---- index 子命令组（index stats / index rebuild 由 ingest --reindex 覆盖） ----

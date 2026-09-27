@@ -198,6 +198,17 @@ class LLMConfig(BaseModel):
     timeout_seconds: float = 60.0
     think: bool | None = None
     num_ctx: int | None = None
+    # 结构化输出（2026-09-27，ADR-0037）：生成端用 JSON 承载 `[n]` 协议，
+    # 而不是纯文本标记。**默认关**——沿用 crosslingual / hop_expand 的纪律，
+    # 新能力默认不生效，开了才影响行为（否则任何实验都会平移评测基线）。
+    #
+    # 只在**非流式**路径生效（`complete` 带参数、`stream` 不带）：Web SSE 与
+    # 阅读器流式保持文本标记（结构化流式要先攒完整 JSON 再解析，增量呈现会
+    # 退化成"最后一下全出"）。mock（offline）档自动退回标记路径。
+    #
+    # 受约束程度随 provider 不同：local 档走 Ollama 原生 format（**受约束解码**），
+    # api 档只有 json_object（只保证"是合法 JSON"，符合 schema 靠提示词 + 客户端校验）。
+    structured_output: bool = False
 
     @property
     def api_key(self) -> str | None:

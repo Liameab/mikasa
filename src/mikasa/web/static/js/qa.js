@@ -23,6 +23,7 @@ import {
   fmtLatency,
   fmtSeconds,
   fmtTime,
+  fmtTokens,
   initTopbar,
   renderAnswer,
   renderCitations,
@@ -140,7 +141,9 @@ function renderThread(messages) {
             m.refused,
             m.created_at,
             isKbMessage(m),
-            m.latency_ms
+            m.latency_ms,
+            m.prompt_tokens,
+            m.completion_tokens
           )
     )
   );
@@ -153,15 +156,28 @@ function renderThread(messages) {
  * free 轮回放的正文 [n] 不渲染成 chip（当时没有注入编号协议），
  * kb 越界红标纪律不受损（回放契约见 ADR-0013）。
  */
-function bubble(content, role, citations = [], refused = false, when = "", showCites = true, latency = null) {
+function bubble(
+  content,
+  role,
+  citations = [],
+  refused = false,
+  when = "",
+  showCites = true,
+  latency = null,
+  promptTokens = null,
+  completionTokens = null
+) {
   const wrap = el("div", { class: `msg ${role}` });
   // who 行按非空段拼装（旧写法把自带 " · " 前缀的 time 再拼一次分隔符，
-  // 渲染成 "Mikasa ·  · 09-10 22:30" 两个点）。耗时只加在 assistant 侧。
+  // 渲染成 "Mikasa ·  · 09-10 22:30" 两个点）。耗时与用量只加在 assistant 侧。
   const whoText = (name) => {
     const parts = [name];
     if (when) parts.push(fmtTime(when));
     const lat = role === "assistant" ? fmtLatency(latency) : "";
     if (lat) parts.push(lat);
+    // 用量（2026-09-27）：没测到就不显示，绝不当成 0
+    const tokens = role === "assistant" ? fmtTokens(promptTokens, completionTokens) : "";
+    if (tokens) parts.push(tokens);
     return parts.join(" · ");
   };
   const body = role === "user" ? el("p", { html: esc(content) }) : null;
@@ -314,9 +330,15 @@ async function sendQuestion() {
         const answer = data.answer;
         clearInterval(waitTimer);
         if (answer) {
-          // 收尾把等待文案换成真实耗时分段：总时长 + 各阶段去向
-          whoLine.textContent =
-            `Mikasa · ${fmtLatency(answer.latency_ms, (performance.now() - startedAt) / 1000)}`;
+          // 收尾把等待文案换成真实耗时分段：总时长 + 各阶段去向（+ 本次 token
+          // 用量：流式响应自 2026-09-27 起会带上末帧 usage，拿不到就不显示）
+          const tokens = fmtTokens(answer.prompt_tokens, answer.completion_tokens);
+          whoLine.textContent = [
+            `Mikasa · ${fmtLatency(answer.latency_ms, (performance.now() - startedAt) / 1000)}`,
+            tokens,
+          ]
+            .filter(Boolean)
+            .join(" · ");
           card.innerHTML = answer.refused
             ? `<p class="cite bad" style="display:inline-block">无据拒答</p><p>${esc(buffer || answer.text)}</p>`
             : renderAnswer(buffer || answer.text, answer.citations, mode === "kb");

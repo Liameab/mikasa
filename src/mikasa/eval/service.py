@@ -45,9 +45,15 @@ def run_and_persist(
     settings: Settings,
     golden: GoldenSet,
     *,
+    name: str | None = None,
     on_item: Callable[[ItemRecord], None] | None = None,
 ) -> PersistedEvalRun:
     """执行一次完整评测：落库 eval_runs + 写报告文件，返回产物。
+
+    name：**场次标签**（2026-09-27 起）——覆盖 `eval_set_name` 与报告文件名，
+    用来区分同一份题库、同一档配置下的多次跑（典型场景：结构化输出 A/B 的四场次
+    `api-marker` / `api-json` / `local-marker` / `local-json`）。缺省仍用题库自带
+    的 name。报告头部会同时写明题库名与场次标签，两组数字不会被当成同一场比。
 
     on_item：阶段 B/C 每完成一题回调一次（逐条留痕）——Web 后台任务的
     进度推进点；CLI 不传。
@@ -59,6 +65,7 @@ def run_and_persist(
     渲染完"的那个窗口，由 Web 轮询渲染成"评测中"。
     """
     settings.ensure_dirs()
+    set_name = name or golden.name
 
     result = EvalRunner(settings, golden).run(on_item=on_item)
 
@@ -68,20 +75,22 @@ def run_and_persist(
     with open_db(settings.db_path) as conn:
         run_id = repo.insert_eval_run(
             conn,
-            eval_set_name=golden.name,
+            eval_set_name=set_name,
             corpus_sha256=golden.corpus_sha256,
             config_json=config_json,
             metrics_json=metrics_json,
             report_md="",  # 占位：报告拿到 run_id 后渲染再回填
         )
 
-    report_md = render_report(settings, golden, result, run_id=run_id, created_at=created_at)
+    report_md = render_report(
+        settings, golden, result, run_id=run_id, created_at=created_at, set_name=set_name
+    )
     with open_db(settings.db_path) as conn:
         repo.update_eval_run_report(conn, run_id, report_md)
 
     reports_dir = settings.data_dir / "eval-reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
-    report_path = reports_dir / f"{run_id:04d}-{golden.name}.md"
+    report_path = reports_dir / f"{run_id:04d}-{set_name}.md"
     report_path.write_text(report_md, encoding="utf-8")
 
     return PersistedEvalRun(

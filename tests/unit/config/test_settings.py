@@ -107,6 +107,19 @@ def test_crosslingual_flag_per_profile(offline_settings, api_settings, local_set
     assert local_settings.retrieval.crosslingual is True  # 本地库（qwen3 翻译）同样开
 
 
+def test_structured_output_off_by_default(offline_settings, api_settings, local_settings):
+    """结构化输出（ADR-0037，2026-09-27）：**代码默认关，三个 profile 都不写它**。
+
+    这是刻意的：一开就换掉生成端的承载方式，A/B 实验与既有基线都会被它平移。
+    要开只能显式写配置（实验场次用覆盖层开），profile yaml 里不许悄悄打开。
+    """
+    from mikasa.config.settings import LLMConfig
+
+    assert LLMConfig().structured_output is False  # 代码默认
+    for settings in (offline_settings, api_settings, local_settings):
+        assert settings.llm.structured_output is False, settings.profile
+
+
 def test_bilingual_flag_per_profile(offline_settings, api_settings, local_settings):
     """双语对照开关（#8，2026-09-10）：代码默认关，local/api 档在 profile 开。
 

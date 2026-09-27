@@ -96,6 +96,7 @@ async def run(args):
             metrics = await cdp.evaluate("""(() => {
               const q = s => document.querySelectorAll(s);
               const last = [...q('.msg.assistant .bubble')].at(-1);
+              const who = [...q('.msg.assistant .who')].at(-1);
               return {
                 codeBlocks: q('.code-block').length,
                 copyButtons: q('.btn-copy').length,
@@ -105,6 +106,8 @@ async def run(args):
                 headings: q('.bubble h3, .bubble h4, .bubble h5, .bubble h6').length,
                 lists: q('.bubble ul, .bubble ol').length,
                 lastSnippet: (last ? last.textContent : '').slice(0, 60),
+                // 用量行（2026-09-27，ADR-0038）：who 行里应出现 "输入 … / 输出 … tokens"
+                whoLine: who ? who.textContent : '',
               };
             })()""")
 
@@ -134,6 +137,9 @@ async def run(args):
                 bad.append("未渲染出表格")
             if args.require_code and not metrics["codeBlocks"]:
                 bad.append("未渲染出代码块")
+            if args.require_tokens and "tokens" not in metrics["whoLine"]:
+                # 流式用量（B2/B3）：末帧 usage 没接上、或前端没渲染，这条就红
+                bad.append(f"回答行未显示 token 用量：{metrics['whoLine']!r}")
             if bad:
                 print("验收未过：" + "；".join(bad), file=sys.stderr)
                 return 1
@@ -153,6 +159,9 @@ def main():
     parser.add_argument("--mode", default="free", choices=["kb", "free"], help="问答模式")
     parser.add_argument("--require-table", action="store_true", help="断言答案含表格")
     parser.add_argument("--require-code", action="store_true", help="断言答案含代码块")
+    parser.add_argument(
+        "--require-tokens", action="store_true", help="断言回答行显示 token 用量（ADR-0038）"
+    )
     parser.add_argument("--timeout", type=int, default=300, help="等待回答收尾的超时秒数")
     parser.add_argument("--out-shot", default=None, help="截图输出路径（PNG）")
     parser.add_argument("--port", type=int, default=9333)

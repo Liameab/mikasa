@@ -30,6 +30,7 @@ def render_report(
     *,
     run_id: int | None = None,
     created_at: str | None = None,
+    set_name: str | None = None,
 ) -> str:
     """渲染一份完整 markdown 评测报告。
 
@@ -37,13 +38,19 @@ def render_report(
         settings/golden/result: 一次 run 的三要素
         run_id:     落库后的自增 id（报告头部标注，便于回溯）
         created_at: 报告时间戳（落库时间；缺省取当前本地时间）
+        set_name:   场次标签（`eval run --name`；缺省 = 题库名）。与题库名不同时
+                    在头部单独写出来——A/B 两组数字很容易被当成同一场比。
     """
     gen, judge = result.generation, result.judge
     lines: list[str] = []
     add = lines.append
     add("# Mikasa评测报告")
     add("")
-    add(_meta_table(settings, golden, result, run_id=run_id, created_at=created_at))
+    add(
+        _meta_table(
+            settings, golden, result, run_id=run_id, created_at=created_at, set_name=set_name
+        )
+    )
     add("")
     if result.skipped_items:
         # 放在最前：这是"这次评测少测了什么"，比任何指标都该先被看见
@@ -86,6 +93,17 @@ def render_report(
                     _mean_text(gen.out_of_range_rate),
                 ],
                 ["citation gold ratio（引用命中题面 gold）", _mean_text(gen.citation_gold)],
+                # 格式纪律（2026-09-27，结构化输出 A/B）：
+                # 两组的分母天生不同——标记组的"格式失败"表现为"没有标记"（已有
+                # no_citation 覆盖），结构化组才有"解析/校验失败"这个可数事件。
+                # 报告里必须写清，否则拿两组的失败率直接对比是拿苹果比橘子。
+                [
+                    "引用格式失败（结构化组可数）",
+                    f"{gen.structured_failures}/{gen.structured_items}"
+                    if gen.structured_items
+                    else "—（本场全走文本标记）",
+                ],
+                ["疑似畸形引用标记（[1, 2] 这类，诊断）", str(gen.malformed_markers)],
                 ["不可答题数", str(gen.n_unanswerable)],
                 ["拒答准确率", _rate_text(gen.refusal_clean, gen.n_unanswerable)],
                 ["不可答题误答", str(gen.answered_unanswerable)],
@@ -103,6 +121,28 @@ def render_report(
         )
     )
     add("")
+
+    # 用量（2026-09-27）：这次跑花了多少 token——A/B 对照里成本与质量同权重，
+    # 而且它是"质量-延迟-成本"那页的原料。只报 token 不报钱：模型单价随时变，
+    # 写死价格等于在报告里埋一个会过期的数字。
+    if gen.token_samples:
+        total = gen.prompt_tokens + gen.completion_tokens
+        per_item = total / gen.token_samples
+        add("**用量（token）**")
+        add("")
+        add(
+            _table(
+                ["项目", "值"],
+                [
+                    ["输入合计", f"{gen.prompt_tokens:,}"],
+                    ["输出合计", f"{gen.completion_tokens:,}"],
+                    ["总计", f"{total:,}"],
+                    ["每题平均（计入样本内）", f"{per_item:,.0f}"],
+                    ["样本数", f"{gen.token_samples}（无 usage 的题不计入）"],
+                ],
+            )
+        )
+        add("")
 
     # 作答形态（2026-09-21，交接单 P3）：提示词的"呈现规范"改了之后，只有
     # 这几个数字能当回归镜子。**只列形态、不给结论**——"用了三张表"不等于
@@ -255,12 +295,15 @@ def _meta_table(
     *,
     run_id: int | None,
     created_at: str | None,
+    set_name: str | None = None,
 ) -> str:
     """报告头部元信息表。"""
     judge_note = _judge_policy_text(settings, result.judge.judge_model)
     # 自动生成的题库必须自报家门：题是模型照着原文出的，分数天然比人工题偏高，
     # 不标注就会被当成同一把尺子去比
     set_label = f"{golden.name}（题量 {len(golden.items)}）"
+    if set_name and set_name != golden.name:
+        set_label += f"｜**场次：{set_name}**"
     if golden.source == "synthesized":
         set_label += f"，**自动生成**（{golden.model or '未知模型'}）"
     rows = [
@@ -269,6 +312,9 @@ def _meta_table(
         ["profile", result.profile],
         ["黄金集", set_label],
         ["生成模型", f"{settings.llm.backend} / {settings.llm.model}"],
+        # 序列化层（2026-09-27）：同一份题库、同一个模型，换了承载方式就是另一把尺子——
+        # 报告首部必须自报家门，否则两组数字被当成同一场比
+        ["序列化层", _serialization_text(settings)],
         ["语义裁判", judge_note],
         ["总耗时", f"{result.latency_sec:.1f}s"],
     ]
@@ -279,6 +325,13 @@ def _meta_table(
         ["项目", "值"],
         rows,
     )
+
+
+def _serialization_text(settings: Settings) -> str:
+    """生成端承载方式（报告首部用）：文本标记 / JSON 结构化。"""
+    if settings.llm.structured_output:
+        return "**JSON 结构化**（answer + citations 字段；受约束程度随 provider 不同，见 ADR-0037）"
+    return "文本标记 [n]（纯文本协议）"
 
 
 def _judge_policy_text(settings: Settings, judge_model: str) -> str:

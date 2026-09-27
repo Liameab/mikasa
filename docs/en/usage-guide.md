@@ -180,6 +180,26 @@ non-local address — see §2b.)
 - Switch to **free chat** and ask the same question there (it unfolds the principles and gives examples);
 - **Write the new understanding into your notes and upload them again** (re-uploading the same file updates it in place) → the KB can answer from then on — knowledge accumulates; that is the loop closing.
 
+### 4.4 How many tokens did that cost (usage)
+Above every answer, after the elapsed time, comes a segment like
+**`输入 3,880 / 输出 42 tokens`**. It comes from the model's own usage report and is stored
+with the message, so scrolling back through an old session shows it too.
+
+For a cumulative view ("how much have I used in total"):
+
+```bash
+mikasa usage        # Q&A by profile, evaluation by session, then a grand total
+```
+
+Two rules of the accounting (ADR-0038):
+
+- **Tokens only, never money**: model prices move constantly (and vary by time of day), so
+  a hard-coded rate would be a number guaranteed to expire. To price it, multiply the
+  tokens by whatever your model currently charges.
+- **"Not measured" is not zero**: streaming answers before 2026-09-27 carried no usage;
+  they are excluded from counts and never displayed as 0. The local profile (Ollama) is a
+  free quota — counting it is mostly about watching whether the context window runs away.
+
 ---
 
 ## 5. Free-Form Q&A in Detail

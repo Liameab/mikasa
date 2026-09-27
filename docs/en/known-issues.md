@@ -52,7 +52,7 @@
 | E1 | Local semantic-quality comparison | The judge is disabled in the local profile (ADR-0014 ③), so semantic quality has no judge confirmation — re-checking needs a local judge or a side-by-side comparison against the api profile | Unscheduled |
 | E2 | Eval wall-clock cost | A full 63-question local run takes ~25–35 minutes (4–5 on api) — CI only runs the offline protocol layer | Accepted; recorded in evaluation.md §5 |
 | E3 | Mock-LLM boundary | Offline runs carry no semantics (protocol self-check only); 7/16 unanswerable questions mis-answered is evidence of the mock's limits | Accepted; recorded in evaluation.md §5 and limitations §3 |
-| E4 | Coverage baseline guard | The baseline was 91% — new M4.5 modules need a fresh measurement and an update in evaluation.md | Updated: **92%** (re-measured on 2026-09-27 during the MCP round: 8363 statements, 1106 passed + 2 skipped; the previous 92% was 8190 statements / 1085 passed — see evaluation.md) |
+| E4 | Coverage baseline guard | The baseline was 91% — new M4.5 modules need a fresh measurement and an update in evaluation.md | Updated: **92%** (re-measured on 2026-09-27 during the MCP round: 8578 statements, 1126 passed + 2 skipped; the previous 92% was 8190 statements / 1085 passed — see evaluation.md) |
 
 ## 4. Explicitly not doing (so it does not get re-litigated)
 

@@ -55,6 +55,8 @@
 | ADR-0034 | 阅读器「边看边问」：就地提问 + 命中全给 + 即问即散 | Accepted |
 | ADR-0035 | 跨文档一跳：笔记 `[[互链]]` 落成 doc_links + 检索侧**默认关**的邻居扩展 | Accepted |
 | ADR-0036 | MCP server：手写 stdio JSON-RPC + 三个只读工具（`mikasa mcp`） | Accepted |
+| ADR-0037 | 结构化输出：协议不变，换的是序列化层（默认关、只非流式） | Accepted |
+| ADR-0038 | 用量可见性：token 的采集、显示与累计口径 | Accepted |
 
 ---
 
@@ -1861,3 +1863,117 @@ E2E `tools/chrome_reader_ask.py`（8 步真浏览器，截图 `tools/shots/reade
 `src/mikasa/cli/__init__.py`（`mcp` 命令）、`src/mikasa/pipeline/ask.py`
 （`answer()` 不落库入口、`search()` 纯检索入口）、`packaging/Mikasa.spec`
 （`mikasa.mcp` 进 hiddenimports）；测试 `tests/unit/mcp/test_mcp_server.py`（18 条）。
+
+---
+
+## ADR-0037 结构化输出：协议不变，换的是序列化层（默认关、只非流式）
+
+- 状态：Accepted ｜ 2026-09-27（用户拍板："只做非流式"、api 两组也真跑）
+- 关联：ADR-0013（kb/free 模式）、ADR-0014 ③（offline 零 LLM 调用）、
+  技术路线第 2 项（`tech-roadmap-reply.md` §2、§4-A）
+
+**背景**：`pipeline/prompts.py` 开头那句「使用纯文本标记而非 JSON 结构化输出：对
+Ollama 等本地小模型更稳、流式友好、解析失败可观测」——它决定了**项目最核心的协议层
+（`[n]` 的承载形式），却从来没有被测量过**：它是一条写在注释里的假设。
+2026 年的前提也变了：Ollama 0.5+ 原生 `format: <JSON schema>` 是**受约束解码**
+（token 级保证结构），OpenAI 有 json_schema 严格模式。
+
+**决定**：
+
+1. **开关默认关**（`llm.structured_output: false`）：沿用 `crosslingual` /
+   `hop_expand` 的纪律——新能力默认不生效，开了才影响行为，否则任何实验都会
+   平移评测基线。profile yaml 里一个都不写，要开只能显式给（实验用覆盖层）。
+2. **协议语义一个字不变**：编号仍是**注入顺序**（`[n]` ↔ 第 n 条资料），模型无权
+   自造编号；变的是承载它的序列化层。所以 JSON 路径里多出来的 `citations` 数组
+   只是**显式声明**——引用仍然从正文标记解析，声明用于校验与计数。
+3. **契约是追加的，不是另起一套提示词**：规则 1~6、呈现规范、示范逐字保留，
+   只在系统提示末尾追加 `JSON_OUTPUT_CONTRACT`；来源行多一个 `chunk_id` 供模型抄写。
+   **两条路径的差异必须可枚举**——不然 A/B 换了两个东西，谁的功劳说不清。
+4. **只做非流式**：`complete()` 带结构化参数，`stream()` 不带。Web SSE 与阅读器
+   流式保持文本标记（结构化流式要先攒完整 JSON 再解析，增量呈现退化成
+   "最后一下全出"）。offline（mock）档自动退回标记路径并留日志。
+5. **失败如实，不偷偷降级重试**：解析/校验不过关就 `format_ok=False` 计入格式失败，
+   原文照给。洗白失败率等于把这次实验做废——失败率正是要测的东西。
+6. **校验三条**：合法 JSON 且字段齐全；`marker ∈ 1..len(hits)` **且**
+   `chunk_id == hits[marker-1].chunk.id`（编号不得越界、也不得指到别的块）；
+   正文 `[n]` 与声明集合一致。
+
+**两个 provider 的能力不一样（结论必须分开说）**：
+
+| 档位 | 机制 | 含义 |
+| --- | --- | --- |
+| local（Ollama 原生） | `format: <JSON schema>` | **受约束解码**，token 级保证符合结构 |
+| api（DeepSeek） | `response_format={"type":"json_object"}` | 只保证"是合法 JSON"，**不保证符合 schema**（`json_schema` 会被拒：社区实测 HTTP 400 "This response_format type is unavailable now"）→ 符合性靠提示词 + 客户端校验 |
+
+**代价与边界**：
+
+- **api 档不是受约束解码**：把它写成"结构化输出更可靠"是错的，只能分档表述；
+- **`chunk_id` 抄写是结构化路径特有的失败模式**：模型把编号与自己引的块对错时，
+  标记路径根本察觉不到（它只知道编号在不在范围内）。这既是本次实验的看点，
+  也是"多要一份声明"的代价；
+- **提示词更长**（契约 + 每行来源多一个 chunk_id）→ token 成本要进对照，别只看质量；
+- **两组的"格式失败率"分母不可比**：标记组的失败表现为"没有标记"（由既有的
+  `no_citation` 覆盖），结构化组才有可数的"解析/校验失败"。报告里写明口径差异，
+  并补了一个两边都适用的诊断量"疑似畸形标记"（`[1, 2]` 这类，原先连正则都不匹配、
+  在任何指标里都不留痕）。
+
+**验证**：四场次对照（同一份 63 题、同一份语料、同一档嵌入）——结论与逐项数字见
+`evaluation.md` 的"结构化输出 A/B"一节；`mikasa eval run --name` 用来区分场次，
+`eval compare` 已补生成层配对区间。
+
+**代码**：`config/settings.py`（`LLMConfig.structured_output`）、
+`pipeline/prompts.py`（`JSON_OUTPUT_CONTRACT` / `STRUCTURED_SCHEMA` / 来源行模板）、
+`pipeline/generator.py`（`parse_structured` + 结构化路径 + `Answer.structured/format_ok`）、
+`providers/llm.py`、`providers/ollama.py`、`eval/{runner,report}.py`（格式纪律与用量）、
+`cli/__init__.py`（`eval run --name`、`eval compare` 生成层配对）；
+测试 `tests/unit/pipeline/test_generator_structured.py`、
+`tests/unit/providers/test_llm_structured.py`、`tests/unit/pipeline/test_prompts.py`。
+
+---
+
+## ADR-0038 用量可见性：token 的采集、显示与累计口径
+
+- 状态：Accepted ｜ 2026-09-27（用户："用 api 烧的 token 能不能显示且记录在内"）
+- 关联：ADR-0037（同批改动，A/B 的成本对照依赖它）、ADR-0029（本地档的两个旋钮）
+
+**背景**：token 一直在记——`qa_messages.prompt_tokens/completion_tokens` 两列、
+`Answer` 契约里两个字段——**但从来没有显示过**（前端唯一出现 "token" 的地方是
+KaTeX 占位符）。三处缺口：评测的逐题留痕里没有它（实验算不出花了多少）、
+问答页不显示、没有任何累计视图。更根本的一条：**网页问答走流式，而流式路径
+从来拿不到 usage**——主力路径上的用量恒为 None。
+
+**决定**：
+
+1. **流式采集**：`OpenAICompatLLM` 带 `stream_options={"include_usage": True}`
+   并读末帧 usage；`OllamaNativeLLM` 读 NDJSON 收尾帧的
+   `prompt_eval_count` / `eval_count`。**上游不认 `stream_options` 时退一步
+   重试"不带用量"的正常流式**——丢的只是数字，不该丢整个回答。
+2. **机制是实例属性 `last_usage`，不进 `LLMProvider` 协议**：加进 Protocol 会波及
+   十来处测试替身（它们都按 `complete/stream` 两个方法鸭子类型实现）。
+   消费者用 `getattr(llm, "last_usage", (None, None))` 取。
+   **已知边界**：这是实例状态，同一个 provider 实例被并发调用会串——本应用是
+   单进程串行问答（ADR-0033 同源的形态判断），要并发就得上返回值而非属性。
+3. **评测逐题记 + 报告给总计**：`ItemRecord` 加两个字段，报告新增"用量（token）"
+   小节（输入/输出/合计/每题均值/样本数）。
+4. **问答页显示**：回答的 who 行追加 `输入 x / 输出 y tokens`；历史回放同源
+   （`qa_messages` 的两列本来就在回放载荷里）。
+5. **`mikasa usage` 汇总**：问答（按 profile）+ 评测（按场次）+ 总计。
+6. **只报 token，不折算价格**：模型单价随时在变（DeepSeek 一年内改过三次计价，
+   2026 年起还有峰谷差价），写死汇率等于在报告里埋一个注定过期的数字。
+
+**边界**：
+
+- **"没测到"与"0 token"分开**：老数据（2026-09-27 之前的流式回答）不计入条数、
+  不显示成 0、不摊进均值——`fmtTokens` 两个数都为 null 时返回空串；
+- **`usage` 只覆盖生成端**：嵌入与裁判的用量不在其中（嵌入走另一条 provider，
+  裁判另有模型），要算总账得再加上那两块；
+- 本地档（Ollama）是免费额度，统计它主要是为了看**上下文长度**是否失控。
+
+**代码**：`providers/llm.py` / `providers/ollama.py`（`last_usage` + 流式用量）、
+`pipeline/generator.py`（`build_answer` 带用量）、`pipeline/ask.py`（流式路径回填）、
+`eval/runner.py` + `eval/report.py`（逐题与总计）、`storage/repo.py`
+（`usage_by_profile` / `list_all_eval_runs`）、`cli/__init__.py`（`usage` 命令）、
+`web/static/js/common.js`（`fmtTokens`）+ `qa.js`（who 行）；
+测试 `tests/unit/providers/test_llm_structured.py`、`tests/unit/cli/test_cli.py`
+（用量汇总两条）、`tests/unit/eval/test_runner.py`（逐题字段）；无头 Chrome 验收
+`tools/chrome_ask.py --require-tokens`（真页面断言 who 行里有用量）。

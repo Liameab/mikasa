@@ -25,6 +25,7 @@ runner 保持纯计算：不写数据库、不写文件——落库与报告由 
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from time import perf_counter
@@ -69,6 +70,19 @@ RETRIEVAL_FUSION_TOP_K = 10
 
 # 裁判可见"事实资料"的总长度上限：控制判题成本，也让各题裁判成本公平
 _JUDGE_CONTEXT_CAP = 3000
+
+# 「疑似畸形标记」诊断（2026-09-27，结构化输出 A/B 时补的统计盲区）：
+# 现有越界率只数**正则匹配得上**（`\[\d+\]`）但编号越界的写法；模型写成
+# `[1, 2]` / `[1、2]` / `[1-2]` 时连匹配都匹配不上，于是"引用写歪了"这件事
+# 在任何指标里都不留痕。这里只做**诊断计数**，不改生产语义（`extract_markers`
+# 一个字不动）——判据是"方括号里是数字 + 分隔符 + 数字"，`arr[0]` 这类
+# 代码下标不会误伤（数字后面没有分隔符）。
+_SUSPECT_MARKER_RE = re.compile(r"\[\s*\d+\s*[,、\-–~]\s*\d+")
+
+
+def suspect_marker_count(text: str) -> int:
+    """疑似畸形引用标记的出现次数（诊断用，进报告不进判据）。"""
+    return len(_SUSPECT_MARKER_RE.findall(text))
 
 
 def build_judge(settings: Settings) -> Judge:
@@ -116,6 +130,20 @@ class GenerationStats:
     refusal_dirty: int = 0  # 拒答句却带 [n] 标记（L3 纪律违规，理论上不该发生）
     answered_unanswerable: int = 0  # 不可答题误答（最严重的失败）
     answered_with_citation: int = 0  # 不可答题误答且带引用（纪律双重失败）
+    # ---- 用量（2026-09-27）：钱要看得见，报告里才有"这次实验花了多少" ----
+    # 只有非流式路径带 usage（runner 走 generator.generate）；None **不参与求和**，
+    # 样本数单独记——"0 token" 与"没测到"必须分开，否则均值被稀释成假数字。
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    token_samples: int = 0
+    # ---- 格式纪律（结构化输出 A/B 的可观测面，2026-09-27）----
+    # structured_items：本场走结构化路径的题数（分组口径，0 = 全标记路径）；
+    # structured_failures：其中 JSON 解析/校验失败的题数（Answer.format_ok 为 False）；
+    # malformed_markers：疑似畸形标记（`[1, 2]` 这类）出现次数——现有越界率只数
+    # "正则匹配得上但编号越界"的，畸形写法连匹配都匹配不上，原本是统计盲区。
+    structured_items: int = 0
+    structured_failures: int = 0
+    malformed_markers: int = 0
 
     @property
     def refusal_clean(self) -> int:
@@ -182,6 +210,12 @@ class ItemRecord:
     judge_note: str = ""  # 不一致/裁判错误的留痕（人工复核线索）
     error: str = ""
     latency_ms: float = 0.0
+    # 用量与格式（2026-09-27）：逐题留痕，报告与 A/B 对照都从这里读。
+    # 老快照没有这几个键 → 读侧一律 .get()（DB 里存着历史 run 的 items）
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    format_ok: bool | None = None  # 结构化路径：JSON 解析+校验是否通过（标记路径恒 None）
+    malformed_markers: int = 0  # 疑似畸形标记数（`[1, 2]` 这类）
 
     def to_json(self) -> dict[str, object]:
         """压平为可落库的 dict（List[dict] 直接进 metrics_json）。"""
@@ -200,6 +234,10 @@ class ItemRecord:
             "judge_consistent": self.judge_consistent,
             "judge_note": self.judge_note[:200],
             "latency_ms": round(self.latency_ms, 1),
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "format_ok": self.format_ok,
+            "malformed_markers": self.malformed_markers,
         }
 
 
@@ -279,6 +317,14 @@ class EvalResult:
                 "answered_unanswerable": gen.answered_unanswerable,
                 "answered_with_citation": gen.answered_with_citation,
                 "refusal_accuracy": gen.refusal_accuracy(),
+                # 用量与格式纪律（2026-09-27）：`eval compare` 的生成层配对与
+                # "质量-延迟-成本"对照都读这几个键
+                "prompt_tokens": gen.prompt_tokens,
+                "completion_tokens": gen.completion_tokens,
+                "token_samples": gen.token_samples,
+                "structured_items": gen.structured_items,
+                "structured_failures": gen.structured_failures,
+                "malformed_markers": gen.malformed_markers,
             },
             "judge": {
                 "judge_model": judge.judge_model,
@@ -498,6 +544,23 @@ class EvalRunner:
         record.in_range = sum(1 for m in record.markers if 1 <= m <= len(hits))
         record.refused = answer.refused
         record.citations = len(answer.citations)
+
+        # ---- 用量与格式纪律（2026-09-27）：逐题留痕 + 进聚合 ----
+        # 用量：None 不计入求和也不计入样本（"没测到"与"0"必须分开）
+        record.prompt_tokens = answer.prompt_tokens
+        record.completion_tokens = answer.completion_tokens
+        if answer.prompt_tokens is not None or answer.completion_tokens is not None:
+            gen.token_samples += 1
+            gen.prompt_tokens += answer.prompt_tokens or 0
+            gen.completion_tokens += answer.completion_tokens or 0
+        # 格式：结构化路径的解析/校验结果 + 两种承载方式都适用的畸形标记诊断
+        record.format_ok = answer.format_ok
+        if answer.structured:
+            gen.structured_items += 1
+            if answer.format_ok is False:
+                gen.structured_failures += 1
+        record.malformed_markers = suspect_marker_count(answer.text)
+        gen.malformed_markers += record.malformed_markers
 
         if item.kind == "answerable":
             # 引用块中命中题面 gold 的比例（record.gold_hits 供逐条留痕）

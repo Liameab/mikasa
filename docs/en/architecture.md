@@ -169,13 +169,16 @@ ADR-0014 ④ / ADR-0026).
 and real LLMs share the same markers, so the two can never drift):
 - It uses **plain-text section markers** (【资料片段】 "source excerpts" / 【问题】
   "question" / 【历史对话摘要】 "conversation summary" / 【正在阅读的段落】 "the passage
-  being read") rather than structured JSON
-  output: more stable for small local models such as Ollama, friendlier to
-  streaming, and parse failures stay observable (the format-parse failure rate is a
-  must-watch item in every evaluation regression). Section **order is a hard
-  constraint**: 【正在阅读的段落】 must come *before* 【资料片段】, or MockLLM's parser
-  swallows it into the last excerpt and offline answers silently change meaning
-  (ADR-0034);
+  being read") as the default carrier, alongside an **off-by-default** JSON
+  structured path (`llm.structured_output`, ADR-0037: non-streaming only, and only
+  for the answer-generation call; both paths share identical protocol semantics —
+  numbering is still injection order, only the serialization layer differs).
+  Plain text is the default because it is friendlier to streaming, keeps parse
+  failures observable (the format-parse failure rate is a must-watch item in every
+  evaluation regression) and does not squeeze answers into fields. Section
+  **order is a hard constraint**: 【正在阅读的段落】 must come *before* 【资料片段】, or
+  MockLLM's parser swallows it into the last excerpt and offline answers silently
+  change meaning (ADR-0034);
 - Both system prompts append the same **output-format contract**
   (`OUTPUT_FORMAT_CONTRACT`, ADR-0029): lead with the conclusion, use `## `
   sections, use a table when a table is what the material calls for, LaTeX for

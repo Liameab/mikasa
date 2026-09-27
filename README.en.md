@@ -16,7 +16,7 @@ quality ourselves: every trade-off, price and mistake is written up in the
 modes → M4 local profile → M4.5 session management (including the first real schema migration v1→v2)
 → corpus folders v3 → table rendering → cross-lingual retrieval → original + translation for cited
 English passages → document reader with citation jump → pre-M5 audit (23 fixes, 4 of them
-data-safety) → packaged installer → model settings in the panel → the embedding model shipped inside the package (first ingest is offline, ADR-0030) → text-to-image (draw straight from the ask page, ADR-0031) → Claude/OpenAI presets and in-app model pulling (ADR-0032) → browser/LAN access with an access password (ADR-0033) → ask-while-reading in the reader (ADR-0034). Currently **1106 tests passing**,
+data-safety) → packaged installer → model settings in the panel → the embedding model shipped inside the package (first ingest is offline, ADR-0030) → text-to-image (draw straight from the ask page, ADR-0031) → Claude/OpenAI presets and in-app model pulling (ADR-0032) → browser/LAN access with an access password (ADR-0033) → ask-while-reading in the reader (ADR-0034). Currently **1126 tests passing**,
 ruff + mypy clean, ~92% coverage. Windows portable zip and installer builds are published
 (v0.1.0 → v0.1.12) with in-app update checking — downloads resume across dropped connections, and
 closing the dialog, switching pages or reloading no longer interrupts them (progress lives in a
@@ -215,6 +215,7 @@ Agent questions **leave no trace** in your Q&A history, and on the offline (mock
 | `eval run/list` | Run the evaluation / browse past runs (`--profile offline` needs no keys) |
 | `auth set-password` / `clear-password` | Set / clear the access password — required before `serve --host 0.0.0.0` (ADR-0033) |
 | `mcp` | Expose the library to agents (MCP server over stdio): three read-only tools `search` / `read` / `ask` (ADR-0036) |
+| `usage` | Local cumulative token usage: Q&A (by profile) plus evaluation (by session) and a grand total (tokens only, never converted to money — ADR-0038) |
 
 ## Milestones
 
@@ -249,7 +250,7 @@ Agent questions **leave no trace** in your Q&A history, and on the offline (mock
 - Source comments and the README are written in **Chinese** (the project's working language; this
   page is the English edition); baseline gates are `ruff format`, `ruff check`, `mypy`, and
   `pytest`;
-- Current suite: **1106 tests**, coverage ~92% (see the regression gate in `docs/en/evaluation.md`);
+- Current suite: **1126 tests**, coverage ~92% (see the regression gate in `docs/en/evaluation.md`);
 - Zero-compilation install on Windows + CPython 3.13 (all dependencies ship prebuilt wheels;
   see `pyproject.toml` and ADR-0006/0008 for the version-pinning rationale).
 

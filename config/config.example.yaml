@@ -51,6 +51,12 @@ llm:
   model: deepseek-chat          # 模型名全部走配置，代码零硬编码
   temperature: 0.1              # 生成端低温，保稳定
   max_tokens: 1024
+  # 结构化输出（ADR-0037）：用 JSON 承载 [n] 引用协议，而不是纯文本标记。
+  # **默认关**（新能力默认不生效，开了才影响行为）；只在**非流式**路径生效
+  # （Web SSE 与阅读器流式始终走文本标记），mock（offline）档自动退回标记路径。
+  # 受约束程度随 provider：local 档走 Ollama 原生 format（受约束解码），
+  # api 档只有 json_object（保证是合法 JSON，符合 schema 靠提示词 + 客户端校验）。
+  structured_output: false
 
 # ---- 词向量（稠密检索路）----
 embedding:

@@ -62,6 +62,8 @@
 | ADR-0034 | Reader "ask as you read": ask in place, show every hit, nothing persists | Accepted |
 | ADR-0035 | Cross-document one hop: note `[[wiki links]]` become doc_links, plus an **off-by-default** neighbour expansion | Accepted |
 | ADR-0036 | MCP server: hand-written stdio JSON-RPC and three read-only tools (`mikasa mcp`) | Accepted |
+| ADR-0037 | Structured output: the protocol does not change, only the serialization layer (off by default, non-streaming only) | Accepted |
+| ADR-0038 | Usage visibility: how tokens are captured, displayed and totalled | Accepted |
 
 ---
 
@@ -2344,3 +2346,147 @@ and honestly refused when the library held no evidence; under
 `src/mikasa/cli/__init__.py` (the `mcp` command), `src/mikasa/pipeline/ask.py`
 (`answer()` for the no-record path, `search()` for retrieval-only), `packaging/Mikasa.spec`
 (`mikasa.mcp` added to hiddenimports); tests `tests/unit/mcp/test_mcp_server.py` (18 cases).
+
+---
+
+## ADR-0037 Structured output: the protocol does not change, only the serialization layer (off by default, non-streaming only)
+
+- Status: Accepted | 2026-09-27 (the user settled on "non-streaming only" and "run the
+  api pair for real too")
+- Related: ADR-0013 (the kb/free modes), ADR-0014 ③ (zero LLM calls offline), roadmap
+  item 2 (`tech-roadmap-reply.md` §2, §4-A)
+
+**Background**: the opening line of `pipeline/prompts.py` — "plain text markers rather
+than JSON structured output: more stable for small local models like Ollama, streaming
+friendly, parse failures observable" — decides the **core protocol layer** (how `[n]`
+travels) and **had never been measured**. It was an assumption living in a comment. The
+2026 premise also moved: Ollama 0.5+ takes `format: <JSON schema>` as **constrained
+decoding** (token-level structural guarantee), and OpenAI has strict json_schema.
+
+**Decision**:
+
+1. **Off by default** (`llm.structured_output: false`), following the `crosslingual` /
+   `hop_expand` discipline: a new capability changes nothing until it is switched on,
+   otherwise every experiment shifts the evaluation baseline. No profile yaml sets it;
+   enabling it takes an explicit overlay.
+2. **The protocol semantics do not move one character**: numbering is still **injection
+   order** (`[n]` ↔ the nth source) and the model still may not invent markers. What
+   changes is the layer that carries them. The extra `citations` array in the JSON path
+   is therefore an **explicit declaration** — citations are still resolved from the text
+   markers; the declaration is for validation and counting.
+3. **The contract is appended, not forked**: rules 1-6, the presentation contract and
+   the examples stay verbatim; `JSON_OUTPUT_CONTRACT` is appended to the system prompt
+   and source lines gain a `chunk_id` for the model to copy. **The differences between
+   the two paths must be enumerable** — otherwise the A/B changes two things at once and
+   nobody can say which one moved the numbers.
+4. **Non-streaming only**: `complete()` carries the structured parameter, `stream()`
+   does not. Web SSE and the reader keep text markers (a structured stream would have to
+   buffer the whole JSON before parsing, degrading the incremental display to "everything
+   at the end"). The offline (mock) profile falls back to the marker path with a log line.
+5. **Failures are reported, never silently retried**: a payload that does not parse or
+   validate gets `format_ok=False` and counts as a format failure, with the raw text
+   shown as-is. Washing that away would invalidate the experiment — the failure rate is
+   exactly what is being measured.
+6. **Three checks**: valid JSON with both fields; `marker ∈ 1..len(hits)` **and**
+   `chunk_id == hits[marker-1].chunk.id` (no out-of-range numbering, no pointing a number
+   at a different chunk); the markers in the prose match the declared set.
+
+**The two providers are not equivalent (so the conclusion must be split)**:
+
+| Profile | Mechanism | Meaning |
+| --- | --- | --- |
+| local (Ollama native) | `format: <JSON schema>` | **constrained decoding**, token-level structural guarantee |
+| api (DeepSeek) | `response_format={"type":"json_object"}` | only guarantees "is valid JSON", **not schema compliance** (`json_schema` is rejected: HTTP 400 "This response_format type is unavailable now", measured in the wild) → compliance rests on the prompt plus client-side validation |
+
+**Costs and boundaries**:
+
+- **The api profile is not constrained decoding**: writing this up as "structured output
+  is more reliable" would be wrong; it has to be stated per provider.
+- **Copying `chunk_id` is a failure mode the structured path invents**: when the model
+  pairs a number with the wrong chunk, the marker path cannot even notice (it only knows
+  whether a number is in range). That is both the point of the experiment and the price
+  of asking for a second declaration.
+- **The prompt is longer** (the contract plus one chunk_id per source line), so token
+  cost belongs in the comparison — quality alone is not the whole story.
+- **The two groups' "format failure rates" have different denominators**: on the marker
+  path a format failure shows up as "no markers at all" (covered by the existing
+  `no_citation`), while only the structured path has a countable parse/validation
+  failure. The report states that difference, and adds a diagnostic that applies to both:
+  "suspected malformed markers" (`[1, 2]` and friends, which the marker regex never
+  matched and which therefore left no trace in any metric before).
+
+**Verification**: four sessions (same 63 questions, same corpus, same embedding profile) —
+the conclusion and the per-metric numbers are in the "structured output A/B" section of
+`evaluation.md`; `mikasa eval run --name` labels the sessions and `eval compare` now pairs
+generation-layer metrics as well.
+
+**Code**: `config/settings.py` (`LLMConfig.structured_output`), `pipeline/prompts.py`
+(`JSON_OUTPUT_CONTRACT` / `STRUCTURED_SCHEMA` / the source-line template),
+`pipeline/generator.py` (`parse_structured`, the structured path and
+`Answer.structured/format_ok`), `providers/llm.py`, `providers/ollama.py`,
+`eval/{runner,report}.py` (format discipline and usage), `cli/__init__.py`
+(`eval run --name`, generation-layer pairing in `eval compare`); tests
+`tests/unit/pipeline/test_generator_structured.py`,
+`tests/unit/providers/test_llm_structured.py`, `tests/unit/pipeline/test_prompts.py`.
+
+---
+
+## ADR-0038 Usage visibility: how tokens are captured, displayed and totalled
+
+- Status: Accepted | 2026-09-27 (user: "can the tokens burned through the api be shown
+  and recorded, so I can see how much I have used")
+- Related: ADR-0037 (same batch; the A/B cost comparison depends on it), ADR-0029 (the
+  two local knobs)
+
+**Background**: tokens were always recorded — `qa_messages.prompt_tokens/completion_tokens`
+and the two matching `Answer` fields — **but never displayed** (the only "token" in the
+frontend was a KaTeX placeholder). Three gaps: evaluation items carried no token counts
+(so the experiment could not say what it cost), the answer page showed nothing, and there
+was no cumulative view. More fundamentally, **the web Q&A path streams, and the streaming
+path never received usage at all** — on the main path the numbers were always None.
+
+**Decision**:
+
+1. **Capture in the streaming path**: `OpenAICompatLLM` sends
+   `stream_options={"include_usage": True}` and reads the final frame's usage;
+   `OllamaNativeLLM` reads `prompt_eval_count` / `eval_count` from the NDJSON `done`
+   frame. **When upstream rejects `stream_options` we retry once without it** — losing the
+   numbers is acceptable, losing the answer is not.
+2. **The mechanism is an instance attribute, `last_usage`, not part of the
+   `LLMProvider` protocol**: adding it to the protocol would ripple through a dozen test
+   doubles that duck-type `complete/stream`. Consumers read it via
+   `getattr(llm, "last_usage", (None, None))`. **Known boundary**: it is instance state, so
+   concurrent calls on one provider instance would interleave — this application asks
+   questions serially in a single process (the same shape judgment as ADR-0033); for
+   concurrency it would have to become a return value instead.
+3. **Evaluation records per item and totals per run**: two new `ItemRecord` fields, plus a
+   "usage (tokens)" block in the report (input / output / total / per-question average /
+   sample count).
+4. **The answer page shows it**: the assistant's byline gains
+   `输入 x / 输出 y tokens`; history replay gets the same values for free (the two
+   `qa_messages` columns are already part of the replay payload).
+5. **`mikasa usage`** totals Q&A (by profile) plus evaluation (by session), with a grand
+   total.
+6. **Tokens only, never converted to money**: model prices move constantly (DeepSeek has
+   changed its pricing three times in a year, and since 2026 prices vary by time of day),
+   so a hard-coded rate would be a number guaranteed to expire inside the report.
+
+**Boundaries**:
+
+- **"Not measured" and "0 tokens" are different**: older data (streaming answers before
+  2026-09-27) is excluded from counts, never displayed as 0 and never averaged in —
+  `fmtTokens` returns an empty string when both numbers are null;
+- **`usage` covers the generation side only**: embeddings and the judge are separate
+  providers with separate models; totalling those needs a separate pass;
+- on the local profile (Ollama) this is a free quota, so the point of counting it is
+  watching whether the context window runs away.
+
+**Code**: `providers/llm.py` / `providers/ollama.py` (`last_usage` and streaming usage),
+`pipeline/generator.py` (`build_answer` carries usage), `pipeline/ask.py` (the streaming
+path fills it in), `eval/runner.py` + `eval/report.py` (per item and totals),
+`storage/repo.py` (`usage_by_profile` / `list_all_eval_runs`), `cli/__init__.py` (the
+`usage` command), `web/static/js/common.js` (`fmtTokens`) + `qa.js` (the byline); tests
+`tests/unit/providers/test_llm_structured.py`, `tests/unit/cli/test_cli.py` (two usage
+cases), `tests/unit/eval/test_runner.py` (the per-item fields); headless Chrome
+acceptance via `tools/chrome_ask.py --require-tokens` (a real page asserting the byline
+shows usage).

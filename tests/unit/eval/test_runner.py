@@ -283,8 +283,15 @@ def test_run_item_to_json_shape(tmp_path, offline_settings):
         "judge_consistent",
         "judge_note",
         "latency_ms",
+        # 2026-09-27 新增：用量与格式（A/B 实验与"质量-延迟-成本"对照的原料）
+        "prompt_tokens",
+        "completion_tokens",
+        "format_ok",
+        "malformed_markers",
     }
     assert record["id"] == "a1" and record["gold_hits"] >= 1
+    # offline 档：mock 产不出 usage → 如实为 None（不是 0），标记路径 format_ok 恒 None
+    assert record["prompt_tokens"] is None and record["format_ok"] is None
 
 
 # ---------------------------------------------------------------------------

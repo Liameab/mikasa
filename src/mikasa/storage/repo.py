@@ -711,6 +711,32 @@ def update_eval_run_report(conn: sqlite3.Connection, run_id: int, report_md: str
     conn.execute("UPDATE eval_runs SET report_md = ? WHERE id = ?", (report_md, run_id))
 
 
+def list_all_eval_runs(conn: sqlite3.Connection) -> list[dict]:
+    """全部评测记录（用量汇总用；`list_eval_runs` 有默认 20 条上限，那是列表页的口径）。"""
+    rows = conn.execute("SELECT * FROM eval_runs ORDER BY id").fetchall()
+    return [dict(r) for r in rows]
+
+
+def usage_by_profile(conn: sqlite3.Connection) -> list[tuple[str, int, int, int]]:
+    """问答侧的 token 用量汇总：(profile, 输入, 输出, 条数)。
+
+    - 只统计助手消息（用户消息那两个列本来就是 NULL）；
+    - **只把有用量行的算进条数**：流式响应在 2026-09-27 之前拿不到 usage
+      （见 ADR-0038），"没测到"与"0 token"是两件事，混在一起会让均值变成假数。
+    """
+    rows = conn.execute(
+        "SELECT COALESCE(s.profile, '未知') AS profile,"
+        "       COALESCE(SUM(m.prompt_tokens), 0),"
+        "       COALESCE(SUM(m.completion_tokens), 0),"
+        "       COUNT(*)"
+        "  FROM qa_messages m LEFT JOIN qa_sessions s ON s.id = m.session_id"
+        " WHERE m.role = 'assistant'"
+        "   AND (m.prompt_tokens IS NOT NULL OR m.completion_tokens IS NOT NULL)"
+        " GROUP BY profile ORDER BY profile"
+    ).fetchall()
+    return [(str(r[0]), int(r[1]), int(r[2]), int(r[3])) for r in rows]
+
+
 # ---------------------------------------------------------------------------
 # 文档知识链（M6 ③：schema v5 的 doc_links）
 # ---------------------------------------------------------------------------

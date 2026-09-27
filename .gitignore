@@ -46,6 +46,9 @@ ollamamodels/
 docs/ideas-and-backlog.md
 # Codex 会话的交接文档：给下一个会话读的"我这摊还差什么"，同属内部工作文档
 docs/codex-handover.md
+# Codex CLI 的本机配置（MCP 注册等，含本机绝对路径）：工具产物，不进公开仓库
+.codex/
+
 # 技术路线协商稿与回复（Claude ↔ Codex）：过程材料，不进公开仓库
 docs/tech-roadmap-proposal.md
 docs/tech-roadmap-response.md

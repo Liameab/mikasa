@@ -2,12 +2,17 @@
 
 MockLLM 与真实 LLM 都依赖这里的标记解析/注入，避免两处漂移。
 设计要点（详见 docs/architecture.md）：
-- 使用纯文本标记而非 JSON 结构化输出：对 Ollama 等本地小模型更稳，
-  流式友好，解析失败可观测（格式解析失败率是评测回归必看项）；
+- 默认使用**纯文本标记**而非 JSON 结构化输出——这条判断长期只写在注释里，
+  2026-09-27 起变成可测的实验（`llm.structured_output`，ADR-0037）：
+  两种承载方式的协议语义完全相同（编号仍是注入顺序、模型无权自造编号），
+  差别只在序列化层。`JSON_OUTPUT_CONTRACT` 只是**追加**在 SYSTEM_PROMPT 之后，
+  规则 1~6 与示范逐字保留——这样两条路径的差异才只有序列化层；
 - 引用编号 [n] 与注入的资料片段编号一一对应，模型无权自造编号。
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 # 无据拒答的统一句式：评测与 UI 都以它为准识别拒答
 REFUSAL_TEXT = "根据已有资料，我无法回答这个问题。"
@@ -102,6 +107,64 @@ SYSTEM_PROMPT = (
 | 灰岩 | 18.40 GPa [1] |
 """
 )
+
+# ---------------------------------------------------------------------------
+# 结构化输出契约（2026-09-27，ADR-0037）：只换承载方式，不换协议语义
+#
+# **追加**在 SYSTEM_PROMPT 之后，不另起一套提示词——规则 1~6、呈现规范与示范
+# 全部逐字保留，这样"文本标记 vs JSON"两条路径的差异**只有序列化层**，
+# A/B 才是干净的对照（否则换了提示词就说不清是谁的功劳）。
+#
+# 三处硬要求：
+#   1. 出现字面 "JSON"：DeepSeek 的 json_object 模式要求提示词里含这个词；
+#   2. 正文仍带 [n] 标记（前端渲染与 L1 硬校验都认它）——citations 数组是
+#      **显式声明**，用来测"模型能不能把编号与自己引的块对上"；
+#   3. 拒答时 answer 只写那一句、citations 给空数组（L3 纪律两条路等价）。
+#
+# 代价（写进报告的诚实清单）：结构化路径要往来源行里注入 chunk_id 供模型抄写，
+# 提示词因此更长；chunk_id 抄错不影响引用正确性（编号才是绑定证据的那个），
+# 但它是结构化输出特有的失败模式，会被单独计数。
+# ---------------------------------------------------------------------------
+JSON_OUTPUT_CONTRACT = """\
+
+输出格式（JSON）：
+在上面所有规则之外，你这次的**整条回复必须是一个 JSON 对象**，不要输出 JSON 之外的
+任何内容（不要代码围栏、不要解释），形如：
+{"answer": "回答正文（保留 [n] 引用标记）",
+ "citations": [{"marker": 1, "chunk_id": 3118}]}
+
+- `answer`：与平常一样的 Markdown 正文，引用标记 [n] 照旧紧跟句末。
+- `citations`：正文里用到的每一个编号都逐条列出；`marker` 是编号，`chunk_id`
+  是【资料片段】里该编号那一行标注的 chunk_id（原样抄写，不得自己编造）。
+  正文里出现的编号必须与这里一一对应，不得多、不得少。
+- 无据拒答时：`answer` 只写"根据已有资料，我无法回答这个问题。"，`citations` 给 []。
+"""
+
+# Ollama 原生接口的 `format` 字段用它做**受约束解码**（token 级保证符合结构）。
+# 与上面那段契约是同一个结构的两种写法：改一处必须改另一处（有测试钉住）。
+STRUCTURED_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "answer": {"type": "string"},
+        "citations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "marker": {"type": "integer"},
+                    "chunk_id": {"type": "integer"},
+                },
+                "required": ["marker", "chunk_id"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["answer", "citations"],
+    "additionalProperties": False,
+}
+
+# 结构化路径里来源行的 chunk_id 标注（`_describe` 用）：契约要求模型原样抄写它
+SOURCE_CHUNK_ID_TEMPLATE = "chunk_id={chunk_id}"
 
 # 自由问答（free）模式的系统提示：直连 LLM、不检索知识库的旁路人格。
 # 设计要点（见 docs/design-decisions.md ADR-0013）：

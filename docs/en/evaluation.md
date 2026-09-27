@@ -282,8 +282,8 @@ identically, differing only in configuration.
 
 Regression gate (CI): full `pytest -q` + `ruff` +
 `mypy` + `mikasa eval run --profile offline` as a smoke test. **Coverage baseline:
-92%** (8363 statements, full re-measurement on 2026-09-27, the MCP round:
-**1106 passed + 2 skipped in ~2 minutes**; `--cov=mikasa --cov-report=term`. The previous
+92%** (8578 statements, full re-measurement on 2026-09-27, the MCP round:
+**1126 passed + 2 skipped in ~2 minutes**; `--cov=mikasa --cov-report=term`. The previous
 baseline was 92% = 8190 statements / 1085 passed on 2026-09-25, and before that
 93% = 3469 statements after M4.5 on 2026-09-09 — the statement count
 nearly doubled while the percentage dropped one point, which is what "every new
@@ -292,3 +292,69 @@ feature ships with its tests" looks like). Real quality acceptance (run manually
 judge is off (ADR-0014 ③) → protocol-layer metrics only (recall / citation
 discipline / refusal), with the api profile standing in as the semantic-quality
 reference.
+
+---
+
+## 7. Structured output A/B: JSON carriers vs text markers (2026-09-27)
+
+**Why**: the opening line of `pipeline/prompts.py` — "plain text markers rather than
+JSON structured output" — decides how the `[n]` protocol is **carried**, and had never
+been measured: it was an assumption living in a comment (ADR-0037 turned it into an
+off-by-default switch plus this comparison).
+
+**Protocol and paths**: numbering is still **injection order** and the model still may
+not invent markers; the two prompts differ by an enumerable amount (the JSON contract
+plus a `chunk_id` on each source line), so the only variable is the serialization layer.
+Sessions: `mikasa eval run --profile api [--config overlay] --name api-marker|api-json`
+(same 63 questions, same sample-corpus, same bge-m3 embedding profile).
+
+### 7.1 api profile (DeepSeek, `json_object`, **not** constrained decoding) — done
+
+| Metric | api-marker | api-json | Reading |
+| --- | --- | --- | --- |
+| Format failures | — (no such event on this path) | **0 / 63** | all 63 were valid JSON *and* consistent with the prose |
+| Out-of-range / invented markers | 0.000 | 0.000 | neither group overstepped |
+| citation gold ratio | 0.729 | 0.706 | paired delta −0.023, 95% CI [−0.085, +0.040] — **not significant** |
+| Answerable questions refused | 0 | 0 | — |
+| Unanswerable questions answered | 3 | **1** | refusal accuracy 13/16 → **15/16** (81.2% → 93.8%) |
+| Stage C correctness (1-5) | 4.925 (n=40) | 4.974 (n=38) | slightly up; not conclusive at this sample size |
+| Stage C faithfulness | 1.000 | 1.000 | — |
+| Input / output tokens | 144,211 / 15,724 | 161,917 / 18,294 | **+12.3% / +16.3%** (the price of the contract and chunk_ids) |
+| Total wall time | 296.8s | 288.7s | no real difference (network jitter dominates) |
+
+**Conclusion (api profile)**: on DeepSeek the JSON carrier does **not** improve citation
+discipline (both achieve zero out-of-range, zero malformed markers); what it buys is
+**better refusal discipline** (unanswerable mistakes 3 → 1) and a slightly higher
+semantic score, at a cost of **roughly 12% more tokens**. Note that this is **not**
+constrained decoding — only "valid JSON" is guaranteed; schema compliance rests on the
+prompt plus client-side validation. All 63 happened to pass, which is a property of this
+model, not a general law.
+
+### 7.2 local profile (Ollama `format: <schema>`, **constrained decoding**) — **pending**
+
+The commands are ready (`build/structured-local.yaml` is the matching overlay):
+
+```bash
+mikasa eval run --profile local --name local-marker
+mikasa eval run --profile local --config build/structured-local.yaml --name local-json
+```
+
+Each takes 25-35 minutes on this machine (qwen3:8b). What this pair is for: whether an
+8B model gets **squeezed by the fields** — the token overhead, the format failure rate
+(which should approach zero under constrained decoding) and, above all, whether the
+**semantic score drops**. That last one is the question the experiment was designed
+around. The local profile has the judge off (ADR-0014 ③), so semantics can only be read
+from protocol metrics plus manual sampling, and the report has to say so.
+
+### 7.3 The experiment's other output: a real bug
+
+After the first api-json run, its log held **63 "query translation failed" lines**
+(api-marker had none): the structured switch was attached to the provider config, so
+**every non-streaming call** (query translation, the bilingual compare block, session
+title extraction) was switched to JSON mode, silently killing the cross-language second
+retrieval path for the whole session. The fix is "the config only decides whether answer
+generation is structured; the provider only honours an explicit argument"
+(`complete(..., structured=True)`), with a regression test — and **all four sessions were
+re-run**, so the table above comes from one single code revision. This is evaluation
+earning its keep: the **scope** of a feature switch is easier to get wrong than its
+default value.

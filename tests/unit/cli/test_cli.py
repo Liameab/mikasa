@@ -43,7 +43,7 @@ def _isolate(cli: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
 def test_help_lists_commands():
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    for cmd in ("init", "doctor", "ingest", "list", "ask", "chat", "index", "mcp"):
+    for cmd in ("init", "doctor", "ingest", "list", "ask", "chat", "index", "mcp", "usage"):
         assert cmd in result.output
 
 
@@ -690,6 +690,80 @@ def test_serve_refuses_lan_bind_without_password(tmp_path, monkeypatch):
     assert result.exit_code == 1
     assert "还没有设置访问口令" in result.output
     assert "mikasa auth set-password" in result.output
+
+
+def test_usage_totals_from_qa_and_eval(tmp_path, monkeypatch):
+    """`mikasa usage`：问答（qa_messages）与评测（metrics_json）两边都要算上。
+
+    "没测到"与"0 token"必须分开：没有用量列的消息不进条数——否则网页里那批
+    2026-09-27 之前的流式回答会被当成 0 token 摊进均值。
+    """
+    import json as _json
+
+    from typer.testing import CliRunner
+
+    import mikasa.cli as cli_mod
+    from mikasa.config.settings import load_settings
+    from mikasa.storage import repo
+    from mikasa.storage.db import open_db
+
+    data_dir = tmp_path / "data"
+    settings = load_settings("offline", data_dir=data_dir)
+    settings.ensure_dirs()
+    with open_db(settings.db_path) as conn:
+        sid = repo.create_session(conn, "offline")
+        repo.insert_qa_message(conn, session_id=sid, role="user", content="问")
+        repo.insert_qa_message(
+            conn,
+            session_id=sid,
+            role="assistant",
+            content="答",
+            prompt_tokens=100,
+            completion_tokens=20,
+        )
+        # 更早的流式回答：没有用量（"没测到"不许当成 0）
+        repo.insert_qa_message(conn, session_id=sid, role="assistant", content="流式回答")
+        repo.insert_eval_run(
+            conn,
+            eval_set_name="api-json",
+            corpus_sha256="x",
+            config_json="{}",
+            metrics_json=_json.dumps(
+                {
+                    "generation": {
+                        "prompt_tokens": 3000,
+                        "completion_tokens": 700,
+                        "token_samples": 3,
+                    }
+                }
+            ),
+            report_md="",
+        )
+    monkeypatch.setattr(cli_mod, "load_settings", lambda *a, **k: settings)
+
+    result = CliRunner().invoke(cli_mod.app, ["usage", "--profile", "offline"])
+
+    assert result.exit_code == 0
+    assert "100" in result.output and "3,000" in result.output  # 表里两边的数字
+    assert "3,820 tokens" in result.output  # 总计 = 100+20+3000+700
+    # rich 会按列宽软换行，中文长句的连续性不可靠——按两个短片段断言语义
+    assert "只报 token" in result.output and "不报钱" in result.output
+
+
+def test_usage_on_empty_data_dir_does_not_crash(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    import mikasa.cli as cli_mod
+    from mikasa.config.settings import load_settings
+
+    settings = load_settings("offline", data_dir=tmp_path / "data")
+    settings.ensure_dirs()
+    monkeypatch.setattr(cli_mod, "load_settings", lambda *a, **k: settings)
+
+    result = CliRunner().invoke(cli_mod.app, ["usage", "--profile", "offline"])
+
+    assert result.exit_code == 0
+    assert "0 tokens" in result.output
 
 
 def test_auth_set_password_then_serve_gate_opens(tmp_path, monkeypatch):

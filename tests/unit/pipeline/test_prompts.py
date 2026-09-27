@@ -154,3 +154,24 @@ def test_context_section_precedes_sources():
         build_user_message("什么是反向传播？", [(1, "笔记", "反向传播是链式法则。")])
     )
     assert with_ctx == without_ctx
+
+
+def test_structured_contract_matches_schema_and_names_json():
+    """结构化契约与 Ollama 的 schema 必须同源（ADR-0037）。
+
+    两条都是踩过才知道的硬要求：
+      1. 契约文本里要有**字面 "JSON"**——DeepSeek 的 json_object 模式要求提示词
+         含这个词，少一个字母上游就报错；
+      2. 契约里写的字段名必须与 `STRUCTURED_SCHEMA` 完全一致——两处漂移的话，
+         DeepSeek（不受约束）会照着契约写、Ollama（受约束）会照着 schema 写，
+         同一个实验的两条腿就在测不同的东西。
+    """
+    from mikasa.pipeline.prompts import JSON_OUTPUT_CONTRACT, STRUCTURED_SCHEMA
+
+    assert "JSON" in JSON_OUTPUT_CONTRACT
+    props = STRUCTURED_SCHEMA["properties"]
+    assert set(props) == {"answer", "citations"}
+    assert STRUCTURED_SCHEMA["required"] == ["answer", "citations"]
+    for field in ("answer", "citations", "marker", "chunk_id"):
+        assert f"`{field}`" in JSON_OUTPUT_CONTRACT or f'"{field}"' in JSON_OUTPUT_CONTRACT
+    assert props["citations"]["items"]["required"] == ["marker", "chunk_id"]
