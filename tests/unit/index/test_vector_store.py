@@ -1,7 +1,8 @@
 """ExactVectorStore 单测：精确检索的正确性与退化分支。
 
-设计背景（ADR-0010）：Windows 无 faiss/hnswlib 预编译轮子，
-个人库规模用 numpy 精确检索（<500ms），评测的 recall 因此是"真"recall。
+设计背景（ADR-0010）：个人库规模用 numpy 精确检索（<500ms）+ 零新增依赖，
+评测的 recall 因此是"真"recall。（原先还有一条"Windows 无 faiss 轮子"的
+理由，2026-09-28 复核已过期，见 `index/vector_store.py` 的模块注释。）
 """
 
 from __future__ import annotations

@@ -328,6 +328,14 @@ standard answer, but this project is constrained to "zero-compile installation o
 Windows" — neither ships a prebuilt wheel on Windows (faiss-cpu is conda-only; hnswlib
 is source-only), so pulling them in means asking users to install a compiler.
 
+> **Revision, 2026-09-28 (the factual half)**: that "faiss-cpu is conda-only" claim is
+> now **out of date** — while building the LangChain comparison we measured
+> `pip install faiss-cpu` landing **1.15.1** directly on Windows + CPython 3.13. The
+> **decision is unchanged** (reasons 1, 2 and 4 below stand on their own, and "no new
+> dependency" matters more now), but the reason set has to be read against the new fact:
+> it is no longer "cannot be installed", it is "not worth installing at this scale".
+> Reproduction: `experiments/langchain_baseline/README.md`.
+
 **Decision**: Exact (brute-force) search with numpy: row-normalized matrices plus matrix
 multiplication — the dot product is the cosine.
 1. **Scale argument**: a personal library is under 100k chunks, and numpy matrix

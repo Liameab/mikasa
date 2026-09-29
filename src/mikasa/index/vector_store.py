@@ -1,10 +1,14 @@
 """稠密向量存储：numpy 精确（暴力）检索实现。
 
 为什么不直接用 FAISS / hnswlib（详见 ADR-0010）：
-- 二者在 Windows 上均无预编译 wheel（faiss-cpu 仅 conda；hnswlib 仅源码），
-  与"零编译安装"约束冲突；
 - 个人知识库规模（<10 万 chunk）numpy 矩阵乘实测 <500ms，精确检索无近似误差，
-  评测里的 recall 是"真"recall，实验结论干净。
+  评测里的 recall 是"真"recall，实验结论干净；
+- 零新增依赖（一个矩阵乘就够的事，不必引一个检索框架进来）。
+
+  注：ADR-0010 当初的理由里还有一条"Windows 上无预编译 wheel（faiss-cpu 仅 conda）"
+  —— **这条 2026-09-28 复核已过期**：`pip install faiss-cpu` 在 Windows + CPython 3.13
+  上直接装到 1.15.1。决策不变（规模论证与零依赖两条仍然成立），但别再引用那个
+  理由了；复核现场见 `experiments/langchain_baseline/README.md`。
 """
 
 from __future__ import annotations

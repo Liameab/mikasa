@@ -265,6 +265,12 @@ FTS5 的成熟边界（同义词等，个人库用不上）。
 约束"Windows 零编译安装"——二者在 Windows 上均无预编译 wheel
 （faiss-cpu 仅 conda；hnswlib 仅源码），引它们 = 要求用户装编译器。
 
+> **2026-09-28 修订（事实部分）**：上面那句"faiss-cpu 仅 conda"**已经过期**——
+> 做 LangChain 对照时实测 `pip install faiss-cpu` 在 Windows + CPython 3.13 上
+> 直接装到 **1.15.1**。**决策不变**（下面第 1、2、4 条理由独立成立，且"零新增
+> 依赖"这条现在更重要），但这条 ADR 的理由集要按新事实读：不再是"装不上"，
+> 而是"这个规模下不值得装"。复核现场：`experiments/langchain_baseline/README.md`。
+
 **决策**：numpy 精确（暴力）检索：行归一化矩阵 + 矩阵乘，dot 即余弦。
 1. **规模论证**：个人库 <10 万 chunk，numpy 矩阵乘实测 <500ms——ANN 的
    加速收益在此规模下不成立；
