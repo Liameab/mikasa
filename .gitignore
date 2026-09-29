@@ -69,6 +69,9 @@ docs/tech-roadmap-proposal.md
 tools/shots/
 # 本地 AI 工具配置
 .claude/
+# LangChain 对照组的中间产物（快照/向量/结果 JSON 都是派生的，可由
+# export_snapshot.py + run_baseline.py 重跑；结论进 README 与 evaluation.md）
+experiments/langchain_baseline/out/
 # 本机实验产物：npm 缓存（数百 MB）与 Remotion 图表草稿——与产品无关
 .npm-cache/
 remotion-chart/

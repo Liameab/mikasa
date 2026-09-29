@@ -1,0 +1,22 @@
+# LangChain 对照组的依赖（**不进主 pyproject、不进主 CI**）
+#
+# 版本写死到小版本：框架迭代极快（本次实测：langchain-community 已 sunset、
+# EnsembleRetriever 已被挪进 langchain-classic），不钉死的话"上次那张表"
+# 就复现不出来。本文件是**直接依赖**；产生结果那次的完整环境是 63 个包，
+# 想逐字节复现就 `pip freeze > requirements.lock.txt`（lock 不进仓库）。
+#
+# 装法见 README §2。
+
+langchain==1.4.2
+langchain-classic==1.0.8
+langchain-community==0.4.2
+langchain-core==1.6.5
+langchain-ollama==1.1.0
+faiss-cpu==1.15.1
+rank-bm25==0.2.2
+numpy==2.5.3
+
+# 只为让对照脚本能 import 本仓的 BM25Index（mikasa.index.bm25 → tokenizer →
+# utils.logging → rich）；对照协议本身不需要它，只在做"哪一路造成了差异"的
+# 逐路诊断时用到。
+rich==15.0.0
