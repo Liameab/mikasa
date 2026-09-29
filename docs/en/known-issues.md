@@ -21,6 +21,12 @@
 > **capability boundaries** of the model or retriever, with no low-cost engineering fix. Re-check
 > entry point after any relevant change: `mikasa eval run --profile local` (63 questions, ~30
 > minutes).
+>
+> **Re-run on 2026-09-28** (the marker arm of the structured-output A/B, current configuration of
+> this profile): recall@10 = 0.982, refusals 11/16, citation gold 0.817, one question lost per
+> session (see §3 E5). Same order of magnitude as the 09-09 numbers below, but **not equal** —
+> the methodology moved in between (fusion window 10 → 14, explicit `num_ctx`, `think` off,
+> cross-lingual second path on, timeout jitter). Compare directions, not decimal places.
 
 | # | Issue | Measured | Evidence | Fixes considered | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -53,6 +59,7 @@
 | E2 | Eval wall-clock cost | A full 63-question local run takes ~25–35 minutes (4–5 on api) — CI only runs the offline protocol layer | Accepted; recorded in evaluation.md §5 |
 | E3 | Mock-LLM boundary | Offline runs carry no semantics (protocol self-check only); 7/16 unanswerable questions mis-answered is evidence of the mock's limits | Accepted; recorded in evaluation.md §5 and limitations §3 |
 | E4 | Coverage baseline guard | The baseline was 91% — new M4.5 modules need a fresh measurement and an update in evaluation.md | Updated: **92%** (re-measured on 2026-09-27 during the MCP round: 8578 statements, 1126 passed + 2 skipped; the previous 92% was 8190 statements / 1085 passed — see evaluation.md) |
+| E5 | The local profile's 60s timeout loses questions | `llm.timeout_seconds` defaults to 60s, while a `max_tokens=4096` answer on this profile occasionally runs past it: **one question lost per evaluation session** (2026-09-28, two sessions: q033 / q032 — not the same question, so it is jitter rather than a hard question). The lost item is counted as a "generation chain failure" and no answer is obtained at all (not a short answer — zero). **Corroborated 2026-09-29**: the Ollama log shows ~16.4 tokens/s on this profile, so 60s ≈ 1000 tokens — inside the 4096 cap, consistent with this story; and neither session's log shows any VRAM eviction, which rules out "stuck on memory pressure" | Awaiting a decision: give the local profile its own, larger timeout (e.g. 180s). **Note**: that is a product-config change and it moves the evaluation baseline — record it in evaluation.md before making it |
 
 ## 4. Explicitly not doing (so it does not get re-litigated)
 

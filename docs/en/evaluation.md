@@ -330,21 +330,74 @@ constrained decoding — only "valid JSON" is guaranteed; schema compliance rest
 prompt plus client-side validation. All 63 happened to pass, which is a property of this
 model, not a general law.
 
-### 7.2 local profile (Ollama `format: <schema>`, **constrained decoding**) — **pending**
-
-The commands are ready (`build/structured-local.yaml` is the matching overlay):
+### 7.2 local profile (Ollama `format: <schema>`, constrained decoding) — done (2026-09-28)
 
 ```bash
-mikasa eval run --profile local --name local-marker
-mikasa eval run --profile local --config build/structured-local.yaml --name local-json
+mikasa eval run --profile local --name local-marker                      # run #2
+mikasa eval run --profile local --config build/structured-local.yaml --name local-json   # run #3
 ```
 
-Each takes 25-35 minutes on this machine (qwen3:8b). What this pair is for: whether an
-8B model gets **squeezed by the fields** — the token overhead, the format failure rate
-(which should approach zero under constrained decoding) and, above all, whether the
-**semantic score drops**. That last one is the question the experiment was designed
-around. The local profile has the judge off (ADR-0014 ③), so semantics can only be read
-from protocol metrics plus manual sampling, and the report has to say so.
+Sessions: run #2 (marker, 1010.7s) and run #3 (json, 843.1s), same 63 questions, same
+sample-corpus, same embedding (bge-small-zh-v1.5). The local profile has the judge off
+(ADR-0014 ③), so **everything below is protocol-layer only — there is no semantic score**;
+that is this profile's built-in boundary and it can only be patched by manual sampling.
+
+| Metric | local-marker (#2) | local-json (#3) | Reading |
+| --- | --- | --- | --- |
+| Format failures | — (no such event on this path) | **9 / 62** | the constraint guarantees valid JSON, yet **not one failure was syntactic** (see below) |
+| Out-of-range / invented markers | 0.000 | 0.007 | paired +0.007, CI [0.000, +0.022] — not significant |
+| citation gold ratio | 0.817 | 0.810 | paired −0.007, CI [−0.081, +0.063] — **not significant** (see rerun noise) |
+| Answerable questions refused | 0 | 0 | — |
+| Refusal accuracy | 11/16 = 68.8% | 11/16 = 68.8% | identical (different questions fail: q061 ↔ q059) |
+| Unanswerable questions answered | 5 | 5 | of which cited: 4 → 5 |
+| Input tokens | 211,944 | 230,994 | **+9.0%** (the price of the contract and chunk_ids) |
+| Output tokens | 10,677 | 5,926 | **−44.5%** |
+| Answer length (mean, answerable) | 324 chars | 130 chars | **−60%** |
+| Sections / bullets per answer | 1.196 / 2.674 | 0.087 / 0.130 | **the presentation almost disappears** |
+| Total wall time | 1010.7s | 843.1s | shorter output, naturally faster |
+
+> **What the two "paired" columns mean**: the two means come from each session's **own** report,
+> whose denominator is "answerable questions not refused and carrying citations" (n=46); the
+> paired columns compare the **common items** of both sessions (n=45, 2000 bootstrap resamples,
+> fixed seed — the same function `eval compare` uses). The denominators differ, so a mean
+> difference and a paired difference are not exactly the same quantity: the per-session means
+> drop each session's own lost question (see below).
+
+**The nine format failures** (taken one by one from the run log): 8 × `chunk_id` mismatch
+and 1 × "prose disagrees with the declaration". The mismatches are telling —
+`marker=5 declared 55, actual 54`, `marker=6 declared 38, actual 39`,
+`marker=7 declared 3118, actual 56`: the model wrote **a neighbouring chunk id, or a
+multi-digit number it made up**. Constrained decoding constrains the *shape*, not the
+*content*: the schema guarantees an integer, not that the integer is right. That is the
+single most valuable sentence of this round — `format: <schema>` is easy to read as
+"format is solved"; what it actually solves is syntax, while the semantic problem stays
+exactly where it was, now harder to notice because it arrives inside a well-formed shell.
+
+**Conclusion (local profile)**: on an 8B model the JSON carrier leaves **nothing but
+cost** — output tokens −44.5%, answer length −60%, sections and bullets all but gone (the
+model spends its budget filling fields and the answer gets squeezed into short
+sentences), while refusal discipline and citation-gold hit rate **do not move** (every
+difference sits inside the rerun noise). Read this next to §7.1: **the same change has
+opposite signs on the two models** — on DeepSeek the JSON carrier improved refusals
+(mistakes 3 → 1) for +12% tokens; on the 8B it is pure cost. The sentence at the top of
+`pipeline/prompts.py` ("plain text markers rather than JSON, more stable on small models")
+turns from a hunch into a **measurement** — it is right, and now we know what it costs.
+
+**Rerun noise (read this before any delta above)**: the same configuration run twice
+overnight (#1 → #2) gave a per-session citation gold of **0.850 → 0.817** (a −0.033 difference);
+paired over the 45 common items it is **0.846 → 0.835** (Δ−0.011, CI [−0.041, +0.007]). The two
+differ because **each session lost one question** to a timeout — not the same question
+(q038 / q033) — so the denominators are not the same set of items. So on this profile a mean
+difference **within ±0.04 is not an effect**, and the −0.007 between marker and json sits inside
+that band. The **counts** in the report (9/62 format failures, 11/16 refusals) are steadier than
+the means, which is why they are the ones worth quoting.
+
+**Side finding (unrelated to this experiment, worth a follow-up)**: the local profile's
+`llm.timeout_seconds` defaults to 60s, while `max_tokens=4096` answers occasionally run
+past it (one lost question per session). Both groups ran the same configuration and lost
+one question each, and the pairing uses the shared questions, so the conclusions above
+stand; whether to give the local profile a separate, larger timeout is tracked in
+`docs/known-issues.md`.
 
 ### 7.3 The experiment's other output: a real bug
 
@@ -358,3 +411,68 @@ generation is structured; the provider only honours an explicit argument"
 re-run**, so the table above comes from one single code revision. This is evaluation
 earning its keep: the **scope** of a feature switch is easier to get wrong than its
 default value.
+
+## 8. LangChain control group: the framework's default chain vs this repo's protocol layer (2026-09-29)
+
+**The question**: retrieval can be swapped for a framework — but what about the **generation /
+citation layer**? What does a framework's default RAG chain do for you, and what does it leave
+out? This section is a measurement. The control directory is `experiments/langchain_baseline/`
+(a **control, not a foundation**: it does not enter `src/`, does not enter the main CI, and
+brings 63 packages / 253 MB of dependencies); full per-question data and re-run commands are in
+that directory's README.
+
+**Method (stated up front, or the numbers mean nothing)**: both arms receive the **verbatim same**
+14 chunks (in the order the production injection window produced them); the framework side does
+**not** retrieve for itself, and neither does ours — the only difference is the generation layer.
+Same model (qwen3:8b), same temperature. The framework side is what you get from any
+"LangChain RAG in 10 minutes" post: `RetrievalQA.from_chain_type(chain_type="stuff")` — the
+default prompt (sources pasted as one block, **unnumbered**) plus `StrOutputParser`
+(**no validation**). Our side runs the production `Generator`.
+
+| Metric (63 questions: 47 answerable / 16 unanswerable) | LangChain default chain | This repo's protocol layer |
+| --- | --- | --- |
+| Answers containing `[n]` markers (answerable) | **0.0%** | 100% |
+| Markers per answer | 0.00 | 3.49 |
+| Out-of-range marker rate | 0.0% (empty set) | 0.0% |
+| Refusal rate (the 16 unanswerable) | **0 / 16** | **10 / 16 = 62.5%** |
+| Mean characters (answerable) | 340 | 302 |
+| Sections / bullets per answer | 0.00 / 0.70 | 1.15 / 1.91 |
+| Median seconds per question | 14.8s | 11.7s |
+| Input / output tokens | 151,882 / 11,955 | 212,181 / 9,940 |
+
+**How to read it**:
+
+1. **The framework's "0% out-of-range" is a zero over an empty set.** Across all 63 questions it
+   emitted `[n]` **not once** (checked per question; `any(markers)` is false) — with no numbering
+   system there is nothing to be out of range. That cell cannot be read as "the framework cites
+   properly too".
+2. **Refusal 0/16 is the hardest line in this section.** On all 16 questions whose answer is not
+   in the corpus, the framework produced a substantive answer — **every single one** (both the
+   strict and the loose measure are 0): the default chain never refuses. That is where
+   hallucination comes from, and it is the direct evidence for why the protocol layer had to be
+   written by hand: it is not a formatting preference, it is **a gate against hallucination**.
+3. **The price is +39.7% input tokens** (212,181 vs 151,882): the numbering, the citation rules,
+   the refusal rules and the examples all live in the prompt, and that is what they cost. Median
+   latency is actually 21% *faster* (refusals are short) and output tokens are −16.9%.
+4. **Presentation is a product of the protocol layer too**: 1.15 vs 0.00 sections and 1.91 vs 0.70
+   bullets — the production prompt specifies how an answer is organised; the framework's default
+   prompt has nothing to say about it.
+
+**The same comparison at the retrieval layer (conclusions; table in the control README §3)**:
+over the 47 answerable questions, same corpus and same embeddings, recall@5/8/10 is **identical
+at 0.982** (paired difference zero) and MRR is 0.924 vs 0.911 (Δ−0.012, CI [−0.035, +0.000], not
+significant). Per-path diagnosis localises the difference to one place: the **dense path's top-20
+agrees question by question, 47/47, while the BM25 path agrees 0/47** — the difference is entirely
+the BM25 IDF formula (the framework uses `ln((N−df+0.5)/(df+0.5))` with a negative floor; this repo
+uses the always-positive `ln(1 + …)`), not "the framework's vector search is worse". Retrieval
+costs single-digit milliseconds on both sides (1.2ms vs 0.4ms), while embedding the same queries
+costs 40.8ms — the measured basis for **don't swap an implementation for performance**.
+
+**Where this does not generalise**: ① the framework column is its **default chain**; a different
+prompt would add citations and refusals — which is exactly the point: **the framework gives you
+the plumbing, the protocol is yours to write**, and writing it inside the framework is still
+writing it. ② This is the local profile; the api profile (DeepSeek + bge-m3) has not been compared
+the same way, since both cost and rate are the provider's to decide. ③ The 10/16 refusal here
+differs slightly from the 11/16 of the §7 evaluation run because this control uses the **frozen
+production injection window** (no cross-language second path), not the evaluation retrieval chain
+— two entry points measuring the same thing.
