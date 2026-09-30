@@ -481,3 +481,79 @@ the same way, since both cost and rate are the provider's to decide. ③ The 10/
 differs slightly from the 11/16 of the §7 evaluation run because this control uses the **frozen
 production injection window** (no cross-language second path), not the evaluation retrieval chain
 — two entry points measuring the same thing.
+
+## 9. MCP tool-calling evaluation: after the library becomes an agent's tool (2026-09-30)
+
+**Why measure this**: MCP (ADR-0036) turns the knowledge base into three read-only tools, but
+"the tools exist" is not "the tools get used correctly" — tool selection, call counts and whether
+citations survive the round trip all need measuring (proposal §4-B). This section measures **the
+model's side**; "is the protocol right" is covered by `tests/unit/mcp/` and by the real Claude
+Code trajectory (2026-09-27).
+
+**How**: `tools/eval_mcp_tools.py` — the script is itself an MCP client (it really spawns
+`mikasa mcp` and speaks stdio JSON-RPC) wrapped around a minimal agent loop: the tool list comes
+from `tools/list`, is converted to Ollama's native `tools` format, and **qwen3:8b decides which
+tool to call** (a scripted policy would not measure tool selection at all). The 10 questions are
+selected by rule from the golden set (6 answerable: 2 each easy/medium/hard; 4 unanswerable:
+2 unrelated, 1 insufficient, 1 hallucination bait), the corpus is the isolated sample-corpus
+build, `temperature=0`, `think=false`. Three arms, **the same 10 questions**:
+
+1. **Baseline**: the default driver prompt ("whenever knowledge-base content is involved you must
+   call a tool, do not answer from memory");
+2. **Hardened**: `--strict-tools`, adding one sentence — "**even if you think you know the
+   answer**, you must still fetch it from the knowledge base first";
+3. **ask probe**: `--probe-ask`, no model involved — it calls `ask` once per question and checks
+   the citations directly.
+
+| Metric (10 questions) | Baseline | Hardened | ask probe |
+| --- | --- | --- | --- |
+| Total tool calls (agent side) | 8 (search 7 / read 1) | 11 (search 10 / read 1) | 10 (all `ask`) |
+| **Questions that used `ask`** | **0 / 10** | **0 / 10** | 10 / 10 |
+| Answered from memory (no tool call at all) | **2** (q048 weather, q049 latte) | 0 | — |
+| Answerable but "searched only" (prose, no citations) | 6 / 6 | 6 / 6 | 0 (ask answered all) |
+| **False "the knowledge base has nothing"** | 1 (q017) | 1 (q017) | **0** |
+| Citation verifiability | nothing to verify | nothing to verify | **12/12 chunk_ids read back, 0 out of range** |
+| Handling of unanswerable questions | 2 from memory + 2 honest "not found" | 4/4 honest "not found" | 4/4 `refused=true` |
+| Median / total per question | 10.4s / 153s | 13.9s / 161s | 9.4s / 106s |
+
+**Three conclusions**:
+
+1. **The 8B only ever uses `search`**: of 20 agent-side calls, 19 were search, 1 was read and
+   **0 were ask**. Compare the real Claude Code trajectory of 2026-09-27 (**six different query
+   wordings** before it read, then asked, and refused honestly when the library had no support)
+   — the gap between "tools available" and "tools used well" sits entirely on the model side,
+   and its two ends are exactly this repo's two most valuable mechanisms: **query reformulation**
+   (retrieval strategy) and **`ask`** (the citation contract). In this run not once was a query
+   reworded: the query text was the whole question.
+2. **Hardening the prompt only fixes half of it**: adding "even if you know it, fetch it first"
+   took answering-from-memory from **2 to 0**; the `ask` usage rate stayed at **0/10** — "don't
+   answer from memory" and "pick the right tool" are different problems. This is directly useful
+   for what we tell users by default (now recorded in `usage-guide.md` §2c).
+3. **The tools themselves hold up, and the probe proves it**: across the 10 ask calls, all 6
+   answerable questions came back with citations, **all 12 chunk_ids were readable via `read`**,
+   zero out-of-range markers, and all 4 unanswerable questions returned `refused=true`.
+   **q017 is the clearest case**: the agent arm retrieved 5 hits (including the relevant chunk 23)
+   and still answered "no related content in the knowledge base", while the probe arm's `ask` on
+   the same question returned a cited answer (`refused=false`) — **same library, same model; pick
+   the right tool and it answers, pick the wrong one and it reports "nothing found"**.
+
+**Failure modes** (per-question verbatim records live in `build/mcp-tool-eval*.json`):
+① answering from memory; ② prose answers with zero citations (search returns snippets, and a
+self-written answer has no `[n]` markers); ③ **false negatives** (retrieved, yet answered
+"nothing found"); ④ single-shot retrieval, no rephrasing or follow-up; ⑤ `ask` never triggered.
+**Zero protocol-level errors**: every argument matched the schema, no unknown tools, no tool
+errors, no timeouts.
+
+**Boundaries**: ① 10 questions is a sample; ② the driver prompt is hand-written and the numbers
+move if it is reworded (both prompt texts are stored in the JSON); ③ only the local profile —
+an api profile (DeepSeek-class) is expected to do clearly better and was not measured; ④ the ask
+probe measures "can the tool honour its citation contract", not "does an agent honour it".
+
+**Reproducing** (three arms, one command with different flags; run `ollama ps` first — on an 8 GB
+card another resident model makes qwen3:8b get evicted over and over):
+
+```bash
+MIKASA_DATA_DIR=build/eval-local/data python tools/eval_mcp_tools.py --profile local   # baseline
+MIKASA_DATA_DIR=... python tools/eval_mcp_tools.py --profile local --strict-tools      # hardened
+MIKASA_DATA_DIR=... python tools/eval_mcp_tools.py --profile local --probe-ask         # ask probe
+```

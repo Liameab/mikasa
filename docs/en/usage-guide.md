@@ -115,6 +115,16 @@ just ask — the agent decides which tool to use on its own.
 - **Which library it reads**: a source checkout uses the repo's `data/`; the installed build
   uses `%LOCALAPPDATA%\Mikasa`. To pin it, add `-e MIKASA_DATA_DIR=<path>` to the
   registration command.
+- **With a local 8B as the client, write the rules for it** (measured 2026-09-30, 10 questions ×
+  3 arms): qwen3:8b **never once picks `ask`** (all 10 questions used `search`, so the citation
+  contract went unused) and answers questions it thinks it knows **from memory without touching
+  the library** (it will happily answer "will it rain in Hangzhou tomorrow"). Two remedies:
+  ① put "**even if you think you know the answer, you must call a tool first**" into the client's
+  system prompt or project instructions — measured effect: answering-from-memory dropped from 2
+  questions to 0; ② state explicitly that it must use `ask` when you want a traceable `[n]`
+  answer. The low-effort route is a stronger client model: the 2026-09-27 Claude Code trajectory
+  rewrote its query six times, then read, then asked — and refused honestly when nothing in the
+  library supported an answer. Full data: `evaluation.md` §9.
 
 ## 3. Page Tour
 
