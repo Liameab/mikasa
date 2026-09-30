@@ -599,7 +599,9 @@ In the packaged build, httpx sits on the `::1` attempt until the whole request t
 `urllib` — `GET /api/settings/ollama/models?base_url=http://localhost:11434/v1` returns the model
 list in 2.2 s, because urllib walks the resolved addresses itself. And from a plain Python process,
 the same OpenAI SDK call to `localhost` succeeds (3.4 s). So it is not "Ollama is down", not a proxy
-(no proxy env vars, system proxy off), and not the key.
+(no proxy env vars that day, system proxy off — **added 2026-09-29: that rules out a proxy *that
+day*, it does not generalize to "proxies cannot reach loopback"; a week later the system proxy on
+this same machine really did swallow loopback traffic, see §12**), and not the key.
 
 **Fix**: `providers/llm.py::normalize_base_url` rewrites a hostname of exactly `localhost` to
 `127.0.0.1` before the client is built (shared by the LLM **and** vision clients); the profile
@@ -857,3 +859,45 @@ calling a function that raises, with nothing catching it"**:
 `int()` paired with `encode("ascii")`, and filename sanitizing are all of the form "never raises on
 normal input, always raises on dirty input" — and dirty input comes from users and upstreams. Fix
 the **root** (`port_of`), not one try per endpoint.
+
+## 12. Real Bug Cases from Development (Continued, 2026-09-29): the system proxy swallows loopback traffic
+
+### A batch run that "never finished": requests to 127.0.0.1 were handed to a third-party proxy
+
+**Symptom**: the LangChain control group's generation batch (63 questions / qwen3:8b / local
+Ollama) made no progress for an evening, half of which went into chasing "the network" and "VRAM
+pressure" as hypotheses. What the machine actually showed: the Python process frozen at 0% CPU,
+Ollama's log not growing, `ollama ps` listing the model resident in VRAM, and exactly one socket
+open in the process — attached to `127.0.0.1:12450`, not 11434.
+
+**Trigger**: any application that installs a system proxy — here Breeze's `core.exe` on 12450 —
+writes it into the Windows registry.
+
+**Root cause**: with `trust_env` on (the SDK default), httpx reads the system proxy from the
+**registry** and **ignores the ProxyOverride bypass list** — the registry's `127.0.0.1;<local>`
+entry counts for nothing. Requests to `http://127.0.0.1:11434/v1` were therefore handed to the
+third-party proxy, which does not forward loopback traffic, so every request hung until it timed
+out. The most misleading detail: `localhost` and `127.0.0.1` behaved differently (the former
+ReadTimeout, the latter "works but unstable"), which points straight at IPv6 — the §7 bug. It was
+not that one.
+
+**Why it was hard to see**: application logs clean (nothing before the timeout), curl against
+Ollama's port perfectly happy, no `HTTP_PROXY` in the environment. The one thing that told the
+truth was which port the socket was attached to.
+
+**Fix**: `providers/llm.py::build_http_client` — literal local/private addresses get
+`httpx.Client(trust_env=False)`; public hostnames keep the SDK's default client (outbound traffic
+does need the system proxy, so this must not be a blanket switch). Wired into `build_openai_client`
+and the embedding client. The reranker and Ollama probes use stdlib urllib, which never read the
+registry proxy, and were left alone. Without a code change, `NO_PROXY=localhost,127.0.0.1,::1`
+works (recorded in the control group's README §2).
+
+**Privacy note**: while the system proxy is on, every local question and answer passes through that
+third-party process. Nothing this project can control — but once loopback stops inheriting the
+proxy, at least the local profile does not have to.
+
+**Lessons**: (1) when a request "won't go out", check **which port the socket is attached to** —
+far faster than reading logs; (2) §7's "the same hostname is not the same endpoint across HTTP
+stacks" gains a companion: **loopback is not automatically proxy-free either**; (3) an environment
+bug this expensive deserves a code fix — a `NO_PROXY` line in a README knows nothing about what
+proxy software the user has installed.

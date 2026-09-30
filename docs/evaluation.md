@@ -188,9 +188,10 @@ JSON mode——Ollama 小模型不稳；解析失败计 raw 留痕。裁判对�
   人工复核的入口，正常条目请查 metrics_json 的 items 逐条留痕。
 
 回归门禁口径（CI）：全量 `pytest -q` + `ruff` + `mypy` +
-`mikasa eval run --profile offline` 冒烟。**覆盖率基线：92%**（8578 语句，
-2026-09-27 MCP 那轮全量重测：**1126 passed + 2 skipped、约 2 分钟**；
-`--cov=mikasa --cov-report=term`。上一版 92% = 8190 语句 / 1085 passed（2026-09-25）；
+`mikasa eval run --profile offline` 冒烟。**覆盖率基线：92%**（8594 语句 / 694 未覆盖，
+2026-09-30 全量重测：**1136 passed + 2 skipped、1 分 51 秒**；
+`--cov=mikasa --cov-report=term`。上一版 92% = 8578 语句 / 1126 passed（2026-09-27 MCP 轮）；
+再上一版 92% = 8190 语句 / 1085 passed（2026-09-25）；
 再上一版 93% = 3469 语句 / 2026-09-09 M4.5 收工——语句数翻了近一倍而比例只降
 一个点，是"新增功能都带测试"的结果）。
 真实质量验收（发布前人工跑）：`--profile api`（DeepSeek 生成 + Qwen 裁判，
