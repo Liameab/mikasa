@@ -57,6 +57,7 @@
 | ADR-0036 | MCP server：手写 stdio JSON-RPC + 三个只读工具（`mikasa mcp`） | Accepted |
 | ADR-0037 | 结构化输出：协议不变，换的是序列化层（默认关、只非流式） | Accepted |
 | ADR-0038 | 用量可见性：token 的采集、显示与累计口径 | Accepted |
+| ADR-0039 | 证据自评 + 一次补检索：Self-RAG 最小闭包（默认关，A/B 不显著） | Accepted |
 
 ---
 
@@ -1983,3 +1984,57 @@ KaTeX 占位符）。三处缺口：评测的逐题留痕里没有它（实验�
 测试 `tests/unit/providers/test_llm_structured.py`、`tests/unit/cli/test_cli.py`
 （用量汇总两条）、`tests/unit/eval/test_runner.py`（逐题字段）；无头 Chrome 验收
 `tools/chrome_ask.py --require-tokens`（真页面断言 who 行里有用量）。
+
+---
+
+## ADR-0039 证据自评 + 一次补检索：Self-RAG 最小闭包（默认关，A/B 不显著）
+
+- 状态：Accepted ｜ 2026-09-30（评估清单第 5 项；数据见 evaluation.md §10）
+- 关联：ADR-0035（`hop_expand`：同款"默认关的实验开关"纪律）、ADR-0014 ③
+  （offline 零 LLM 调用）、ADR-0013（kb 链路的旁路纪律）
+
+**背景**：检索是单行道——融合窗口之外的金块，生成阶段永远见不到（hard 档
+recall@10=0.931，差的就是窗口外那部分）。技术路线谈判稿把"迭代/agentic 检索"
+列为代价最大的方向（会砸 `[n]` 编号协议与全部评测基线），并建议先做它的最小切片：
+**Self-RAG 式的一次自评 + 一次补检索**。
+
+**决定**：
+
+1. **形态就两跳**：首轮检索 → LLM 自评"这些片段够不够答" → 判不足时用**它给出的
+   新查询**再检索一次 → 新块去重后追加尾部。**不迭代、不改排序、不动编号协议**：
+   追问式循环每轮都在变注入集合，`[n]` 契约与评测口径都要重做（谈判稿的判断）。
+2. **协议是一行二选一**（`足够` / `不足：<新查询>`），不起 JSON：判定只有两种结果，
+   标签文本在小模型上比结构化解码稳（结构化输出那条路是给 `[n]` 协议用的，ADR-0037）。
+   **解析不出来的任何输出一律当"足够"**——判不准时退回基线，绝不因它打断问答。
+3. **追加封顶 3 块、秩接着排**（同 `hop_expand`）：编号 `[n]` 走注入顺序，主命中必须
+   稳定占位；不设顶时第二次检索会带回整窗，注入量与编号一起翻倍。
+4. **自评材料封顶**：只喂前 8 块的 200 字 snippet——自评是"旁观"调用，输入长度必须
+   罩住，否则本地档 14 块全塞进去会比生成本身还贵。
+5. **默认关**（`retrieval.sufficiency_retry`），profile yaml 一个都不写：它改变注入的
+   片段集合，一开就平移评测基线。实验走覆盖层 `build/sufficiency-local.yaml`。
+6. **失败一律退回基线**：自评调用异常 / 空查询 / mock 档（ADR-0014 ③）→ 原命中原样
+   返回，问答主链零影响（同 `_translate_query` 的"加速器"纪律）。
+7. **MCP `search` 不接闭包**：`ask._retrieve` 带 `sufficiency` 开关，`search()` 显式关掉
+   ——它要的是"检索器看到了什么"，不是一支会思考的搜索框。
+
+**结果（A/B，两场 local 全量 63 题）**：citation gold **+0.030，CI [−0.030, +0.098]，
+不显著**；拒答纪律两臂完全相同（11/16、误答 5、误拒 0）；成本 **+8.4% 墙钟 /
++8.5% 输入 token**；触发 37/63。逐题上它把多金块 hard 题的引用面拉宽（q021 3→6、
+q036/q037 +1），也带来 2 题零引用（复核为生成抖动，非系统性劣化）。
+
+**为什么仍归档为 Accepted（而不是 Rejected）**：决定不是"上不上线"，是
+**"默认关 + 留作实验开关 + 纪律照旧"**——能力被实现、被测过、被记账，默认不改变
+任何既有行为。没有显著增益的能力不进基线（同 ADR-0035 的理由：一进基线，全部历史
+数字都要重标定）。将来要压触发率/接拒答路径时，`pipeline/sufficiency.py` 与这份
+报告就是起点。
+
+**边界**：单次跑、温度 0.1（抖动未分离）；只测 local 档；阶段 A 检索层差值为 0 是
+设计如此（闭包挂在生成链路，不经阶段 A）。
+
+**代码**：`pipeline/sufficiency.py`（自评 + 补检索 + 尾部合并）、
+`pipeline/prompts.py`（`SUFFICIENCY_SYSTEM_PROMPT` / `build_sufficiency_messages`）、
+`config/settings.py`（`RetrievalConfig.sufficiency_retry`）、
+`pipeline/ask.py`（`_retrieve(sufficiency=...)`）、`eval/runner.py`（阶段 B 同轨）、
+`web/static/js/common.js`（`fmtLatency` 的 `证据自评` / `补检索` 分段）；
+测试 `tests/unit/pipeline/test_sufficiency.py`（12 条）、
+smoke `tools/smoke_render.mjs`。

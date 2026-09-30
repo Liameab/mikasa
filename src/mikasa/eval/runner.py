@@ -48,6 +48,7 @@ from mikasa.models.retrieval import RetrievedChunk
 from mikasa.pipeline.ask import _translate_query
 from mikasa.pipeline.generator import Generator, extract_markers
 from mikasa.pipeline.retriever import Retriever
+from mikasa.pipeline.sufficiency import maybe_supplement
 from mikasa.providers import get_embedding
 from mikasa.storage import repo
 from mikasa.storage.db import open_db
@@ -529,6 +530,10 @@ class EvalRunner:
                 else None
             )
             hits, _lat = retriever.retrieve(item.question, second_query=second_query)
+            # 证据自评 + 一次补检索（retrieval.sufficiency_retry，默认关）：
+            # 与产品链路**同一个函数**——A/B 与线上必须走同一段代码，否则
+            # 测出来的差值不是产品的差值（与 crosslingual 复用 _translate_query 同理）
+            hits, _sup_lat = maybe_supplement(self._settings, llm, retriever, item.question, hits)
             answer, _completion = generator.generate(item.question, hits, titles)
         except Exception as exc:  # noqa: BLE001 - 逐条容错：任何链路失败都要留痕
             gen.failed += 1

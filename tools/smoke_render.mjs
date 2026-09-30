@@ -183,6 +183,12 @@ const free = (text, citations = []) => renderAnswer(text, citations, false); // 
   assert(s.includes("生成 1.7s"), "生成时间 = generate 减去前置分段");
   assert(s.includes("译查询 13.8s") && s.includes("译对照 1.6s"), "两个翻译分段各自列出");
   assert(s.includes("检索 628ms") && s.includes("重排 407ms"), "检索/重排分段列出（<1s 用毫秒）");
+  // 证据自评 + 补检索（sufficiency_retry 打开时才有的分段）：必须从生成时间里
+  // 减出去，否则开了补检索的轮次会把"生成"报大（同 628/407 的减法口径）
+  const lat2 = { retrieve: 600, sufficiency: 2400, retrieve2: 900, translate2: 1500, generate: 12400 };
+  const s2 = fmtLatency(lat2, 12.6);
+  assert(s2.includes("生成 7.0s"), "自评与补检索从生成时间里减出");
+  assert(s2.includes("证据自评 2.4s") && s2.includes("补检索 2.4s"), "自评/补检索分段各自列出");
   // free 轮只有 generate 一段（不减任何东西）
   assert(fmtLatency({ generate: 3200 }, 3.4) === "用时 3.4s（生成 3.2s）", "free 轮只显示生成");
   assert(fmtLatency(null) === "", "无延迟数据返回空串（回放旧消息不炸）");

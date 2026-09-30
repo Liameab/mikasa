@@ -64,6 +64,7 @@
 | ADR-0036 | MCP server: hand-written stdio JSON-RPC and three read-only tools (`mikasa mcp`) | Accepted |
 | ADR-0037 | Structured output: the protocol does not change, only the serialization layer (off by default, non-streaming only) | Accepted |
 | ADR-0038 | Usage visibility: how tokens are captured, displayed and totalled | Accepted |
+| ADR-0039 | Evidence self-assessment plus one supplementary retrieval: a minimal Self-RAG closure (off by default, A/B not significant) | Accepted |
 
 ---
 
@@ -2498,3 +2499,76 @@ path fills it in), `eval/runner.py` + `eval/report.py` (per item and totals),
 cases), `tests/unit/eval/test_runner.py` (the per-item fields); headless Chrome
 acceptance via `tools/chrome_ask.py --require-tokens` (a real page asserting the byline
 shows usage).
+
+---
+
+## ADR-0039 Evidence self-assessment plus one supplementary retrieval: a minimal Self-RAG closure (off by default, A/B not significant)
+
+- Status: Accepted | 2026-09-30 (evaluation checklist item 5; data in evaluation.md §10)
+- Related: ADR-0035 (`hop_expand`: the same "off-by-default experimental switch" discipline),
+  ADR-0014 ③ (zero LLM calls offline), ADR-0013 (the side-path discipline of the kb chain)
+
+**Background**: retrieval is a one-way street — a gold chunk outside the fusion window is
+something the generation stage never sees (the hard tier's recall@10=0.931 is exactly the part
+outside the window). The tech-roadmap negotiation notes list "iterative/agentic retrieval" as
+the most expensive direction (it would wreck the `[n]` numbering protocol and every evaluation
+baseline) and recommend building its minimal slice first: **a Self-RAG-style single
+self-assessment plus a single supplementary retrieval**.
+
+**Decision**:
+
+1. **The shape is exactly two hops**: first-round retrieval → the LLM self-assesses "are these
+   passages enough to answer?" → judged insufficient, **the new query it gives back** retrieves
+   once more → the new chunks, deduplicated, are appended at the tail. **No iteration, no
+   re-ranking, the numbering protocol untouched**: a follow-up loop changes the injected set on
+   every round, so the `[n]` contract and the evaluation measure would both have to be redone
+   (the negotiation notes' judgement).
+2. **The protocol is a one-line either/or** (`足够` "sufficient" / `不足：<新查询>`
+   "insufficient: <new query>"), no JSON: the verdict has only two outcomes, and on small
+   models a label text is more stable than structured decoding (that structured-output path is
+   for the `[n]` protocol, ADR-0037). **Any output that does not parse is always treated as
+   "sufficient"** — when the verdict is unreliable we fall back to the baseline and never let it
+   interrupt Q&A.
+3. **Appending is capped at 3 chunks, with ranks continuing in order** (the same as
+   `hop_expand`): numbers `[n]` follow injection order, the main hits must keep their stable
+   slots; with no cap the second retrieval would bring back a whole window, doubling the
+   injected volume and the numbering together.
+4. **The self-assessment material is capped**: only the 200-char snippet of the first 8 chunks —
+   self-assessment is a "bystander" call whose input length has to be bounded, otherwise
+   stuffing all 14 chunks in on the local profile would cost more than generation itself.
+5. **Off by default** (`retrieval.sufficiency_retry`), set in no profile yaml: it changes the
+   set of injected passages, so switching it on shifts the evaluation baseline. The experiment
+   runs through the overlay `build/sufficiency-local.yaml`.
+6. **Every failure falls back to the baseline**: self-assessment call throws / empty query /
+   mock profile (ADR-0014 ③) → the original hits come back unchanged, with zero impact on the
+   Q&A main chain (the same "accelerator" discipline as `_translate_query`).
+7. **MCP `search` does not take the closure**: `ask._retrieve` carries the `sufficiency`
+   switch, `search()` turns it off explicitly — what it wants is "what the retriever saw", not
+   a search box that thinks.
+
+**Result (A/B, two full local sessions over 63 questions)**: citation gold **+0.030, CI
+[−0.030, +0.098], not significant**; refusal discipline identical on both arms (11/16, 5 wrong
+answers, 0 false refusals); cost **+8.4% wall clock / +8.5% input tokens**; triggered 37/63.
+Per question it widens the citation surface on multi-gold-chunk hard questions (q021 3→6,
+q036/q037 +1), and also brings 2 questions with zero citations (checked as generation jitter,
+not systematic degradation).
+
+**Why it is still archived as Accepted (rather than Rejected)**: the decision is not "ship it
+or not", it is **"off by default + kept as an experimental switch + discipline unchanged"** —
+the capability is implemented, measured and accounted for, and by default it changes no
+existing behaviour. A capability with no significant gain does not enter the baseline (the same
+reasoning as ADR-0035: once it enters the baseline, every historical number has to be
+recalibrated). When the trigger rate needs pushing down or the refusal path needs wiring in,
+`pipeline/sufficiency.py` and this report are the starting point.
+
+**Boundaries**: a single run, temperature 0.1 (jitter not separated); only the local profile
+was measured; the zero difference at the stage-A retrieval layer is by design (the closure
+hangs off the generation path and does not pass through stage A).
+
+**Code**: `pipeline/sufficiency.py` (self-assessment + supplementary retrieval + tail merge),
+`pipeline/prompts.py` (`SUFFICIENCY_SYSTEM_PROMPT` / `build_sufficiency_messages`),
+`config/settings.py` (`RetrievalConfig.sufficiency_retry`),
+`pipeline/ask.py` (`_retrieve(sufficiency=...)`), `eval/runner.py` (stage B on the same track),
+`web/static/js/common.js` (the `证据自评` / `补检索` segments of `fmtLatency`);
+tests `tests/unit/pipeline/test_sufficiency.py` (12 cases),
+smoke `tools/smoke_render.mjs`.

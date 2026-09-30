@@ -142,6 +142,13 @@ class RetrievalConfig(BaseModel):
     # （63 题的那些数字得重跑才算数）；而且它只在"你的笔记之间有互链"时才
     # 有效果，不是普适增益。要开就在 profile yaml 里给个正数。
     hop_expand: int = 0
+    # 证据充分性自评 + 一次补检索（2026-09-30，Self-RAG 的最小闭包）：
+    # 首轮检索后让 LLM 判"这些片段够不够回答"，判不足时用它给的**新查询**
+    # 再检索一次，新命中的块去重后追加在尾部（不改主排序）。
+    # 默认关的理由同上（crosslingual / hop_expand 一脉）：它多花 1~3 次 LLM
+    # 调用、并改变注入的片段集合，开了就平移评测基线，只做实验用覆盖层
+    # （build/sufficiency-local.yaml）验证。mock 档恒不触发（ADR-0014 ③）。
+    sufficiency_retry: bool = False
 
 
 class RerankerConfig(BaseModel):

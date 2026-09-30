@@ -557,3 +557,119 @@ MIKASA_DATA_DIR=build/eval-local/data python tools/eval_mcp_tools.py --profile l
 MIKASA_DATA_DIR=... python tools/eval_mcp_tools.py --profile local --strict-tools      # hardened
 MIKASA_DATA_DIR=... python tools/eval_mcp_tools.py --profile local --probe-ask         # ask probe
 ```
+
+## 10. Evidence self-assessment plus one supplementary retrieval: a minimal Self-RAG closure A/B (2026-09-30)
+
+**The question**: retrieval is a one-way street — a gold chunk outside the first-round fusion
+window is something the generation stage never sees (the hard tier's recall@10=0.931 is exactly
+the part of those 12 questions that fell outside the window). Let the model self-assess the
+**first-round hits** once — "is this enough to answer?" — and when it judges them insufficient,
+re-retrieve once with **the new query it hands back**: can that fish the missed evidence back
+in? This is checklist item 5 (the Agentic minimal slice of the tech-roadmap negotiation notes
+§4), implemented as `retrieval.sufficiency_retry` (**off by default**, experimental overlay
+`build/sufficiency-local.yaml`).
+
+**How it was measured**: two full local sessions over all 63 questions, the same corpus /
+question bank / model (qwen3:8b, temperature 0.1, think=false, num_ctx 16384), **differing in
+this one switch only**:
+
+```bash
+MIKASA_DATA_DIR=build/eval-local/data python -m mikasa eval run --profile local --name suff-off
+MIKASA_DATA_DIR=build/eval-local/data python -m mikasa eval run --profile local \
+    --config build/sufficiency-local.yaml --name suff-on
+python -m mikasa eval compare <off_id> <on_id> --profile local   # per-question pairing + bootstrap interval
+```
+
+**The closure's terms** (implementation in `pipeline/sufficiency.py`): the self-assessment is
+fed only the 200-char snippet of the first 8 chunks, and the protocol is a **one-line either/or**
+(`足够` "sufficient" / `不足：<新查询>` "insufficient: <new query>"; anything unparseable
+counts as sufficient); judged insufficient → the new query (translated first on the
+cross-language profile) retrieves once more → the new chunks, deduplicated, are **appended at
+the tail of the hits, at most 3 of them** (numbers `[n]` follow injection order, the main hits
+must keep their stable slots, the same as `hop_expand`); a self-assessment call that throws or
+an empty query always falls back to the baseline; the mock profile never triggers it (ADR-0014 ③).
+
+### 10.1 Results
+
+| Metric (63 questions: 47 answerable / 16 unanswerable) | #4 baseline | #5 supplementary retrieval | Difference | 95% CI (difference) | Significant |
+| --- | --- | --- | --- | --- | --- |
+| recall@5 / @8 / @10 (paired n=47) | 0.982 | 0.982 | +0.000 | [+0.000, +0.000] | No |
+| MRR (paired n=47) | 0.924 | 0.924 | +0.000 | [+0.000, +0.000] | No |
+| citation gold ratio (paired n=50) | 0.759 | 0.788 | **+0.030** | [−0.030, +0.098] | **No (crosses 0)** |
+| Out-of-range / invented-marker rate (paired n=50) | 0.000 | 0.000 | +0.000 | [+0.000, +0.000] | No |
+| Refusal accuracy (16 unanswerable) | 11/16 | 11/16 | 0 | — | — |
+| Answerable refused / unanswerable answered | 0 / 5 | 0 / 5 | 0 | — | — |
+| **Not refused yet zero citations** | 0 | **2** | +2 | — | — |
+| Input / output tokens | 215,385 / 11,024 | 233,595 / 9,989 | **+8.5% / −9.4%** | — | — |
+| Total wall time | 743.0s | 805.7s | **+8.4%** | — | — |
+
+**Trigger statistics** (read from the log line "补检索：追加 N 块" — "supplementary retrieval: N
+chunks appended"): of the 63 questions **26 were judged "sufficient" and 37 "insufficient"**;
+35 really did append chunks (30 appended the full 3, 5 appended 2), and the other 2 were judged
+insufficient but had nothing new after dedup. The self-assessment call itself is cheap: 0.9s for
+one pre-check question (qwen3:8b think=false), so the +62.7s of wall clock is basically the
+price of those 63 self-assessments.
+
+**Per-question changes** (paired analysis, `metrics_json.items`):
+
+- **The 4 questions whose citation surface was widened**: q021 3→6, q033 1→2, q036 3→4,
+  q037 2→3. q036/q037 are exactly the two hard synthesis questions already known historically
+  to "lose their second gold chunk at fusion window @8" — supplementary retrieval really did
+  push them above the threshold.
+- **Gold-chunk hits**: 2 questions better (q003 0→1, q035 0→1), 2 worse (q041 3→2, q045 1→0).
+- **The 2 questions with zero citations** (q038 4→0, q045 1→0): re-run and checked on both
+  arms — q045's **baseline arm re-run also returns 0 citations** (that question already sat on
+  the model's jitter boundary); the q038 supplementary-retrieval arm's answer is not badly
+  organised, it simply never writes `[n]` anywhere. That is, "zero citations" is a symptom of
+  generation jitter, not a systematic degradation caused by the closure; but it is a real
+  regression in a discipline metric, listed as the report shows it, unwashed.
+- The −9.4% output tokens is the sum of small shortenings on most questions; the two biggest
+  single drops are exactly q041 (−546) and q038 (−313) — the questions that lost citations got
+  written shorter.
+
+### 10.2 Conclusion (how to read it)
+
+1. **Not significant**: citation gold +0.030, CI crosses 0. At a sample size of 63 questions,
+   "supplementary retrieval is better than not" is a sentence we **cannot utter**; what can be
+   said is "the direction is positive, and the positive cases cluster on multi-gold-chunk hard
+   questions".
+2. **The cost is certain**: wall clock +8.4%, input tokens +8.5% — the self-assessment call
+   **happens on every question** (63/63), while the payoff lands on a few. That is the inherent
+   structure of this kind of "review, then retrieve" closure: the review fee is fixed, the
+   payoff is long-tailed.
+3. **The trigger rate is on the high side**: 59% judged "insufficient" (16 of those being
+   unanswerable questions that "should be judged insufficient anyway"). Of the remaining 47
+   answerable questions, 21 (45%) were judged insufficient too — i.e. its verdict on "is this
+   enough" leans conservative. A 10-question probe compared a variant that feeds **whole chunks
+   (the full text of the first 6)**: answerable triggers 3/7 → 2/7, unanswerable 3/3 unchanged —
+   **truncation is not the main cause**, and changing how chunks are fed will not pull the
+   trigger rate back to "the ideal level". (Pushing the trigger rate down means changing the
+   decision mechanism itself; see the next item.)
+4. **Off by default stands** (`retrieval.sufficiency_retry`), the same discipline as
+   `hop_expand` / `structured_output`: **a capability with no significant gain does not enter
+   the baseline**, or every historical number would have to be recalibrated.
+5. **A valuable by-product**: this table is also a single measurement of "evidence-surface
+   width → citation-surface width" — supplementary retrieval raises the citation counts on
+   multi-gold-chunk questions (q021 3→6, q036/q037 +1), while refusal discipline does not move
+   at all (11/16, the 5 wrong answers identical on both arms). If the "refuse only when the
+   evidence is insufficient" close-out is ever built (wiring the self-assessment result into
+   the refusal path rather than into the retrieval path), the trigger rate and verdict
+   distribution here are ready-made raw material.
+
+### 10.3 Boundaries (an honest list)
+
+1. **A single run + temperature 0.1**: re-running the same question on both arms can give
+   different citation counts (q045, measured), and this table cannot separate how much of the
+   +0.030 difference is jitter.
+2. **Only the local profile was measured.** The api profile (DeepSeek-class) was not — the
+   verdict quality and the cost structure of self-assessment will both differ there.
+3. **The zero difference at the stage-A retrieval layer is by design**: the closure hangs off
+   the generation path (`ask._retrieve` and evaluation stage B), while stage A is the fixed
+   measure of "the retriever itself" and does not pass through the closure. Do not read it as
+   anything beyond "the closure did not change retrieval".
+4. **Supplementary retrieval appends at most 3 chunks and never re-ranks**: that is the
+   trade-off that keeps citation numbering stable (the same as `hop_expand`), not the only
+   answer to "what supplementary retrieval should look like"; allowing a re-rank would raise
+   the ceiling on the gain, at the price of numbering no longer being stable.
+5. **MCP `search` deliberately does not take the closure**: it is a pure retrieval tool, and
+   "a search box that thinks" is not what it is (see the comment in ask.py).

@@ -100,11 +100,18 @@ export function fmtLatency(latency, totalSec = null) {
   // 后端 latency_ms 的键值单位是**毫秒**（ask.py 各分段统一 round(…*1000, 1)），
   // 展示前必须 /1000——直接当秒用会显示"生成 1731.0s"这种荒唐值（smoke 实抓）。
   const ms = (k) => Number(latency[k] || 0);
-  const modelMs = Math.max(0, ms("generate") - ms("retrieve") - ms("rerank") - ms("translate"));
+  // 证据自评 + 补检索（retrieval.sufficiency_retry 打开时才出现的分段）
+  const retryMs = ms("retrieve2") + ms("translate2");
+  const modelMs = Math.max(
+    0,
+    ms("generate") - ms("retrieve") - ms("rerank") - ms("translate") - ms("sufficiency") - retryMs
+  );
   const items = [
     ["生成", modelMs],
     ["译查询", ms("translate")],
     ["译对照", ms("translate_answer")],
+    ["证据自评", ms("sufficiency")],
+    ["补检索", retryMs],
     ["检索", ms("retrieve")],
     ["重排", ms("rerank")],
   ]

@@ -34,6 +34,7 @@ from mikasa.pipeline.prompts import (
     build_translate_to_zh_messages,
 )
 from mikasa.pipeline.retriever import Retriever
+from mikasa.pipeline.sufficiency import maybe_supplement
 from mikasa.providers import get_embedding, get_llm
 from mikasa.storage import repo
 from mikasa.storage.db import open_db
@@ -262,7 +263,7 @@ class AskService:
         question = question.strip()
         if not question:
             raise StorageError("问题为空")
-        hits, _latency, _t0 = self._retrieve(question, document_id=document_id)
+        hits, _latency, _t0 = self._retrieve(question, document_id=document_id, sufficiency=False)
         return hits[:top_k]
 
     def chat(
@@ -509,11 +510,17 @@ class AskService:
         *,
         document_id: int | None = None,
         context: str | None = None,
+        sufficiency: bool = True,
     ) -> tuple[list[RetrievedChunk], dict[str, float], float]:
         """检索段（ask / ask_stream / 阅读器共用）：命中、延迟分段、计时起点。
 
         计时起点在检索前取——generate 分段口径 = 检索起全程耗时，
         与 M2 报告里的延迟定义一致。
+
+        sufficiency=False 关掉"证据自评 + 一次补检索"（默认开，但开关本身
+        默认关）：MCP 的 search 工具是**纯检索**——它要的是"检索器看到了
+        什么"，多花一次 LLM 判定就成了一支会思考的搜索框；生成链路
+        （ask / ask_stream / 阅读器）才要补检索把漏掉的证据捞回来。
 
         context（阅读器选中的原文）与问题拼成**主查询**：像"这里说的 μ
         是什么意思"这种指代型问题，光靠问题本身检索会跑空，选中段才是唯一
@@ -543,6 +550,13 @@ class AskService:
         latency["rerank"] = round(latency.get("rerank", 0.0), 1)
         if second_query is not None:
             latency["translate"] = round(translate_ms, 1)
+        # 证据自评 + 一次补检索（retrieval.sufficiency_retry，默认关）：
+        # 开关关 / mock 档 / 无命中时零开销原样返回（见 sufficiency 模块）
+        if sufficiency:
+            hits, extra_latency = maybe_supplement(
+                self.settings, self._llm, retriever, question, hits, document_id=document_id
+            )
+            latency.update(extra_latency)
         return hits, latency, t0
 
     @staticmethod
