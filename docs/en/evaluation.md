@@ -392,12 +392,16 @@ difference **within ±0.04 is not an effect**, and the −0.007 between marker a
 that band. The **counts** in the report (9/62 format failures, 11/16 refusals) are steadier than
 the means, which is why they are the ones worth quoting.
 
-**Side finding (unrelated to this experiment, worth a follow-up)**: the local profile's
+**Side finding (fixed 2026-09-29, see known-issues E5)**: the local profile's
 `llm.timeout_seconds` defaults to 60s, while `max_tokens=4096` answers occasionally run
 past it (one lost question per session). Both groups ran the same configuration and lost
 one question each, and the pairing uses the shared questions, so the conclusions above
-stand; whether to give the local profile a separate, larger timeout is tracked in
-`docs/known-issues.md`.
+stand. **The fix**: `config/profiles/local.yaml` now sets `timeout_seconds: 180` — at this
+profile's measured ~16.4 tokens/s that leaves room for ~3000 tokens, inside the 4096 cap;
+and neither session's log shows VRAM eviction, which rules out the "stuck on memory
+pressure" explanation (corroboration in `known-issues.md` E5). **This change moves the
+profile's baseline**: local sessions no longer lose questions, so compare future runs
+against the 60s-configured historical sessions (#1/#2/#3) with the denominator in mind.
 
 ### 7.3 The experiment's other output: a real bug
 
