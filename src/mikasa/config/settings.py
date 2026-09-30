@@ -310,6 +310,11 @@ class JudgeConfig(BaseModel):
     model: str = "Qwen/Qwen2.5-72B-Instruct"
     temperature: float = 0.0
     template_version: str = "2026-09-01"
+    # 论断级忠实性（claim 级 L2，2026-09-30）：把回答拆成原子断言、逐条核对
+    # 引用是否支持（`eval/claims.py`）。**默认关**：每题多两次裁判调用（拆解 +
+    # 验证），只在需要"更细的忠实性刻度"的实验/报告场次打开（`judge.enabled`
+    # 仍须为真——它复用裁判的模型配置，offline 档天然拿不到）。
+    claims: bool = False
 
     @property
     def api_key(self) -> str | None:

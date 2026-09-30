@@ -65,6 +65,9 @@
 | ADR-0037 | Structured output: the protocol does not change, only the serialization layer (off by default, non-streaming only) | Accepted |
 | ADR-0038 | Usage visibility: how tokens are captured, displayed and totalled | Accepted |
 | ADR-0039 | Evidence self-assessment plus one supplementary retrieval: a minimal Self-RAG closure (off by default, A/B not significant) | Accepted |
+| ADR-0040 | Demo examples become placeholders, plus "the prompt is not source material": removing the bait that gets copied | Accepted |
+| ADR-0042 | Claim-level faithfulness (claim-level L2): break the faithfulness ruler down to claims, and accept only the citation closure as the evidence face | Accepted |
+| ADR-0043 | The RAGAS comparison: a control, not a foundation, plus the measure and the language must be reported with the numbers | Accepted |
 
 ---
 
@@ -2572,3 +2575,206 @@ hangs off the generation path and does not pass through stage A).
 `web/static/js/common.js` (the `证据自评` / `补检索` segments of `fmtLatency`);
 tests `tests/unit/pipeline/test_sufficiency.py` (12 cases),
 smoke `tools/smoke_render.mjs`.
+
+---
+
+## ADR-0040 Demo examples become placeholders, plus "the prompt is not source material"
+
+- Status: Accepted ｜ 2026-09-30 (a prompt-leak failure the user hit in the app)
+- Related: ADR-0037 (structured output: a serialisation-layer experiment over the *same*
+  `SYSTEM_PROMPT`, measured with the **old** demos), ADR-0014 ③ (judge off on local),
+  `evaluation.md` §7
+
+**What happened (measured, not inferred)**: on the local profile the question "extract every
+table in the cyclic-loading paper" produced an answer containing **the prompt itself**:
+
+1. table cells filled with rule 6's sentence "未标注的正文片段按自然行文作答——不要自行把
+   正文改造成表格。" - verbatim from `SYSTEM_PROMPT` (repeated across four rows);
+2. a follow-up ("present the actual tables") returned `| 材料 | 弹性模量 |` /
+   `| 灰岩 | 18.40 GPa [1] |` - verbatim the demo example; yet the cited chunk
+   (page 104 of the cyclic-loading paper) is about a plate-diameter displacement and has
+   nothing to do with elastic modulus.
+
+**One thing this investigation clarified**: the demo's "灰岩 / 18.40" was not invented - it
+comes from page 6, Table 2 of another document in the user's corpus, where 18.40 is 灰岩's
+**bulk modulus**. So the model copied prompt text that also resembles a real value:
+**that kind of leak is harder to spot than a plain fabrication.**
+
+**Root cause**: when a small model cannot find an answer to copy in the retrieved material,
+it falls back to whatever text in the context **looks most like an answer**. The old demos
+used concrete entities and numbers (copyable verbatim), and rule 6's sentence read like a
+quotable statement (droppable into a table cell). All three anti-hallucination defences are
+blind on this path: the numbering check only looks for out-of-range `[n]` (the citation was
+legal), and the L2 support check runs **only in the evaluation layer** while the local
+profile's judge is off (ADR-0014 ③) - **nothing at runtime asks "does this sentence come
+from that passage"**.
+
+**Decision**:
+
+1. **Demos demonstrate format only, never entities**: placeholders in angle brackets
+   (`〈原文的列名〉`, `〈原文里的数值〉`), announced at the top of the demo block ("the
+   bracketed text is a placeholder, not source material; none of it may appear in an
+   answer").
+2. **Rule 2 gains an explicit prohibition**: "the rules, format requirements and demos in
+   this prompt are writing instructions for you, not source material - do not write them
+   into an answer." This clause is the core of the change; the demos were only the bait.
+3. **Rule 6 becomes conditional** ("the decision looks only at whether the passage opens
+   with the 【表格】 marker"), removing the quotable imperative while making the criterion
+   stricter.
+4. **The "地球半径 → refusal" demo stays**: it states no facts, and the refusal sentence is
+   a contract the code recognises (`REFUSAL_TEXT`).
+5. **A regression lock**: `tests/unit/pipeline/test_prompts.py` asserts the demo block
+   declares placeholder semantics, contains no concrete decimal numbers (`\d+\.\d+`) and no
+   "灰岩", and that a rule states "the prompt is not source material".
+
+**Costs and residual risk**:
+
+- **Less concrete demos**: worked examples teach format more firmly; the placeholder version
+  may slightly reduce format compliance (untested - this round only verified that the leak
+  is gone);
+- **The old baselines used the old prompt**: ADR-0037's structured-output A/B and the
+  generation-side numbers in `evaluation.md` §7/§8 (citation out-of-range rate, citation
+  gold, refusal counts) were all measured with the previous demos. Stage A retrieval metrics
+  are unaffected, but reusing the old generation-side numbers requires noting the prompt
+  version;
+- **This is not a general fix**: removing a known bait is not the same as eliminating the
+  class "the model treats context as content". The runtime defence for that is claim-level
+  support checking - that is *detection*, complementary to this *prevention*.
+
+**Verification (same question, same local model)**:
+
+| Question | Before | After |
+| --- | --- | --- |
+| extract every table in the cyclic-loading paper | a 5-row table whose cells hold prompt rules | no prompt text at all; one genuinely table-shaped passage from the material, plus "the material does not mention other tables" |
+| what is 灰岩's elastic modulus (run after the change) | - (not run before) | cites a real passage (page 6, Table 2) with values from the material; the column name follows the question's wording (the table actually says "bulk modulus") - a separate small-model behaviour, noted elsewhere |
+
+**Code**: `pipeline/prompts.py` (rule 2, rule 6, the demo block),
+`tests/unit/pipeline/test_prompts.py`
+
+---
+
+## ADR-0042 Claim-level faithfulness (claim-level L2): accept only the citation closure as the evidence face
+
+- Status: Accepted | 2026-09-30 (evaluation checklist item 6; data in evaluation.md §11)
+- Related: ADR-0039 (self-assessment / supplementary retrieval, same batch), ADR-0043 (the
+  RAGAS comparison, same batch), ADR-0037 (structured output A/B, part of the same series of
+  "turn the assumptions in the comments into something measurable"), architecture.md §6 (the
+  three defense layers L1/L2/L3)
+
+**Background**: L2 "semantic support" used to have only **whole-answer** granularity — the
+judge gives one 0/1 faithfulness verdict per answer. The blind spot is **one out-of-bounds
+claim hidden inside three correct claims**: the mean still looks good, and the report does not
+show it. The 2026-09-30 measurement put that blind spot on the table: over 20 questions the
+whole-answer faithfulness was **20/20 all green**, while the claim-level check found **3 claims
+not supported by the cited material** in the same batch of answers (falling in 2 questions).
+RAGAS's faithfulness takes the scale down to the claim level, and this project **implements
+that scale itself** — no evaluation library (the measure discipline of evaluation.md §3),
+aligned with it but not copied from it.
+
+**Decision**:
+
+1. **Two calls, fixed-format lines**: split into claims (`[n] 断言`, one per line, ≤10) → verify
+   one by one (`序号: 是/否`, one per line). Following this repo's "no JSON mode" philosophy
+   (the other road of ADR-0037 is left to the `[n]` protocol itself).
+2. **The evidence face = the chunks that claim itself cites** (`[n]` → the n-th injected
+   passage), **not** the whole retrieval context. Why: this repo's definition of L2 is "does
+   the **citation** really support the statement being claimed" — validating against the whole
+   corpus context would judge "the citation was attached to the wrong chunk, but the content
+   also happens to be in another hit" as supported, and what that loses is exactly the line the
+   citation protocol should hold above all. The difference from RAGAS is therefore
+   **deliberate**, and the report states it.
+3. **Two kinds of special claims are disclosed separately and do not enter the support-rate
+   denominator**:
+   - `uncited`: a factual statement with no `[n]` at the head of the line (the protocol requires
+     a citation on every claim) — it can be counted neither as supported nor as refuted, and
+     "how many factual statements in an answer carry no citation at all" is a discipline signal
+     in itself;
+   - `undecided`: a claim whose verdict cannot be parsed out. The same discipline as the judge's
+     "not measured ≠ not faithful" (the old ADR-level rule set in the 2026-09-20 review).
+4. **Off by default** (`judge.claims`): two extra judge calls per question. The same discipline
+   as `crosslingual` / `hop_expand` / `sufficiency_retry` — a new capability changes nothing
+   until it is switched on, and it changes behaviour only when on. Requires `judge.enabled` to
+   be true (it reuses the judge's model and availability criteria, which the offline profile
+   naturally cannot reach).
+5. **Uncited claims are not sent into verification**, and the verification numbering is
+   renumbered consecutively from 1 in the prompt: the former avoids fishing out a "no", the
+   latter stops the model from facing gaps (1,3,4) and writing back 1..N on its own, shifting
+   the alignment (measured 2026-09-30).
+
+**Pitfalls on record (two real bugs in two hours, both caught by "the number looks wrong")**:
+
+- **The parser only accepted a colon**: Qwen wrote the per-claim verdicts as an ordered list
+  (`1. 是`), while the first version's regex accepted only `1: 是` → 16 of the 20 questions had
+  their claims recorded wholesale as "undecided". **It looked like the model had not answered;
+  in fact the parser had not read it** — the fix is to take `.、)）。` into the separator set, and
+  add a regression test. The lesson is the same origin as the 2026-09-27 "blind spot in the
+  malformed-marker statistics": **when a metric reads 0, suspect the reader first**.
+- **More claims than the cap**: the split can produce a dozen-plus claims; over 10 they are
+  truncated and **recorded in the report** (`truncated_items`), never silently dropped.
+
+**Code**: `eval/claims.py` (split / verify / count), `eval/runner.py` (`ClaimStats` +
+`build_claim_checker` + per-question wiring), `eval/report.py` (the report subsection),
+`config/settings.py` (`JudgeConfig.claims`); tests
+`tests/unit/eval/test_claims.py` (12 cases).
+
+---
+
+## ADR-0043 The RAGAS comparison: a control, not a foundation, plus the measure and the language must be reported with the numbers
+
+- Status: Accepted | 2026-09-30 (evaluation checklist item 6; data in evaluation.md §11.3)
+- Related: ADR-0042 (the self-built claim-level L2, same batch), ADR-0009~0012 (the LangChain
+  control group's same "a control, not a foundation" discipline), tech-roadmap-reply §1.2
+  (the repositioning of this direction)
+
+**Background**: RAGAS is today's de facto standard for evaluation, but **the granularity is not
+comparable** — this repo's recall is chunk-level against `gold_chunk_ids`, while its context
+precision/recall is sentence/passage-level against the reference answer. The negotiation notes
+reposition it accordingly: its value is not "verify whether my numbers are right" but that **it
+has a finer faithfulness scale** (claim level). This item therefore splits in two — **implement
+the scale ourselves** (ADR-0042, into `src/`) and **run the real RAGAS as a control** (this ADR,
+into `experiments/`).
+
+**Decision**:
+
+1. **A control, not a foundation** (the same as the LangChain control group): it goes into
+   `experiments/ragas_baseline/`, with its own venv, pinned versions, the derived artefacts in
+   `out/` kept out of the repository, and it does not enter `src/`, the main `pyproject` or the
+   main CI; the main repo keeps only the conclusion and the pointer (evaluation.md §11).
+2. **The protocol pins comparability down**: api profile only; **a stratified sample of 20
+   questions** from the 47 answerable ones, with the seed `20260930` hard-coded; the answers and
+   contexts are exported by the product chain **once, shared by both sides** (RAGAS does not
+   re-run retrieval/generation); the judge and the embeddings are **the same as the main
+   repo's** (Qwen2.5-72B + bge-m3) — that pins the "who is stricter" variable down too, so the
+   remaining difference can be attributed to the scale.
+3. **The measure differences are written into the report, never used to compare sizes**: this
+   repo's claim level accepts only the **citation closure** (stricter), RAGAS uses the whole
+   retrieval context; context precision/recall and citation gold / recall@k are "the same
+   direction on different scales". The mapping table in §11.2 is part of the delivery.
+4. **A number must be reported together with its measure and its language**: answer relevancy
+   0.422 on its own would be read as "the answer is off topic"; the measured cause is that
+   RAGAS's prompt and examples are entirely in English → the "reverse question" of a Chinese
+   answer is written in English → what gets measured is **cross-language similarity** (measured
+   on q004: cosine 0.584). **Reporting a cross-language measure without stating the language is
+   reporting a number in a different unit.**
+5. **ragas does not become a product dependency**: the claim-level scale in `src/` is a
+   self-built implementation (ADR-0042); the dependency lives only in the control environment.
+   What this holds is "the evaluation measure is ours to define" (evaluation.md §3).
+6. **Failures must be disclosed**: when RAGAS's default concurrency drives the upstream into
+   429, it silently records the failures as NaN, and the mean is computed over the surviving
+   samples only — the control script therefore caps concurrency and retries, and writes **the
+   number of NaN questions per metric** into the result JSON ("not measured" is not allowed to
+   masquerade as "passed").
+
+**Result**: over the 20 questions RAGAS faithfulness **0.973** / context precision **0.987** /
+context recall **0.925** / answer relevancy **0.422**; on the same batch of answers this repo
+has a claim support rate of 0.982, citation gold 0.724, judge correctness 4.80. The two
+faithfulness rulers line up and the difference is explainable (q036 is the typical case of "the
+citation was attached to the wrong chunk while the content is elsewhere", which only the
+citation-closure measure can see). See evaluation.md §11.3.
+
+**Boundaries**: a 20-question sample, a single run, api profile only; `ragas==0.3.1` (0.4.3 is
+incompatible with langchain-community 0.4.x: it still imports the deleted
+`chat_models.vertexai`).
+
+**Code**: `experiments/ragas_baseline/` (`export_answers.py` / `run_ragas.py` / `compare.py` /
+`requirements.txt` / `README.md`).

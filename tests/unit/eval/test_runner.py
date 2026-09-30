@@ -253,8 +253,11 @@ def test_run_full_offline_protocol_metrics(tmp_path, offline_settings):
         "items",
         "skipped_items",  # 逐题校验跳过的题（2026-09-19 起）；静默缩分母最危险
         "shape",  # 作答形态（2026-09-21 起）；改提示词的回归镜子
+        "claims",  # 论断级忠实性（2026-09-30 起）；judge.claims 关着时全零
     }
     assert snapshot["skipped_items"] == []
+    # 开关默认关：claims 块存在但全零（items=0 表示"没有题被判过"）
+    assert snapshot["claims"]["items"] == 0 and snapshot["claims"]["support_rate"] is None
     assert snapshot["generation"]["refusal_accuracy"] == 0.5
     # 形态只统计"可答题且未拒答"的样本：a1/a2 作答、a3 拒答、u1/u2 不可答
     # → 分母 2。MockLLM 只会平铺直叙，所以分节/表格/公式都是 0，字数 > 0。
@@ -288,8 +291,16 @@ def test_run_item_to_json_shape(tmp_path, offline_settings):
         "completion_tokens",
         "format_ok",
         "malformed_markers",
+        # 2026-09-30 新增：论断级忠实性（claim 级 L2，judge.claims 打开才有值）
+        "claim_supported",
+        "claim_unsupported",
+        "claim_uncited",
+        "claim_undecided",
+        "claim_note",
     }
     assert record["id"] == "a1" and record["gold_hits"] >= 1
+    # 形状锁：开关关着时留 None（"没判"），不是 0（"判过但一条都没有"）
+    assert record["claim_supported"] is None and record["claim_note"] == ""
     # offline 档：mock 产不出 usage → 如实为 None（不是 0），标记路径 format_ok 恒 None
     assert record["prompt_tokens"] is None and record["format_ok"] is None
 

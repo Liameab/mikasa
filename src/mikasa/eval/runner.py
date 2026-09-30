@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING
 
 from mikasa.config.settings import Settings
 from mikasa.errors import EvalError, StorageError
+from mikasa.eval.claims import ClaimChecker
 from mikasa.eval.golden import GoldenItem, GoldenSet, check_against_corpus
 from mikasa.eval.judge import Judge, LLMJudge, NoJudge
 from mikasa.eval.metrics import (
@@ -105,6 +106,21 @@ def build_judge(settings: Settings) -> Judge:
     if cfg.backend == "local":
         logger.warning("judge=local：裁判走 Ollama，不可达时对应题目将记 judge_error")
     return LLMJudge(cfg)
+
+
+def build_claim_checker(settings: Settings) -> ClaimChecker | None:
+    """claim 级 L2 的构造；开关关 / 无裁判可用性 → None（整块跳过，零调用）。
+
+    可用性判据与 build_judge 同源（同一个模型配置、同一条缺密钥规则）：
+    断言级核对复用裁判的端点与模型，不另开一条配置面。
+    """
+    cfg = settings.judge
+    if not cfg.claims or not cfg.enabled:
+        return None
+    if cfg.backend == "api" and cfg.api_key is None:
+        logger.warning("judge.claims=true 但 %s 未配置 → 本场不做论断级核对", cfg.api_key_env)
+        return None
+    return ClaimChecker(cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +206,29 @@ class JudgeStats:
 
 
 @dataclass
+class ClaimStats:
+    """论断级忠实性（claim 级 L2）聚合：逐题断言计数，报告期算支持率。
+
+    支持率的分母刻意不含 `uncited`（无引用断言：协议要求逐条带引用，它们既
+    不能算被支持也不能算被证伪）与 `undecided`（解析失败：没测到 ≠ 不忠实）。
+    两个数都在报告里单独披露。
+    """
+
+    items: int = 0  # 判过断言级的题数（可答题非拒答且有引用）
+    claims: int = 0
+    supported: int = 0
+    unsupported: int = 0
+    uncited: int = 0
+    undecided: int = 0
+    truncated_items: int = 0  # 断言数超上限被截断的题数（支持率只覆盖前 N 条）
+    errors: int = 0
+
+    def support_rate(self) -> float | None:
+        decided = self.supported + self.unsupported
+        return self.supported / decided if decided else None
+
+
+@dataclass
 class ItemRecord:
     """一条题目的评测留痕（报告异常明细 + 落库 items 的原料）。
 
@@ -217,6 +256,13 @@ class ItemRecord:
     completion_tokens: int | None = None
     format_ok: bool | None = None  # 结构化路径：JSON 解析+校验是否通过（标记路径恒 None）
     malformed_markers: int = 0  # 疑似畸形标记数（`[1, 2]` 这类）
+    # 论断级忠实性（claim 级 L2，2026-09-30）：None = 该题没判（开关关/无引用/异常），
+    # 0 = 判过但一条断言都没拆出来——两者在报告里读数不同，别混
+    claim_supported: int | None = None
+    claim_unsupported: int | None = None
+    claim_uncited: int | None = None
+    claim_undecided: int | None = None
+    claim_note: str = ""
 
     def to_json(self) -> dict[str, object]:
         """压平为可落库的 dict（List[dict] 直接进 metrics_json）。"""
@@ -239,6 +285,11 @@ class ItemRecord:
             "completion_tokens": self.completion_tokens,
             "format_ok": self.format_ok,
             "malformed_markers": self.malformed_markers,
+            "claim_supported": self.claim_supported,
+            "claim_unsupported": self.claim_unsupported,
+            "claim_uncited": self.claim_uncited,
+            "claim_undecided": self.claim_undecided,
+            "claim_note": self.claim_note[:200],
         }
 
 
@@ -296,6 +347,8 @@ class EvalResult:
     skipped_items: list[tuple[str, str]] = field(default_factory=list)
     # 作答形态（见 ShapeStats）：提示词改动的回归镜子
     shape: ShapeStats = field(default_factory=ShapeStats)
+    # 论断级忠实性（claim 级 L2，2026-09-30）：开关关/无裁判时为空容器
+    claims: ClaimStats = field(default_factory=ClaimStats)
 
     def to_metrics_json(self) -> dict[str, object]:
         """metrics_json 快照：报告渲染与 DB 落库共用同一序列化口径。"""
@@ -338,6 +391,17 @@ class EvalResult:
                 "errors": judge.errors,
             },
             "shape": self.shape.final(),
+            "claims": {
+                "items": self.claims.items,
+                "claims": self.claims.claims,
+                "supported": self.claims.supported,
+                "unsupported": self.claims.unsupported,
+                "uncited": self.claims.uncited,
+                "undecided": self.claims.undecided,
+                "truncated_items": self.claims.truncated_items,
+                "errors": self.claims.errors,
+                "support_rate": self.claims.support_rate(),
+            },
             "items": [r.to_json() for r in self.items],
             "skipped_items": [{"id": i, "reason": r} for i, r in self.skipped_items],
         }
@@ -420,9 +484,21 @@ class EvalRunner:
         retriever = Retriever(settings, corpus, embedding)  # 产品配置原样
         judge = build_judge(settings)
         judge_stats.judge_model = judge.model
+        checker = build_claim_checker(settings)
+        claim_stats = ClaimStats()
         for item in golden.items:
             record = self._run_one_item(
-                retriever, generator, judge, titles, corpus, item, gen, judge_stats, llm
+                retriever,
+                generator,
+                judge,
+                titles,
+                corpus,
+                item,
+                gen,
+                judge_stats,
+                llm,
+                checker,
+                claim_stats,
             )
             items.append(record)
             if on_item is not None:
@@ -444,6 +520,7 @@ class EvalRunner:
             latency_sec=perf_counter() - t0,
             skipped_items=check.skipped,
             shape=self._shape,
+            claims=claim_stats,
         )
 
     @staticmethod
@@ -505,6 +582,8 @@ class EvalRunner:
         gen: GenerationStats,
         judge_stats: JudgeStats,
         llm: LLMProvider,
+        checker: ClaimChecker | None = None,
+        claim_stats: ClaimStats | None = None,
     ) -> ItemRecord:
         """跑一题并就地更新聚合容器，返回逐条留痕。
 
@@ -599,11 +678,52 @@ class EvalRunner:
         # ---- 阶段 C：语义裁判（仅可答题非拒答样本值得判） ----
         if item.kind == "answerable" and not answer.refused:
             self._judge_item(record, judge, item, answer, corpus, judge_stats)
+            if checker is not None and claim_stats is not None:
+                self._check_claims(record, checker, answer, hits, claim_stats)
         return record
 
     # ------------------------------------------------------------------
     # 阶段 C 内部件
     # ------------------------------------------------------------------
+
+    def _check_claims(
+        self,
+        record: ItemRecord,
+        checker: ClaimChecker,
+        answer: Answer,
+        hits: list[RetrievedChunk],
+        claim_stats: ClaimStats,
+    ) -> None:
+        """论断级忠实性（claim 级 L2，`judge.claims` 开关）：拆断言 + 逐条核对。
+
+        证据面 = **该题注入的片段**（编号 → 原文），与引用协议同构：`[1]` 的
+        依据就是第 1 条注入片段。逐条容错：调用/解析失败只记 note，不算题目失败。
+        """
+        by_marker = {i + 1: hit.chunk.content for i, hit in enumerate(hits)}
+        try:
+            report = checker.evaluate(answer.text, by_marker)
+        except Exception as exc:  # noqa: BLE001 - 网络/鉴权/超时：逐题容错
+            claim_stats.errors += 1
+            record.claim_note = f"论断级核对失败：{type(exc).__name__}: {exc}"
+            return
+        if report is None:
+            return  # 空/拒答/拆解失败：不判、不猜（与裁判的"没测到"纪律同款）
+        record.claim_supported = report.supported
+        record.claim_unsupported = report.unsupported
+        record.claim_uncited = report.uncited
+        record.claim_undecided = report.undecided
+        claim_stats.items += 1
+        claim_stats.claims += len(report.claims)
+        claim_stats.supported += report.supported
+        claim_stats.unsupported += report.unsupported
+        claim_stats.uncited += report.uncited
+        claim_stats.undecided += report.undecided
+        if report.truncated:
+            claim_stats.truncated_items += 1
+            record.claim_note = (
+                f"断言数超过 {len(report.claims)} 条上限，仅核对前 "
+                f"{len(report.claims)} 条（支持率按已核对部分算）"
+            )
 
     def _judge_item(
         self,

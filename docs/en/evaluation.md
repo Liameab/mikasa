@@ -309,6 +309,13 @@ plus a `chunk_id` on each source line), so the only variable is the serializatio
 Sessions: `mikasa eval run --profile api [--config overlay] --name api-marker|api-json`
 (same 63 questions, same sample-corpus, same bge-m3 embedding profile).
 
+> **Prompt-version note (added 2026-09-30)**: the generation-side numbers in this
+> section (and §8) were produced with the **old demo examples**, which contained concrete
+> entities and values. On 2026-09-30 a real prompt leak forced those demos to become
+> placeholders, with a rule stating explicitly that the prompt is not source material
+> (ADR-0040). Stage A retrieval metrics are unaffected; **quote the out-of-range rate,
+> citation gold and refusal counts below only as "old prompt" figures.**
+
 ### 7.1 api profile (DeepSeek, `json_object`, **not** constrained decoding) — done
 
 | Metric | api-marker | api-json | Reading |
@@ -673,3 +680,132 @@ price of those 63 self-assessments.
    the ceiling on the gain, at the price of numbering no longer being stable.
 5. **MCP `search` deliberately does not take the closure**: it is a pure retrieval tool, and
    "a search box that thinks" is not what it is (see the comment in ask.py).
+
+## 11. Claim-level faithfulness (self-built L2) plus a RAGAS comparison (2026-09-30)
+
+**The two questions to answer** (evaluation checklist item 6): ① what does whole-answer
+faithfulness (the judge gives one 0/1) fail to see, and what more does breaking the ruler
+down to the **claim** level see? ② putting RAGAS's four dimensions — the evaluation world's
+de facto standard — next to this repo's hand-written measure: how many of them line up, and
+where they do not, what is the difference?
+
+### 11.1 Claim-level L2: the blind spot of a whole-answer verdict (measured evidence)
+
+On 2026-09-30 both rulers ran over the same 20 questions (sampling in §11.3):
+
+| Measure | Result |
+| --- | --- |
+| Whole-answer faithfulness (judge 0/1, same batch of answers) | **20/20 all green** (faithful=True) |
+| Claim-level check (self-built, same batch of answers) | 167 claims: **161 supported / 3 unsupported by the cited material / 3 uncited / 0 undecided** |
+
+**The 3 claims a whole-answer verdict cannot see** (falling in 2 questions: two in q033, one
+in q036) — that is the entire reason for breaking the ruler down this round: when one
+out-of-bounds claim hides inside three correct claims, the whole-answer verdict still says
+"faithful".
+
+The points of the measure (details in ADR-0042):
+
+- **The evidence face = the chunks that claim itself cites** (`[n]` → the n-th injected
+  passage), **not** the whole retrieval context. This repo's definition of L2 is "does the
+  **citation** really support the statement it is attached to" — validating against the
+  whole-corpus context would judge "the citation was attached to the wrong chunk, but the
+  content happens to be in another hit" as supported, and what that loses is exactly the
+  line the citation protocol is there to hold.
+- **Uncited claims (`uncited`)**: a factual statement with no `[n]` at the head of the line —
+  it can be counted neither as supported nor as refuted, so it is disclosed separately ("how
+  many factual statements in an answer carry no citation at all" is a discipline signal in
+  itself).
+- **Undecided (`undecided`)**: a claim whose verdict cannot be parsed out. The same
+  discipline as the judge's "not measured ≠ not faithful".
+- **Off by default** (`judge.claims`): two extra judge calls per question, switched on only
+  in the sessions that need the finer ruler.
+
+**A pitfall on record**: the first version of the parser accepted only `1: 是`, while Qwen
+wrote the per-claim verdicts as an ordered list (`1. 是`) → 16 of the 20 questions had all
+their claims recorded as "undecided" (it looked like the model had not answered, but in fact
+the parser had not read it). The fix: take `.、)）。` into the separator set, and add a
+regression test. **When a metric reads 0, suspect the reader first** — the same origin as the
+2026-09-27 "blind spot in the malformed-marker statistics".
+
+### 11.2 The mapping table with RAGAS (the one page that is "externally comparable")
+
+| This repo's measure | RAGAS's measure | Relationship |
+| --- | --- | --- |
+| **claim support rate** (a claim → does **the chunk it cites** support it) | **faithfulness** (a claim → does **the whole retrieval context** support it) | the same ruler (claim level), **a different evidence face**: this repo accepts only the citation closure, which is stricter; the difference between the two is exactly the class "the citation was attached to the wrong chunk" |
+| whole-answer faithfulness (judge 0/1) | — (RAGAS has no whole-answer granularity) | unique to this repo; claim level is precisely its patch |
+| **citation gold ratio** (the share of cited chunks that hit the question's `gold_chunk_id`) | **context precision** (the signal-to-noise of the retrieval context against the reference answer) | chunk level against gold ↔ sentence/passage level against the reference; the same direction, **a different ruler**, the numbers cannot be compared directly |
+| recall@k (is the gold chunk inside the top k) | **context recall** (can every key point of the reference answer be found in the context) | as above: is the chunk there ↔ is the key point there |
+| judge correctness 1-5 | answer relevancy (embedding similarity of answer and question) | **a different axis**: this repo measures "is it right", RAGAS measures "is it on topic" — the one dimension of the four with no counterpart |
+| refusal discipline (false refusals on answerable / wrong answers on unanswerable / L3 violations) | — (RAGAS does not measure refusals) | unique to this repo's protocol layer; this is also the same thing as the framework side's 0/16 refusals in the LangChain control |
+
+### 11.3 The RAGAS comparison (2026-09-30, the same 20 questions, the same answers, the same contexts)
+
+**Protocol**: api profile (DeepSeek generation), corpus `build/eval-api/data` (57 chunks),
+**a stratified sample of 20 questions** from the 47 answerable ones (seed `20260930` written
+into the code); the answers and contexts are exported once by the product chain
+(`experiments/ragas_baseline/export_answers.py`, verbatim the same track as evaluation stage
+B), and the RAGAS side only reads, never re-runs — both sides eat the same thing. The judge
+is **the same** Qwen2.5-72B as the main repo (SiliconFlow), the embeddings bge-m3 from the
+same vendor. The control directory is `experiments/ragas_baseline/`, the per-question table in
+`out/result.md`.
+
+| Measure | This repo | RAGAS (the same 20 questions) |
+| --- | --- | --- |
+| Claim-level faithfulness | claim support rate **0.982** (161/164 claims; 3 uncited, 0 undecided) | faithfulness **0.973** |
+| Whole-answer faithfulness | judge **1.000** (20/20 all green) | — |
+| Citation / context quality | citation gold ratio **0.724**, out-of-range **0** | context precision **0.987** |
+| Recall | see evaluation stage A (whether this question set's gold chunks enter the window) | context recall **0.925** |
+| Answer vs question | judge correctness **4.80**/5 | answer relevancy **0.422** |
+
+**Three conclusions**:
+
+1. **The two faithfulness rulers line up, and the difference is explainable.** 0.982 vs 0.973
+   are two numbers on the same ruler: this repo's evidence face accepts only **the chunk that
+   claim itself cites** (stricter), RAGAS uses **the whole retrieval context**. Question by
+   question: q033 is flagged by both sides (2 unsupported on our side / RAGAS 0.875); on q036
+   our side flags 1 while RAGAS gives 1.000 — **exactly the class "the citation was attached
+   to the wrong chunk but the content is in another hit"**, which only the citation-closure
+   measure can see; q046 is the reverse (RAGAS 0.667, 0 unsupported on our side), caused by a
+   different sentence-splitting and claim-splitting granularity. **Neither ruler is wrong;
+   they measure different "evidence faces".**
+2. **answer relevancy is systematically pushed down on a Chinese corpus by language, and
+   cannot be compared across languages.** 0.422 looks alarming, but a reproduction probe
+   pinned the cause down: that RAGAS prompt and its examples are **all in English**, so Qwen
+   wrote the "reverse question" of a Chinese answer in English — measured on q004: the
+   bge-m3 cosine between the original question (Chinese) and the reverse question (English)
+   is only **0.584**, i.e. what is measured is **cross-language similarity**, whereas the
+   0.8~0.9 seen on English papers is monolingual similarity. This is not "the answer is off
+   topic": on the same batch of answers the judge's correctness is 4.80/5 and citation gold
+   0.724. **This number must be reported together with its language**, otherwise it is
+   measuring two rulers of different units against each other.
+3. **The gap between context precision 0.987 and citation gold 0.724 is a gap in
+   granularity.** RAGAS measures "the signal-to-noise of the whole retrieval window against
+   the reference answer" (most of the 14 chunks really are relevant), this repo measures "do
+   the **cited** chunks hit the question's gold". One is wide, one is narrow, both numbers are
+   true, and putting them in one table to compare sizes is meaningless — this is the measured
+   version of the negotiation notes' prediction that "the granularity is not comparable".
+
+**Boundaries**: ① a 20-question sample, a single run; ② api profile only (all four RAGAS
+dimensions need an LLM judge, the local profile cannot run it); ③ versions pinned in
+`requirements.txt` (ragas 0.3.1 + langchain 0.3.x; 0.4.3 with langchain-community 0.4.x is a
+broken combination); ④ **a control environment** with 99 packages / 591 MB of dependencies —
+it does not enter `src/`, does not enter the main CI, and the main repo keeps only this
+section.
+
+**Re-running**:
+
+```bash
+MIKASA_DATA_DIR=build/eval-api/data .venv/Scripts/python.exe \
+    experiments/ragas_baseline/export_answers.py --out experiments/ragas_baseline/out
+experiments/ragas_baseline/.venv/Scripts/python.exe \
+    experiments/ragas_baseline/run_ragas.py --out experiments/ragas_baseline/out
+.venv/Scripts/python.exe experiments/ragas_baseline/compare.py
+```
+
+**Two gotchas (details in the control directory's README §5)**: ① a joint resolution like
+`pip install ragas langchain-openai` backtracks for over half an hour on langchain-core's
+version range — **install ragas first, then the rest**; ② RAGAS's default concurrency drives
+SiliconFlow into 429, and ragas silently records the failures as NaN (in the first round 7~14
+of the 20 questions had a whole metric as NaN, and the mean was computed only over the
+surviving samples) — **cap the concurrency + retry, and write the failure counts into the
+result**.

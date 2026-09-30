@@ -1,0 +1,22 @@
+# RAGAS 对照组的依赖（**不进主 pyproject、不进主 CI**）
+#
+# 版本钉死到小版本。这一组是**踩过坑之后选定的自洽组合**（2026-09-30）：
+#   ragas 0.4.3 + langchain-community 0.4.x 是坏组合——ragas 0.4.3 仍然
+#   `from langchain_community.chat_models.vertexai import ChatVertexAI`，
+#   而该模块在 community 0.4 里已被删除，import 直接 ModuleNotFoundError。
+#   退到 ragas 0.3.1 + langchain 0.3.x 家族后自洽（见 README §5 踩坑记录）。
+#
+# 装法见 README §2。产生结果那次的完整环境用 `pip freeze` 另存（lock 不进仓库）。
+#
+# 注意：`pip install ragas langchain-openai` 这种"联合求解"会在 langchain-core
+# 的版本区间上回溯半小时以上（每次回溯都真下载）——**先装 ragas 再补其余**，
+# 或直接照抄下面这份钉死的清单。
+
+ragas==0.3.1
+langchain==0.3.30
+langchain-community==0.3.31
+langchain-core==0.3.86
+langchain-openai==0.3.35
+datasets==5.0.1
+pandas==3.0.6
+openai==1.109.1

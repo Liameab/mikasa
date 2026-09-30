@@ -83,6 +83,9 @@ judge:
   model: Qwen/Qwen2.5-72B-Instruct
   temperature: 0.0              # 裁判必须温度 0，保证可复现
   template_version: "2026-09-01"  # 裁判模板版本号，格式漂移时随评测报告记录
+  claims: false                 # 论断级忠实性（claim 级 L2）：把回答拆成原子断言、
+                                # 逐条核对引用是否支持（更细的忠实性刻度）。
+                                # 默认关——每题多两次裁判调用；需 judge.enabled 为真。
 
 # ---- 回答呈现（ask / chat 输出层）----
 answer:

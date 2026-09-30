@@ -67,6 +67,17 @@ def render_report(
     # ---------------- 阶段 A：检索层 ----------------
     add("## 阶段A 检索层（关 rerank，窗口独立锚定，见附录配置）")
     add("")
+    # 口径声明（2026-09-30）：阶段 A 刻意不调 LLM，因此**不含**产品链路上的
+    # 跨语言第二路。英文语料上的实测差距很大（同一批题：单路 top-10 8/16 →
+    # 加英译第二路 15/16，见 evaluation.md 的口径一节），不写明就会被读成
+    # "产品只能召回一半"，是**低估**而不是高估。
+    add(
+        "> **口径**：本层只喂**原问题**（不调 LLM，保证可复现），因此**不含**产品"
+        "问答链路上的跨语言第二路（中文问题 → 英译 → 双路 RRF 合流）。英文语料上"
+        "这条第二路会显著抬高实际召回——差距与实测数字见 `docs/evaluation.md` 的"
+        "「检索口径」一节；**不要把本表的 recall 当成产品侧能力**。"
+    )
+    add("")
     add(_retrieval_overview_table(result))
     add("")
     diff_rows = _retrieval_difficulty_rows(result)
@@ -188,6 +199,37 @@ def render_report(
                 ],
             )
         )
+        add("")
+
+    # ---------------- 论断级忠实性（claim 级 L2，2026-09-30，可选开关） ----------------
+    # 整段忠实性（上面那行）的盲区：一条越界断言藏在三条正确断言里，均值照样好看。
+    # 这一节把它拆到断言粒度；开关 `judge.claims` 关着时整节不出现（不是打零）。
+    if result.claims.items or result.claims.errors:
+        claims = result.claims
+        rate = claims.support_rate()
+        add("### 论断级忠实性（claim 级 L2）")
+        add("")
+        add(
+            _table(
+                ["统计项", "值"],
+                [
+                    ["判过断言级的题数 / 断言总数", f"{claims.items} / {claims.claims}"],
+                    ["被引用资料支持的断言", str(claims.supported)],
+                    ["资料未支持的断言", str(claims.unsupported)],
+                    [
+                        "支持率（支持 /（支持+未支持））",
+                        "—" if rate is None else f"{rate:.3f}",
+                    ],
+                    ["无引用断言（没带 [n] 的事实陈述）", str(claims.uncited)],
+                    ["未判定（解析失败，不进分母）", str(claims.undecided)],
+                    ["断言超上限被截断的题数", str(claims.truncated_items)],
+                    ["核对调用失败", str(claims.errors)],
+                ],
+            )
+        )
+        add("")
+        add("> 口径：证据面 = 该断言自己引用的片段（`[n]` → 第 n 条注入片段），比")
+        add("> RAGAS 的「全部检索上下文」更严；无引用断言与未判定都单独披露、不进支持率。")
         add("")
 
     # ---------------- 异常与不一致明细 ----------------
