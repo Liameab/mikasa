@@ -17,7 +17,7 @@ import numpy as np
 
 from mikasa.config.settings import EmbeddingConfig
 from mikasa.errors import ConfigError, ProviderError
-from mikasa.providers.llm import normalize_base_url
+from mikasa.providers.llm import build_http_client, normalize_base_url
 from mikasa.utils.logging import get_logger
 
 logger = get_logger("providers.embedding")
@@ -70,11 +70,14 @@ class ApiEmbedding:
         # base_url 同样要过 normalize_base_url：把嵌入指向本机 OpenAI 兼容服务
         # （LM Studio / vLLM / Ollama 的 /v1）时，`localhost` 在 Windows 上会先
         # 解析到 ::1 而 httpx 不回退——与 LLM 那条链路是同一个坑，同一处修。
+        # 代理同理：本机/内网地址关掉 trust_env（见 build_http_client）。
+        base_url = normalize_base_url(self._config.base_url)
         self._client = OpenAI(
-            base_url=normalize_base_url(self._config.base_url),
+            base_url=base_url,
             api_key=api_key,
             timeout=60.0,
             max_retries=3,
+            http_client=build_http_client(base_url, timeout=60.0),
         )
         return self._client
 

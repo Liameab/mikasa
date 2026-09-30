@@ -12,6 +12,7 @@ complete() 返回 Completion（文本 + token 用量）：qa_messages 的成本
 from __future__ import annotations
 
 import difflib
+import ipaddress
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -104,6 +105,44 @@ def normalize_base_url(url: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
+def _is_private_host(url: str) -> bool:
+    """URL 主机是不是本机/内网地址（只认 IP 字面量，不做 DNS 解析）。
+
+    `localhost` 已被 `normalize_base_url` 改写成 `127.0.0.1`，这里的字面量
+    判定兜住其余写法（`[::1]`、`192.168.x`、`10.x`…）。域名一律返回 False：
+    它可能是公网服务（api 档），不该由这里替用户决定。
+    """
+    host = urlsplit(url).hostname or ""
+    if host == "localhost":
+        return True
+    try:
+        return not ipaddress.ip_address(host).is_global
+    except ValueError:
+        return False
+
+
+def build_http_client(base_url: str, *, timeout: float) -> Any:
+    """本机/内网地址 → 返回**关闭代理继承**的 httpx 客户端；公网返回 None（用 SDK 默认）。
+
+    **为什么必须关**（2026-09-29 排查，批跑"永远跑不完"的真凶之一）：
+    httpx 在 trust_env 打开时会读 Windows 注册表里的系统代理，**且不认
+    ProxyOverride 的绕过列表**——用户装了任何带系统代理的软件（实测 Breeze
+    的 core.exe），发往 `127.0.0.1:11434` 的请求会被塞进代理并卡死（现场：
+    进程 CPU 冻住、Ollama 日志零增长、唯一 socket 挂在代理端口上、请求直到
+    超时才报错）。内网地址同理：代理服务器到不了用户的内网。
+
+    公网（含域名）**保持默认**——国内访问 OpenAI / Claude 恰恰要借系统代理，
+    这里不能一刀切。`timeout` 两边给同一个值，是为了不依赖 SDK 的一条内部
+    规则（它见到自定义 http_client 时会改用自己的 timeout，见
+    `openai._base_client.SyncAPIClient.__init__`）。
+    """
+    if not _is_private_host(base_url):
+        return None
+    import httpx  # 延迟导入：与 openai 同款理由，保持 import mikasa 轻量
+
+    return httpx.Client(trust_env=False, timeout=timeout)
+
+
 def build_openai_client(config: LLMConfig | VisionConfig, *, max_retries: int) -> Any:
     """按配置构造 OpenAI 兼容客户端（llm 与 vision 共用这段构造逻辑）。
 
@@ -117,6 +156,8 @@ def build_openai_client(config: LLMConfig | VisionConfig, *, max_retries: int) -
 
     base_url 先过 `normalize_base_url`：这是 local 档（Ollama）与一切"本机
     服务"的必经之路，`localhost` 会在这条链路上稳定超时（见该函数说明）。
+    再按主机过 `build_http_client`：本机/内网地址关掉代理继承，公网保持默认
+    （见该函数说明）。
     """
     from openai import OpenAI  # 延迟导入：保持 import mikasa 轻量
 
@@ -133,10 +174,12 @@ def build_openai_client(config: LLMConfig | VisionConfig, *, max_retries: int) -
     if not config.base_url:
         raise ConfigError("base_url 未配置：无法确定 API 端点。")
 
+    base_url = normalize_base_url(config.base_url)
     return OpenAI(
-        base_url=normalize_base_url(config.base_url),
+        base_url=base_url,
         api_key=api_key,
         timeout=config.timeout_seconds,
+        http_client=build_http_client(base_url, timeout=config.timeout_seconds),
         max_retries=max_retries,
     )
 

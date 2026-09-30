@@ -8,13 +8,14 @@ APITimeoutError），同一份地址在普通 Python 里却能通——这是最
 
 from __future__ import annotations
 
+import httpx
 import openai
 import pytest
 
 from mikasa.config.settings import EmbeddingConfig, LLMConfig, RerankerConfig
 from mikasa.errors import ConfigError
 from mikasa.providers.embedding import ApiEmbedding
-from mikasa.providers.llm import build_openai_client, normalize_base_url
+from mikasa.providers.llm import build_http_client, build_openai_client, normalize_base_url
 from mikasa.providers.reranker import ApiReranker
 
 
@@ -139,3 +140,104 @@ def test_reranker_endpoint_normalizes_localhost() -> None:
         top_n=8,
     )
     assert ApiReranker(cfg)._endpoint() == "http://127.0.0.1:11434/v1/rerank"
+
+
+# ---------------------------------------------------------------------------
+# 同一个坑的第三种：系统代理（2026-09-29，批跑"永远跑不完"排查的产物）
+#
+# 背景：httpx 在 trust_env 打开时读 Windows 注册表里的系统代理，**且不认
+# ProxyOverride 的绕过列表**（`127.0.0.1;<local>` 形同虚设）——用户机器上
+# 只要跑着任何带系统代理的软件，发往 `127.0.0.1:11434` 的请求就会被塞进
+# 代理并卡死（现场：进程 CPU 冻住、Ollama 日志零增长、唯一 socket 挂在代理
+# 端口上）。修法：本机/内网地址改用 trust_env=False 的客户端；公网保持默认
+# （国内访问 OpenAI / Claude 恰恰要靠系统代理，不能一刀切）。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("http://127.0.0.1:11434/v1", True),
+        ("http://[::1]:11434/v1", True),
+        ("http://192.168.1.5:11434/v1", True),  # 局域网里的 Ollama
+        ("http://localhost:11434/v1", True),  # 规范化前的写法也要认
+        ("", False),
+        ("https://api.deepseek.com/v1", False),
+        ("http://my-ollama.lan:11434/v1", False),  # 域名不替用户决定
+    ],
+)
+def test_build_http_client_only_bypasses_proxy_for_private_hosts(url: str, expected: bool) -> None:
+    client = build_http_client(url, timeout=60.0)
+    if not expected:
+        assert client is None
+        return
+    assert isinstance(client, httpx.Client)
+    assert client.trust_env is False
+    assert client.timeout == httpx.Timeout(60.0)
+    client.close()
+
+
+def test_build_openai_client_gives_local_backend_a_proxy_free_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            seen.update(kwargs)
+
+    monkeypatch.setattr(openai, "OpenAI", _FakeOpenAI)
+    cfg = LLMConfig(backend="local", base_url="http://127.0.0.1:11434/v1", model="qwen3:8b")
+
+    build_openai_client(cfg, max_retries=0)
+
+    client = seen["http_client"]
+    assert isinstance(client, httpx.Client) and client.trust_env is False
+    client.close()
+
+
+def test_build_openai_client_leaves_remote_api_on_sdk_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """公网地址不塞 http_client——SDK 默认那份才会读系统代理（出国靠它）。"""
+    seen: dict[str, object] = {}
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            seen.update(kwargs)
+
+    monkeypatch.setattr(openai, "OpenAI", _FakeOpenAI)
+    monkeypatch.setenv("MIKASA_TEST_KEY", "sk-test")
+    cfg = LLMConfig(
+        backend="api",
+        base_url="https://api.deepseek.com/v1",
+        api_key_env="MIKASA_TEST_KEY",
+        model="deepseek-chat",
+    )
+
+    build_openai_client(cfg, max_retries=0)
+
+    assert seen["http_client"] is None
+
+
+def test_embedding_client_also_bypasses_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            seen.update(kwargs)
+
+    monkeypatch.setattr(openai, "OpenAI", _FakeOpenAI)
+    monkeypatch.setenv("MIKASA_TEST_KEY", "sk-test")
+    cfg = EmbeddingConfig(
+        backend="api",
+        base_url="http://127.0.0.1:11434/v1",
+        api_key_env="MIKASA_TEST_KEY",
+        model="bge-m3",
+    )
+
+    ApiEmbedding(cfg)._get_client()
+
+    client = seen["http_client"]
+    assert isinstance(client, httpx.Client) and client.trust_env is False
+    client.close()
