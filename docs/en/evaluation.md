@@ -809,3 +809,60 @@ SiliconFlow into 429, and ragas silently records the failures as NaN (in the fir
 of the 20 questions had a whole metric as NaN, and the mean was computed only over the
 surviving samples) — **cap the concurrency + retry, and write the failure counts into the
 result**.
+
+## 12. Retrieval definitions and candidate depth: two sets of numbers, one free A/B (2026-09-30)
+
+**Why this section exists**: on 2026-09-30 a 21-question set was generated from the user's
+**real corpus** (*Working performance of helical anchors under cyclic loading*, 911 chunks /
+294k characters / 189 pages, mostly English body text) using the ADR-0026 auto-synth, and the
+scores came out far below the sample corpus — and most of that gap turned out to be a
+**definition** difference, not a capability difference.
+
+### 12.1 Stage A is single-path, the product is dual-path: 0.500 vs 0.94 on the same questions
+
+| Definition | Method | top-10 hits on that corpus |
+| --- | --- | --- |
+| Stage A (the reported recall@10) | **the original question only**, rerank off, window anchored at 10 | **8/16 = 0.500** |
+| The product QA path | the original question **plus a Chinese→English second query**, RRF-fused (`retrieval.crosslingual`) | **15/16 = 0.94** |
+
+**Mechanism**: the question is Chinese while the body text is English. Single-path, the gold
+chunk lands at BM25 rank 39–546 and vector rank 43–764 (a Chinese embedding model matches
+English prose poorly; BM25 only hits by accident on digits and symbols). **With the English
+second query, 7 questions come straight back into the top-10**, leaving only one (a013)
+unrecovered.
+
+**Consequence (now written into the report)**: stage A deliberately makes no LLM calls (so it
+stays reproducible) and therefore **systematically understates** product recall on
+cross-lingual corpora. Stage B is the product's real chain. The evaluation report now says so
+above the stage A table.
+
+### 12.2 Candidate depth 20 → 60: no regression on the sample corpus, +2 questions on the real one
+
+**Motivation**: fusion only sees **each path's top-20** (`bm25_top_k` / `dense_top_k`). If the
+gold sits outside that, no window and no reranker can bring it back — and on the real corpus
+7 of 16 golds were beyond rank 20 (two of them right at the edge: 24 and 30).
+
+**Method**: mirror stage A's retrieval (rerank off, window anchored at
+`RETRIEVAL_FUSION_TOP_K`), change **only the two depths from 20 to 60**, run both question
+sets, and pair the per-question deltas with a bootstrap (no LLM calls; tens of seconds).
+
+| Question set | recall@5 | recall@10 | MRR | nDCG@10 | Per question |
+| --- | --- | --- | --- | --- | --- |
+| Sample corpus (47 q, regression) | 0.982 → 0.982 | 0.982 → 0.982 | 0.924 → 0.924 | 0.933 → 0.933 | 0 recovered / 0 lost |
+| Real corpus (16 q) | 0.500 → 0.562 | **0.500 → 0.625** | 0.406 → 0.432 | 0.431 → 0.480 | recovered **a007 / a013** / 0 lost |
+
+Paired interval on the real corpus: recall@10 **Δ+0.125, CI [0.000, +0.312]** — by the
+"interval must not cross 0" rule this is **not significant** (the lower bound sits exactly at
+0, n=16 is small), but the direction is consistent, there is **zero regression**, and the cost
+is one config line. The sample-corpus delta is exactly 0 (its candidate pool was already wide
+enough), which is the evidence that this step does not damage the profile that already passes.
+
+**Not done**: applying the line to the profile (that moves the baseline, so by our own rules it
+needs accounting plus a full regression), and depths beyond 60 — the depth scan plateaus at
+14/16 total pool coverage, and the remaining 2 questions are a **semantic gap** (Chinese
+question, English body, no digits to latch onto) that only query rewriting or a stronger
+embedder can close.
+
+**Boundary**: the real question set is **auto-generated** (some question texts are statements,
+and it is single-gold), so its absolute numbers indicate direction only; `citation gold` is
+naturally low when one gold chunk must be found among 911.
