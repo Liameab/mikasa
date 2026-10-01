@@ -235,6 +235,24 @@ async def run(args):
                 "!document.querySelector('#rd-ask').classList.contains('hidden')"
             ):
                 bad.append("阅读区打开后提问栏没有出现")
+            # 提问框被压成一条缝 + 提问栏溢出视口是 2026-09-30 的报障：前者是
+            # autosizeAskInput 在面板隐藏时量到 scrollHeight=0、把 height 写成 0，
+            # 而且不会自愈；后者是页面图/结果区把底部顶出去。两条都只在真实渲染
+            # 里看得见（后端测试与静态检查都摸不到），所以钉在这里。
+            ask_box = await cdp.evaluate(
+                "(() => { const n = document.querySelector('#rd-ask-input');"
+                " const bar = document.querySelector('#rd-ask');"
+                " const r = n.getBoundingClientRect();"
+                " const b = bar.getBoundingClientRect();"
+                " return {h: Math.round(r.height), w: Math.round(r.width),"
+                "   bottom: Math.round(b.bottom), vh: window.innerHeight}; })()"
+            )
+            if ask_box["h"] < 30:
+                bad.append(f"提问框被压扁（高 {ask_box['h']}px）：看起来就是『被遮住』")
+            if ask_box["bottom"] > ask_box["vh"]:
+                bad.append(
+                    f"提问栏溢出视口：底边 {ask_box['bottom']} > 视口高 {ask_box['vh']}"
+                )
             scope_state = await cdp.evaluate(
                 "(() => ({doc: document.querySelector('#rd-ask-doc').classList.contains('active'),"
                 " all: document.querySelector('#rd-ask-all').classList.contains('active')}))()"

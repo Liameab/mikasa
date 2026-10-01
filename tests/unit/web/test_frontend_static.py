@@ -74,6 +74,45 @@ def test_js_esm_syntax(tmp_path: Path) -> None:
     assert not failures, "前端 ESM 语法错误（会导致整页 JS 失效）：\n" + "\n".join(failures)
 
 
+def fmt_seconds_arguments(src: str) -> list[str]:
+    """取出每处 `fmtSeconds(...)` 的实参原文（按括号配对截断）。"""
+    out: list[str] = []
+    for m in re.finditer(r"fmtSeconds\(", src):
+        i = m.end()
+        start = i
+        depth = 1
+        while i < len(src) and depth:
+            if src[i] == "(":
+                depth += 1
+            elif src[i] == ")":
+                depth -= 1
+            i += 1
+        out.append(src[start : i - 1])
+    return out
+
+
+def test_wait_timers_convert_ms_to_seconds() -> None:
+    """等待计时的毫秒必须显式换算成秒（2026-09-30 用户报障的回归锁）。
+
+    `performance.now()` 是毫秒，而 `fmtSeconds()` 收的是秒（内部还会 ×1000
+    显示毫秒）——少除一次 1000，等待时长就被放大一千倍：阅读面板实测显示
+    「390分11秒」，真实等待只有 23.4 秒（23411 毫秒被当成 23411 秒）。
+    node --check 只认语法、后端测试看不见前端算式，所以这一条只能在这里钉。
+
+    边界：只锁「把 performance.now() 的差值直接喂进去」这一种写法；若哪天先
+    存进变量再传（`const ms = ...; fmtSeconds(ms)`），本条会静默放行。
+    """
+    offenders = []
+    for f in js_files():
+        for arg in fmt_seconds_arguments(f.read_text(encoding="utf-8")):
+            if "performance.now()" in arg and "/ 1000" not in arg:
+                offenders.append(f"{f.name}: fmtSeconds({arg.strip()})")
+    assert not offenders, (
+        "等待计时把毫秒直接喂给了 fmtSeconds（显示会放大一千倍），"
+        "请先 / 1000：\n" + "\n".join(offenders)
+    )
+
+
 def test_js_relative_imports_resolve() -> None:
     """相对导入：目标文件存在 + 具名导入确实被导出。"""
     exports = {f.name: collect_exports(f.read_text(encoding="utf-8")) for f in js_files()}

@@ -2277,6 +2277,10 @@ a.pd-title:hover { color: var(--accent); }
 .rd-ask-input {
   flex: 1;
   resize: none;
+  /* 兜底：JS 按内容自增高（autosizeAskInput），而它在面板隐藏时量到 0 会把
+     高度写成 0——**CSS 的下限在这里兜住**，否则输入框被压成一条缝，看起来
+     就像"提问栏被遮住了"（2026-09-30 用户报障）。 */
+  min-height: 34px;
   font: inherit;
   font-size: 13px;
   line-height: 1.5;

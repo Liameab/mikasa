@@ -60,11 +60,19 @@ let inline = false; // 内嵌模式（知识库页）
 let onCloseHook = null; // 内嵌模式的"关闭"= 交还给调用方（清空选择）
 
 // 页面图缩放（2026-09-11 用户反馈：页面视图是位图，字号调节对它无效——改用
-// 缩放；且倍数要**自己调节**，不是固定档位）。50%~300% 连续可调。
-const ZOOM_MIN = 50;
+// 缩放；且倍数要**自己调节**，不是固定档位）。连续可调。
+//
+// 下界 2026-09-30 由 50 放到 25：`适应窗口`要把**整页**塞进可视高度，而一页
+// A4 摆在 700px 高的栏里常常只要 50% 上下——卡在 50 就是"永远差一截"。
+const ZOOM_MIN = 25;
 const ZOOM_MAX = 300;
 const ZOOM_STEP = 10; // − / ＋ 按钮的步进
 let zoomPercent = 100;
+// 「适应窗口」是否生效，**默认开**（2026-09-30 用户报障）：此前默认 100%，而
+// 100% 是**页图原生像素宽**（本机约 910px），一页 A4 高 1287px，塞进 656px 的
+// 可视区只露得出一半——"论文只能在那一点区间内看"。手动缩放（滑条 / ± /
+// 原始大小）即退出适应，点「适应」再回来。
+let zoomFit = true;
 
 // 「边看边问」（A 档 c，2026-09-22）：阅读器内的即问即散问答——不建会话、
 // 不落库、不进历史（用户拍板）。状态一律 ask 前缀，避开 body/head/text/
@@ -76,6 +84,7 @@ let askContext = null; // 用户在正文里选中的原文（string|null）
 let askTimer = null; // 等待计时器句柄（closeReader 必须清，否则关掉面板还在跑）
 
 function setZoom(percent) {
+  zoomFit = false; // 手动缩放 = 退出「适应窗口」（要整页回来看，点「适应」）
   const anchor = currentPage; // 缩放前读到哪一页——缩放后要回到这一页
   zoomPercent = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(Number(percent) || 100)));
   applyZoom();
@@ -120,6 +129,42 @@ function applyZoom() {
   refs?.pageCanvas.classList.toggle("pannable", z > 1);
   if (refs?.zoomRange) refs.zoomRange.value = String(zoomPercent);
   if (refs?.zoomLabel) refs.zoomLabel.textContent = `${zoomPercent}%`;
+}
+
+/**
+ * 「适应窗口」该用多少百分比：把**整页**（宽和高都）塞进可视区。
+ *
+ * 只缩不放（上限 100%）：把小页图放大只会糊。页图还没加载完（naturalWidth=0）
+ * 或面板还没显示（可用高度 0）时返回 null——调用方挂到 load 上重算，不猜。
+ */
+function fitZoomPercent() {
+  const img = refs?.pageCanvas?.querySelector(".rd-page-img");
+  const base = pageBaseWidth(); // 100% 时的显示宽度
+  if (!img || !img.naturalWidth || !img.naturalHeight || !base) return null;
+  const availW = Math.max(0, refs.pageCanvas.clientWidth - 24); // 两侧各 12px 内边距
+  const availH = Math.max(0, refs.pageCanvas.clientHeight - 24); // 上下各 12px 内边距
+  const displayH = base * (img.naturalHeight / img.naturalWidth);
+  if (availW <= 0 || availH <= 0 || displayH <= 0) return null;
+  return Math.min(availW / base, availH / displayH, 1) * 100;
+}
+
+/** 应用「适应窗口」；页图还没就绪就等它的 load 再算一次。 */
+function applyFitZoom() {
+  const pct = fitZoomPercent();
+  if (pct === null) {
+    const img = refs?.pageCanvas?.querySelector(".rd-page-img");
+    if (img && !img.complete) {
+      img.addEventListener("load", () => { if (zoomFit) applyFitZoom(); }, { once: true });
+    }
+    return;
+  }
+  zoomPercent = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(pct)));
+  applyZoom();
+}
+
+/** 结果区一开一合都会改页面可视高度：适应态要跟着重算（否则页被切成一半）。 */
+function refitPageIfNeeded() {
+  if (zoomFit && currentMode === "page") applyFitZoom();
 }
 
 /**
@@ -171,7 +216,22 @@ export function initReader(host = null, { onClose = null } = {}) {
     { class: "btn", type: "button", id: "rd-zoom-reset", title: "恢复原始大小（100%）" },
     "原始大小"
   );
-  const zoomBox = el("div", { class: "rd-zoom" }, zoomOut, zoomRange, zoomLabel, zoomIn, zoomReset);
+  // 一键「适应」：整页可见（2026-09-30 报障：默认 100% 只看得见半页）
+  const zoomFitBtn = el(
+    "button",
+    { class: "btn", type: "button", id: "rd-zoom-fit", title: "整页适应窗口（全部内容可见）" },
+    "适应"
+  );
+  const zoomBox = el(
+    "div",
+    { class: "rd-zoom" },
+    zoomOut,
+    zoomRange,
+    zoomLabel,
+    zoomIn,
+    zoomFitBtn,
+    zoomReset
+  );
 
   const head = el(
     "div",
@@ -306,6 +366,7 @@ export function initReader(host = null, { onClose = null } = {}) {
     zoomIn,
     zoomRange,
     zoomLabel,
+    zoomFitBtn,
     zoomReset,
     askBox,
     askDocBtn,
@@ -393,9 +454,15 @@ export function initReader(host = null, { onClose = null } = {}) {
   zoomIn.addEventListener("click", () => stepZoom(1));
   zoomRange.addEventListener("input", () => setZoom(zoomRange.value));
   zoomReset.addEventListener("click", () => setZoom(100));
+  zoomFitBtn.addEventListener("click", () => {
+    zoomFit = true;
+    applyFitZoom();
+  });
   // 容器尺寸变了要重算基准宽：缩放态的宽是像素值，不会自己跟随窗口
   window.addEventListener("resize", () => {
-    if (pageMode && refs && zoomPercent !== 100) applyZoom();
+    if (!refs || currentMode !== "page") return; // 缩放只作用于页面视图
+    if (zoomFit) applyFitZoom();
+    else if (zoomPercent !== 100) applyZoom();
   });
   applyZoom();
 
@@ -857,6 +924,8 @@ async function showPage(n, rects = null) {
   const wanted =
     pageMode === "scroll" && total ? Array.from({ length: total }, (_, i) => i + 1) : [page];
   refs.pageCanvas.replaceChildren(...wanted.map(buildPageNode));
+  // 新页 / 换模式：适应态要按新页的尺寸重算（页图未就绪时它自己挂 load 再来）
+  if (zoomFit) applyFitZoom();
   const fit = pageNode(page);
   if (rects && rects.length) {
     fit?.querySelector(".rd-page-layer")?.append(...makeHighlights(rects));
@@ -1103,6 +1172,7 @@ function askReset() {
   autosizeAskInput();
   refs.askOut.classList.add("hidden");
   refs.askOut.replaceChildren();
+  refitPageIfNeeded(); // 结果区收起 → 页面可视高度变大，适应态跟着重算
   refs.askSend.disabled = false;
   refs.askSend.textContent = "问";
 }
@@ -1153,6 +1223,9 @@ function captureAskSelection() {
 function autosizeAskInput() {
   if (!refs) return;
   const node = refs.askInput;
+  // 隐藏时量不到（scrollHeight = 0）：这时候写 height 会把输入框压成一条缝，
+  // 而且它不会自己长回来——用户看到的就是"提问栏被遮住"（2026-09-30 报障）。
+  if (!node.scrollHeight) return;
   node.style.height = "auto";
   const line = Number.parseFloat(getComputedStyle(node).lineHeight) || 18;
   node.style.height = `${Math.min(node.scrollHeight, Math.round(line * 5 + 12))}px`;
@@ -1190,11 +1263,21 @@ async function sendReaderQuestion() {
   const citesBox = el("div", { class: "rd-ask-cites" });
   out.append(who, answerBox, srcsBox, citesBox);
   out.classList.remove("hidden");
+  refitPageIfNeeded(); // 结果区展开会吃掉页面高度：适应态当场重算
 
   // 等待要有回声（与问答页同款）：每 100ms 刷一次已经等了多少秒
+  //
+  // **先除 1000**：performance.now() 是毫秒，而 fmtSeconds 收的是秒（内部还会
+  // ×1000 显示毫秒）——漏了这一步，等待时长会被放大一千倍。2026-09-30 用户
+  // 报障就是这个：真实等了 23.4 秒，面板显示「390分11秒」（23411 毫秒被当成
+  // 23411 秒）。问答页那条同款计时一直是除过的，只有这里漏。
+  //
+  // whoHead 是随 meta 帧改写的抬头（标题 + 本篇/全库），心跳只负责往它后面
+  // 追加秒表：两者并存，谁也不盖谁。
   const startedAt = performance.now();
+  let whoHead = "正在检索并作答…";
   const tick = () => {
-    who.textContent = `正在检索并作答… ${fmtSeconds(performance.now() - startedAt)}`;
+    who.textContent = `${whoHead} ${fmtSeconds((performance.now() - startedAt) / 1000)}`;
   };
   tick();
   if (askTimer !== null) clearInterval(askTimer);
@@ -1213,9 +1296,12 @@ async function sendReaderQuestion() {
       (kind, data) => {
         if (!fresh()) return; // 过期流：换文档/关面板/又问了新的一题
         if (kind === "meta") {
-          who.textContent = `关于《${data.title}》· ${data.scope === "doc" ? "本篇" : "全库"}${
+          // 只改抬头，由 tick 重绘：直接写 who.textContent 会在 100ms 后被
+          // 下一跳盖回占位文案（标题只闪一下就没了，2026-09-30 一并修）
+          whoHead = `关于《${data.title}》· ${data.scope === "doc" ? "本篇" : "全库"}${
             askContext ? " · 含选中片段" : ""
           } · 正在作答…`;
+          tick();
           renderAskSources(srcsBox, data.sources || []);
         } else if (kind === "delta") {
           buf += data.text || "";
@@ -1250,6 +1336,7 @@ function finishAsk(who, answerBox, srcsBox, citesBox, buf, data, startedAt) {
   const wall = (performance.now() - startedAt) / 1000;
   const citations = answer.citations || [];
   who.textContent = fmtLatency(answer.latency_ms, wall);
+  refitPageIfNeeded(); // 答案落定后结果区高度才稳定，再适应一次
   // 答案正文走 renderAnswer（内部先整体转义；拒答轮只给标记文案）
   answerBox.innerHTML = renderAnswer(buf || answer.text || "", citations, true);
   attachCopyButtons(answerBox); // 代码块复制钮：每次重建容器都要挂一次

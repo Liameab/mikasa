@@ -237,8 +237,22 @@ async def run(args):
                 }),
                 label: label ? label.textContent : '',
                 openHref: open ? open.getAttribute('href') : '',
-                zoomControls: ['rd-zoom-out', 'rd-zoom-in', 'rd-zoom-reset'].every(
+                zoomControls: ['rd-zoom-out', 'rd-zoom-in', 'rd-zoom-fit', 'rd-zoom-reset'].every(
                   (id) => !!document.getElementById(id)),
+                // 「适应窗口」默认生效：整页必须落在可视区内（2026-09-30 用户报障
+                // "论文只能在这一点区间内看"——默认 100% 时 A4 只露得出半页）
+                fit: (() => {
+                  const c = document.querySelector('#reader-inline .rd-page-canvas');
+                  const i = document.querySelector('#reader-inline .rd-page-img');
+                  if (!c || !i) return null;
+                  const cr = c.getBoundingClientRect();
+                  const ir = i.getBoundingClientRect();
+                  return {
+                    over: Math.round(ir.bottom - cr.bottom),
+                    imgH: Math.round(ir.height),
+                    canvasH: Math.round(cr.height),
+                  };
+                })(),
                 labels: [...document.querySelectorAll('#reader-inline .rd-font-btn')]
                   .map((b) => b.textContent),
               };
@@ -253,9 +267,17 @@ async def run(args):
             # 页面视图的控件已从"字号钮"改为"缩放"（2026-09-11：页面图是位图，
             # 字号对它无效），这里的断言跟着改——留旧选择器会让工具永远红。
             if not pdf_state["zoomControls"]:
-                bad.append("页面视图缺少缩放控件（缩小/放大/原始大小）")
+                bad.append("页面视图缺少缩放控件（缩小/放大/适应/原始大小）")
             if pdf_state["labels"]:
                 bad.append(f"缩放控件不该再有字号钮：{pdf_state['labels']!r}")
+            fit = pdf_state["fit"]
+            if not fit:
+                bad.append("页面视图找不到画布 / 页图（适应窗口无从判断）")
+            elif fit["over"] > 2:  # 2px 容差：取整与边框
+                bad.append(
+                    f"页面视图默认没适应窗口：页图高 {fit['imgH']}、可视区高 {fit['canvasH']}，"
+                    f"底部超出 {fit['over']}px（用户会只看到半页）"
+                )
 
             # ---- 可选：把面板的 DOM 结构抄下来（--dump-dom）----
             # 为什么需要：写 E2E 断言的人（或另一个 agent）未必跑得起来浏览器
