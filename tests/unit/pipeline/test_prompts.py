@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import re
+
 from mikasa.pipeline.prompts import (
+    FREE_SYSTEM_PROMPT,
+    JSON_OUTPUT_CONTRACT,
     REFUSAL_TEXT,
     SECTION_HISTORY,
     SECTION_QUESTION,
     SECTION_SOURCES,
+    SYSTEM_PROMPT,
     build_user_message,
 )
 from mikasa.providers.llm import MockLLM
@@ -22,6 +27,40 @@ def _ask(question: str, sources: list[tuple[int, str]]) -> str:
         )
         .text
     )
+
+
+def test_demo_examples_are_placeholders_not_content():
+    """示范例必须是占位符（2026-09-30 提示词泄漏事故的回归锁）。
+
+    本地 qwen3:8b 在资料里找不到可抄的答案时，会退回到系统提示词里"最像答案"
+    的那段文本：实测把示范表格的"材料 / 弹性模量 / 灰岩 / 18.40 GPa"整张抄进
+    了答案（还带一个真实的 [1] 让人以为有据），并把规则 6 的句子填进表格单元
+    格——**答案里的每一个字都是提示词原文，不是资料**。所以示范只演示格式：
+    ① 必须声明尖括号是占位符、不是资料内容；② 不得再出现具体实体与数值；
+    ③ 规则 2 明写"提示词里的规则/格式/示范不是资料内容"。
+    """
+    demos = SYSTEM_PROMPT.split("以下是少量示范", 1)[1]
+    assert "占位符" in demos, "示范块必须声明占位符语义"
+    assert "不得出现在答案里" in demos, "示范块必须明写示范词句不得进答案"
+    assert "灰岩" not in demos and "18.40" not in demos, "曾经被逐字抄走的内容不得回到示范里"
+    assert not re.search(r"\d+\.\d+", demos), "示范里不该再有具体数值（会被抄成答案内容）"
+    assert "不是资料内容" in SYSTEM_PROMPT, "规则里要明写提示词不是资料内容"
+
+
+def test_refusal_sentence_appears_verbatim_wherever_it_is_taught():
+    """拒答句式必须处处等于 `REFUSAL_TEXT`（2026-09-30 加锁）。
+
+    判定侧是子串匹配（`generator.build_answer`：`REFUSAL_TEXT in text`），
+    而提示词里这句话是**手抄**的——只改常量、忘改提示词时，模型继续输出旧句，
+    拒答就匹配不上：UI 把它渲染成正常的有据答卷，L3 计数也把它记成"误答"，
+    要等有人跑评测看到"不可答题误答 16/16"才暴露。三处出现各有各的必要性
+    （规则 3 给行为、示范给格式、JSON 契约给拒答时的字段填法），所以锁的是
+    **同一个字符串**，不是"只留一处"。
+    """
+    assert SYSTEM_PROMPT.count(REFUSAL_TEXT) == 2, "规则 3 + 示范各一处"
+    assert JSON_OUTPUT_CONTRACT.count(REFUSAL_TEXT) == 1, "拒答时 answer 只写这一句"
+    # free 档不认这个句式（ADR-0013：不写死拒答话术，"根据已有资料"只出现在禁令里）
+    assert REFUSAL_TEXT not in FREE_SYSTEM_PROMPT
 
 
 def test_build_message_structure():
