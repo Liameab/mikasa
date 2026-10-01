@@ -128,9 +128,7 @@ def main() -> int:
         key: _mean([item[key] for item in per_item if item[key] is not None]) for key in keys
     }
     # 失败计数与均值同权披露：NaN 是"没测到"，不是 0，也不是"通过了"
-    failures = {
-        key: sum(1 for item in per_item if item[key] is None) for key in keys
-    }
+    failures = {key: sum(1 for item in per_item if item[key] is None) for key in keys}
     payload = {
         "judge_model": args.judge_model,
         "embed_model": args.embed_model,
@@ -141,7 +139,9 @@ def main() -> int:
     }
     out_path = Path(args.out) / "ragas.json"
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
-    print("RAGAS 均值：", {k: (round(v, 3) if v is not None else None) for k, v in aggregates.items()})
+    print(
+        "RAGAS 均值：", {k: (round(v, 3) if v is not None else None) for k, v in aggregates.items()}
+    )
     print("未测到（NaN）题数：", failures)
     print(f"已写出 {out_path}")
     return 0

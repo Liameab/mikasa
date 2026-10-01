@@ -43,6 +43,7 @@ def main() -> int:
     citations = sum(o["citations"] for o in ours)
     gold_hits = sum(o["gold_hits"] for o in ours)
     faithful_flags = [o["judge_faithful"] for o in ours if o["judge_faithful"] is not None]
+    correctness_vals = [o["judge_correctness"] for o in ours if o["judge_correctness"] is not None]
 
     aggregates = ragas["aggregates"]
     lines: list[str] = []
@@ -50,9 +51,9 @@ def main() -> int:
 
     add("# RAGAS 对照结果（同 20 题、同答案、同上下文）")
     add("")
-    add(f"- 抽样：种子 20260930、分层 20 题（可答题 47 道里），逐题见下表")
+    add("- 抽样：种子 20260930、分层 20 题（可答题 47 道里），逐题见下表")
     add(f"- RAGAS 侧：{ragas['judge_model']}（与主仓裁判同款）+ {ragas['embed_model']}")
-    add(f"- 我方指标与 RAGAS 全部跑在**同一份答案**上（out/answers.jsonl）")
+    add("- 我方指标与 RAGAS 全部跑在**同一份答案**上（out/answers.jsonl）")
     add("")
     add("## 1. 聚合对照")
     add("")
@@ -69,20 +70,17 @@ def main() -> int:
         f"— | — |"
     )
     add(
-        f"| citation gold ratio（引用块命中 gold） | {fmt(gold_hits / citations if citations else None)} | "
+        f"| citation gold ratio（引用块命中 gold） | "
+        f"{fmt(gold_hits / citations if citations else None)} | "
         f"context precision | {fmt(aggregates['context_precision'])} |"
     )
-    add(
-        f"| 引用越界/自造编号 | {sum(o['out_of_range'] for o in ours)} | — | — |"
-    )
+    add(f"| 引用越界/自造编号 | {sum(o['out_of_range'] for o in ours)} | — | — |")
     add(
         f"| 裁判 correctness 1-5 | "
-        f"{fmt(mean([o['judge_correctness'] for o in ours if o['judge_correctness'] is not None]))} | "
+        f"{fmt(mean(correctness_vals))} | "
         f"answer relevancy | {fmt(aggregates['answer_relevancy'])} |"
     )
-    add(
-        f"| 无引用断言（没挂 [n] 的事实陈述） | {claim_uncited} | — | — |"
-    )
+    add(f"| 无引用断言（没挂 [n] 的事实陈述） | {claim_uncited} | — | — |")
     add(
         f"| 检索召回（gold 块在不在注入窗口，本题集） | 见评测报告 stage A | "
         f"context recall | {fmt(aggregates['context_recall'])} |"
@@ -100,7 +98,8 @@ def main() -> int:
         o = row["ours"]
         add(
             f"| {row['id']} | {row['difficulty']} | {o['citations']} | "
-            f"{o['gold_hits']}/{o['citations']} | {o['claim_supported']}/{o['claim_unsupported']} | "
+            f"{o['gold_hits']}/{o['citations']} | "
+            f"{o['claim_supported']}/{o['claim_unsupported']} | "
             f"{fmt(item.get('faithfulness'))} | {fmt(item.get('context_precision'))} | "
             f"{fmt(item.get('context_recall'))} | "
             f"{'是' if o['judge_faithful'] else ('否' if o['judge_faithful'] is False else '—')} |"
@@ -108,7 +107,10 @@ def main() -> int:
     add("")
     add("> 口径差异（写进报告时不可省）：RAGAS 的 faithfulness 用**全部检索上下文**验证断言，")
     add("> 我方的 claim 级支持率只认**该断言自己引用的块**（更严）；context precision/recall 是")
-    add("> **句/段级对参考答案**（黄金集的 notes 要点），我方的 citation gold 是**块级对 gold_chunk_id**。")
+    add(
+        "> **句/段级对参考答案**（黄金集的 notes 要点），"
+        "我方的 citation gold 是**块级对 gold_chunk_id**。"
+    )
     add("")
 
     path = OUT / "result.md"

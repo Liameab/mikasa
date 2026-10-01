@@ -87,7 +87,9 @@ def main() -> int:
     rows: list[dict] = []
     for item in sample:
         # 与评测阶段 B 逐字同轨：跨语言第二路 + 产品检索配置 + 产品生成
-        second_query = _translate_query(llm, item.question) if settings.retrieval.crosslingual else None
+        second_query = (
+            _translate_query(llm, item.question) if settings.retrieval.crosslingual else None
+        )
         hits, _lat = retriever.retrieve(item.question, second_query=second_query)
         answer, _completion = generator.generate(item.question, hits, titles)
         contexts = [hit.chunk.content for hit in hits]
@@ -101,7 +103,9 @@ def main() -> int:
         verdict = None
         if not answer.refused and answer.text.strip():
             try:
-                verdict = judge.evaluate(item.question, item.notes, "\n".join(contexts)[:3000], answer.text)
+                verdict = judge.evaluate(
+                    item.question, item.notes, "\n".join(contexts)[:3000], answer.text
+                )
             except Exception as exc:  # noqa: BLE001 - 对照导出：裁判失败不中断
                 print(f"  裁判失败 {item.id}：{type(exc).__name__}")
         claim = None
@@ -138,7 +142,11 @@ def main() -> int:
                 },
             }
         )
-        print(f"  {item.id} 引用 {len(cited_ids)} 越界 {len(markers) - in_range} 断言 {None if claim is None else claim.supported}/{None if claim is None else claim.unsupported} 拒答 {answer.refused}")
+        print(
+            f"  {item.id} 引用 {len(cited_ids)} 越界 {len(markers) - in_range} "
+            f"断言 {None if claim is None else claim.supported}"
+            f"/{None if claim is None else claim.unsupported} 拒答 {answer.refused}"
+        )
 
     path = out_dir / "answers.jsonl"
     path.write_text(
