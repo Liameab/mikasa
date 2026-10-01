@@ -250,9 +250,7 @@ async def run(args):
             if ask_box["h"] < 30:
                 bad.append(f"提问框被压扁（高 {ask_box['h']}px）：看起来就是『被遮住』")
             if ask_box["bottom"] > ask_box["vh"]:
-                bad.append(
-                    f"提问栏溢出视口：底边 {ask_box['bottom']} > 视口高 {ask_box['vh']}"
-                )
+                bad.append(f"提问栏溢出视口：底边 {ask_box['bottom']} > 视口高 {ask_box['vh']}")
             scope_state = await cdp.evaluate(
                 "(() => ({doc: document.querySelector('#rd-ask-doc').classList.contains('active'),"
                 " all: document.querySelector('#rd-ask-all').classList.contains('active')}))()"
