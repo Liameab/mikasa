@@ -95,7 +95,7 @@ jobs:
       # 构建产物一律留档：dry run 的唯一产出就是它；正式发包时也是
       # "草稿 Release 挂了、但包还能从这里拿"的兜底
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mikasa-win64
           path: |
