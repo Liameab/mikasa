@@ -19,7 +19,7 @@ const source = fs.readFileSync(
   "utf8"
 );
 const mod = await import("data:text/javascript;base64," + Buffer.from(source).toString("base64"));
-const { buildPlan, headingLabel, normalizeSelection, pageMax } = mod;
+const { buildPlan, buildTableList, headingLabel, normalizeSelection, pageMax } = mod;
 
 let passed = 0;
 const assert = (cond, msg) => {
@@ -122,6 +122,34 @@ const mdChunks = [
   assert(cut.endsWith("…"), "截断要补省略号（让模型与用户都知道后面还有）");
   assert(normalizeSelection("短", 1000) === "短", "未超限原样返回");
   assert(normalizeSelection("正".repeat(10), 0) === "正".repeat(10), "limit 非法时不截断");
+}
+
+/* ---- 表格清单（「表格」标签页，2026-10-04）---- */
+{
+  // 两个块：标记分别落在块中部与块首（真实库实测两种形态都存在）
+  const t = "前言。\n【表格】\n列A 列B\n甲 1.0  乙 2.0 再往后是长尾巴".padEnd(60, "尾");
+  const t2 = "【表格】\nlayer modulus\nsand 15.7";
+  const text = t + t2;
+  const chunks = [
+    { chunk_id: 7, seq: 0, start: 0, end: t.length, heading_path: null, page_number: 36 },
+    { chunk_id: 8, seq: 1, start: t.length, end: text.length, heading_path: null, page_number: 69 },
+  ];
+  const list = buildTableList(text, chunks);
+  assert(list.length === 2, "两个标记 → 两行");
+  assert(list[0].chunkId === 7 && list[0].page === 36, "第一行映射到含标记的块与页码");
+  assert(list[1].chunkId === 8 && list[1].page === 69, "块首标记同样命中");
+  assert(list[0].preview.startsWith("列A 列B 甲 1.0"), "预览从标记之后起算");
+  assert(!list[0].preview.includes("\n") && !list[0].preview.includes("【表格】"), "预览不含换行/标记本体");
+  assert(list[0].preview.length <= 80, "预览截到 80 字");
+
+  // 标记落不进任何块（偏移断链）→ 该行跳过（不给点了没反应的跳转）
+  const gap = buildTableList(text, [
+    { chunk_id: 9, seq: 0, start: 0, end: 3, heading_path: null, page_number: 1 },
+  ]);
+  assert(gap.length === 0, "偏移对不上的行直接跳过");
+
+  assert(buildTableList("没有标记的正文", chunks).length === 0, "无标记 → 空清单");
+  assert(buildTableList("", []).length === 0, "空输入不炸");
 }
 
 console.log(`✓ smoke_reader：${passed} 条断言全部通过`);

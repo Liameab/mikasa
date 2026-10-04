@@ -67,6 +67,34 @@ export function pageMax(chunks) {
 }
 
 /**
+ * 正文里的【表格】标记 → 表格清单（页码 + 预览）——「表格」标签页的数据。
+ *
+ * 标记是 PDF 解析器写在表格段首的（loaders.TABLE_MARK），定位方式与
+ * buildPlan 同一份偏移契约：标记偏移落在哪个块的 [start,end) 区间就属于谁，
+ * 不需要任何新端点。预览 = 标记之后 80 字（空白折叠成一行）；块区间对不上
+ * 的行直接跳过——宁可少一行，也不给一个点了没反应的跳转。
+ * 已知边界（不追求完美）：解析器的表格启发式偶尔把图注标成表格，如实列出。
+ */
+export function buildTableList(text, chunks) {
+  const out = [];
+  const re = /【表格】/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const span = chunks.find((c) => m.index >= c.start && m.index < c.end);
+    if (!span) continue;
+    let preview = text.slice(m.index + 4, m.index + 84);
+    const next = preview.indexOf("【表格】"); // 紧邻的下一张表：预览不越界吞它
+    if (next !== -1) preview = preview.slice(0, next);
+    out.push({
+      chunkId: span.chunk_id,
+      page: span.page_number ?? null,
+      preview: preview.replace(/\s+/g, " ").trim(),
+    });
+  }
+  return out;
+}
+
+/**
  * 用户在正文里选中的文字 → 可当上下文的单行文本（「边看边问」，A 档 c）。
  *
  * 三步：折叠所有空白（选区跨段落时会带一堆换行缩进，进提示词只会浪费

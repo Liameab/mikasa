@@ -36,7 +36,7 @@ import {
   toast,
 } from "./common.js";
 import { compressImage } from "./image-util.js";
-import { buildPlan, normalizeSelection, pageMax } from "./reader-view.js";
+import { buildPlan, buildTableList, normalizeSelection, pageMax } from "./reader-view.js";
 
 // 选中文字当上下文时的长度上限：与服务端 READER_CONTEXT_MAX 同值
 // （schemas.py；前端先截，服务端那条是兜底，撞上就是 422）
@@ -45,9 +45,12 @@ const ASK_CONTEXT_LIMIT = 1000;
 let root = null; // 浮层的面板根 / 内嵌的容器根
 let refs = null; // 内部节点引用
 let cache = null; // { docId, data, location }：同文档重复打开不重拉
-let currentMode = "text"; // 当前视图：text | file | page（跳页要按它分派，不看 DOM）
+let currentMode = "text"; // 当前视图：text | file | page | tables（跳页要按它分派，不看 DOM）
 let isPdf = false; // 当前文档是否 PDF —— 决定第二个标签是"页面"还是"原文件"
 let currentPage = 1; // 页面视图当前页
+// 本篇文档的表格清单（2026-10-04）：由 buildTableList 从拼好的正文里扫出来，
+// 换文档时整体替换；长度为 0 时「表格」标签整体隐藏（标记是 PDF 独有）。
+let tableList = [];
 // 打开请求的序号：连点两篇文档时先发的响应可能后到，落盘前必须核对
 // "我还是最新的那次请求吗"——否则用户点的是 B，看到的却是 A 的正文
 let loadSeq = 0;
@@ -186,6 +189,10 @@ export function initReader(host = null, { onClose = null } = {}) {
   // （2026-09-11 用户反馈"之前能像双击论文那样用笔标注"，那个视图就是它——
   // 之前合并视图时被移除，现恢复，与「页面」并存、各司其职）
   const tabFile = el("button", { class: "btn ghost", type: "button", id: "rd-tab-file" }, "原文件");
+  // 「表格」= 本篇全部表块的清单（2026-10-04 用户报障修复）：页码 + 预览、
+  // 点击跳页面视图高亮，不过 LLM。文案里的张数在 openDocument 里回填；
+  // 无表块的文档（含全部 md/docx）整标签隐藏。
+  const tabTables = el("button", { class: "btn ghost", type: "button", id: "rd-tab-tables" }, "表格");
   const pageInput = el("input", { type: "number", min: "1", id: "rd-page", "aria-label": "页码" });
   const pageGo = el("button", { class: "btn ghost", type: "button", id: "rd-go" }, "跳转");
   const jump = el("div", { class: "rd-page-jump hidden" }, "第", pageInput, "页", pageGo);
@@ -237,13 +244,14 @@ export function initReader(host = null, { onClose = null } = {}) {
     "div",
     { class: "rd-head" },
     title,
-    el("div", { class: "rd-tabs" }, tabText, tabPage, tabFile),
+    el("div", { class: "rd-tabs" }, tabText, tabPage, tabTables, tabFile),
     jump,
     zoomBox,
     close
   );
   const text = el("div", { class: "rd-text" });
   const orig = el("div", { class: "rd-orig hidden" });
+  const tables = el("div", { class: "rd-tables hidden" }); // 「表格」标签页的清单
   const foot = el("div", { class: "rd-foot hidden" }); // 内嵌模式的元数据状态栏
   // 页面视图（PDF 合并视图）：原样渲染的页面图 + 引用高亮覆盖层。
   // 页面节点由 renderPages 按翻页模式动态生成（单页 = 一个节点；连续 = 全部页）
@@ -281,7 +289,7 @@ export function initReader(host = null, { onClose = null } = {}) {
     ocrBox,
     pageCanvas
   );
-  const body = el("div", { class: "rd-body" }, text, orig, pageView);
+  const body = el("div", { class: "rd-body" }, text, orig, pageView, tables);
 
   // 「边看边问」（A 档 c）：底部常驻提问栏 + 结果区。
   // **挂在根节点**而不是 .rd-body 里：.rd-body 是**横排** flex（左正文右页面），
@@ -345,7 +353,9 @@ export function initReader(host = null, { onClose = null } = {}) {
     title,
     tabText,
     tabPage,
+    tabTables,
     tabFile,
+    tables,
     pageInput,
     pageGo,
     jump,
@@ -382,6 +392,7 @@ export function initReader(host = null, { onClose = null } = {}) {
   close.addEventListener("click", () => closeReader());
   tabText.addEventListener("click", () => setMode("text"));
   tabPage.addEventListener("click", () => setMode("page"));
+  tabTables.addEventListener("click", () => setMode("tables"));
   tabFile.addEventListener("click", () => setMode("file"));
   pageGo.addEventListener("click", () => jumpToPage());
   pageInput.addEventListener("keydown", (ev) => {
@@ -559,6 +570,13 @@ export async function openDocument(docId, { chunkId = null, mode = null, locatio
   // 标签随格式变：md/txt/docx = 文本 + 原文件；PDF = 页面（高亮/选字）+ 原文件（可标注）
   refs.tabText.classList.toggle("hidden", isPdf);
   refs.tabPage.classList.toggle("hidden", !isPdf);
+  // 「表格」清单（2026-10-04）：从拼好的正文里扫【表格】标记（PDF 解析器写的，
+  // 见 loaders.TABLE_MARK），零新端点；无表块整标签隐藏——md/docx 没有标记，
+  // 不必露一个永远空着的清单。
+  tableList = isPdf ? buildTableList(data.text, data.chunks) : [];
+  refs.tabTables.classList.toggle("hidden", tableList.length === 0);
+  refs.tabTables.textContent = `表格 ${tableList.length}`;
+  renderTableList();
   refs.title.textContent = data.document.title;
   refs.orig.replaceChildren(); // 换文档后原文件视图需重建
   refs.orig.dataset.built = "";
@@ -748,6 +766,31 @@ function renderText(data) {
 }
 
 /**
+ * 「表格」标签页：本篇表块清单（页码 + 预览），点一行跳页面视图高亮。
+ *
+ * 纯前端数据（openDocument 时从正文扫出，见 buildTableList），不过 LLM、
+ * 不发新请求；跳转复用引用跳转同一条 revealChunk（PDF 走页面高亮、
+ * 定位失败自动退回文本高亮）。
+ */
+function renderTableList() {
+  const rows = tableList.map((item) =>
+    el(
+      "button",
+      { class: "rd-table-item", type: "button", title: "在原文里查看这张表" },
+      el("span", { class: "rd-table-page" }, item.page ? `第 ${item.page} 页` : "—"),
+      el("span", { class: "rd-table-preview" }, item.preview || "（表段无文本）")
+    )
+  );
+  rows.forEach((row, i) => {
+    row.addEventListener("click", () => void revealChunk(tableList[i].chunkId));
+  });
+  refs.tables.replaceChildren(
+    el("div", { class: "rd-note" }, `本文档共 ${tableList.length} 张表格——点任意一行在原文里查看：`),
+    ...rows
+  );
+}
+
+/**
  * 强制切到文本视图，并让「文本」标签可见。
  *
  * 单独开一个口的原因：PDF 的页面图已叠了文字层（能选字、能复制），平时
@@ -761,20 +804,23 @@ function forceTextMode() {
 }
 
 function setMode(mode) {
-  currentMode = mode === "page" || mode === "file" ? mode : "text";
+  currentMode =
+    mode === "page" || mode === "file" || mode === "tables" ? mode : "text";
   const isText = currentMode === "text";
   refs.tabText.classList.toggle("active", isText);
   refs.tabPage.classList.toggle("active", currentMode === "page");
+  refs.tabTables.classList.toggle("active", currentMode === "tables");
   refs.tabFile.classList.toggle("active", currentMode === "file");
   refs.text.classList.toggle("hidden", !isText);
   refs.orig.classList.toggle("hidden", currentMode !== "file");
   refs.pageView.classList.toggle("hidden", currentMode !== "page");
+  refs.tables.classList.toggle("hidden", currentMode !== "tables");
   // 缩放只作用于页面视图（md/txt/docx 没有页面图，原文件是 iframe）——不藏起来
   // 用户点了毫无反应，像是坏了（2026-09-11 审查发现）
   refs.zoomBox.classList.toggle("hidden", currentMode !== "page");
   if (currentMode === "file") void renderFile();
   else if (currentMode === "page") void showPage(currentPage);
-  else if (cache) {
+  else if (currentMode === "text" && cache) {
     // 从别的视图切回文本：把当前高亮块重新滚进视野
     refs.text.querySelector(".rd-chunk.lit")?.scrollIntoView({ block: "center" });
   }
@@ -1121,6 +1167,8 @@ function jumpToPage() {
   const n = Math.min(Math.max(1, Number(refs.pageInput.value) || 1), max || 1);
   refs.pageInput.value = String(n);
 
+  // 表格清单里跳页：先切回页面视图（否则页码跳了、人还停在清单上，像没反应）
+  if (currentMode === "tables") setMode("page");
   if (currentMode === "page") {
     void showPage(n);
     return;

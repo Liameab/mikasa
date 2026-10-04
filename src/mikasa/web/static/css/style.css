@@ -1403,7 +1403,39 @@ a.pd-title:hover { color: var(--accent); }
 }
 .rd-body { flex: 1; min-height: 0; display: flex; }
 .rd-text,
-.rd-orig { flex: 1; min-height: 0; overflow-y: auto; }
+.rd-orig,
+.rd-tables { flex: 1; min-height: 0; overflow-y: auto; }
+
+/* 「表格」清单（2026-10-04）：表块盘点标签页——每行 = 页码 + 预览（单行省略） */
+.rd-table-item {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  width: 100%;
+  padding: 8px 18px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rd-table-item:hover { background: var(--bg-inset); }
+.rd-table-page {
+  flex: none;
+  min-width: 56px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.rd-table-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
 
 /* 正文：pre-wrap 保 PDF 的原始换行与行内空格；行高按长文阅读放宽
    （与 .bilingual 同取向——参考块曾因弱化色+窄行高"字看不清"） */
