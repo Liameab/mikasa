@@ -6,13 +6,14 @@ offline profile：MockLLM + 纯 BM25，零密钥端到端——CLI/Web/评测
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 
 from mikasa.errors import ConfigError, ProviderError, StorageError
 from mikasa.ingest.service import IngestService
-from mikasa.pipeline.ask import AskService, _reader_query, _translate_query
+from mikasa.pipeline.ask import AskService, _is_table_list_intent, _reader_query, _translate_query
 from mikasa.providers.llm import Completion
 from mikasa.storage import repo
 from mikasa.storage.db import open_db
@@ -1060,3 +1061,171 @@ def test_reader_query_identity_and_truncation():
     assert _reader_query("问题", "  选中 \n 的原文 ") == "问题\n选中 的原文"
     tail = _reader_query("问题", "正" * 800).split("\n", 1)[1]
     assert len(tail) == 500, "上下文截断上限：问题之后最多 500 字"
+
+
+# ---------------------------------------------------------------------------
+# 「盘点表格」意图（2026-10-04，用户实测"提取所有表格"答不出的修复）：
+# 结算意图 → 跳过检索、枚举作用域内全部表块；细节见 ask._is_table_list_intent
+# ---------------------------------------------------------------------------
+
+_TABLE_DOC_A = """# 力学参数笔记
+
+【表格】
+岩石类型 密度 黏聚力
+第四系 2.20 1.80
+
+## 正文
+
+普通正文段落。
+"""
+
+_TABLE_DOC_B = """# 试验参数笔记
+
+【表格】
+layer modulus cohesion
+sand 15.7 1.68
+"""
+
+
+class _CapturingStream(_ScriptedLLM):
+    """流式替身：把 stream 的 messages 也记进 calls（_ScriptedLLM 只记 complete）。
+
+    盘点轮只会发生一次 stream 调用（无翻译/无补检索）——calls 里出现几条，
+    本身就是"哪些环节被跳过"的证据。texts 弹出即整段产出（帧切分不在本测试范围）。
+    """
+
+    def stream(self, messages, *, temperature, max_tokens):
+        self.calls.append(messages)
+        text = self.texts.pop(0) if self.texts else "（脚本耗尽）"
+        yield text
+
+
+def test_table_list_intent_rule():
+    """意图规则正反例：宁漏勿误——漏了退回常规检索（旧行为），误了会答非所问。"""
+    for question in (
+        "把这篇论文所有表格提取出来",
+        "列出全部表格",
+        "这篇论文的表格都有哪些",
+        "整理一下论文里的表格",
+        "文档里有几个表格",
+        "表格都列出来",
+        "把表格全部列出来",
+    ):
+        assert _is_table_list_intent(question), question
+    for question in (
+        "请用表格来写出数值模型力学参数",  # 用表格作答，不是盘点表格
+        "表格里第二行是什么",  # 问表内内容
+        "提取表格中的所有数据",  # 要表里的数据，不是表清单
+        "对照表格检查数据",  # 提到表格但没有列举词
+        "胶结充填体这一行的各项参数",
+        "L2 正则化为什么能防止过拟合？",
+    ):
+        assert not _is_table_list_intent(question), question
+
+
+def _seed_tables(tmp_path: Path, offline_settings) -> None:
+    (tmp_path / "a.md").write_text(_TABLE_DOC_A, encoding="utf-8")
+    (tmp_path / "b.md").write_text(_TABLE_DOC_B, encoding="utf-8")
+    IngestService(offline_settings).ingest_paths([tmp_path])
+
+
+def _table_source_count(user_msg: str) -> int:
+    """注入的【资料N】条数（别用 count("【资料")——【资料片段】头会算进去）。"""
+    return len(re.findall(r"【资料\d+】", user_msg))
+
+
+def test_normalize_cite_echo_stream_maps_and_preserves_join():
+    """抄来源行的引用变体 → [数字] 的流式归化：跨段切分不破功、拼接恒等逐字成立。
+
+    四种变体全部来自 2026-10-04 同题真机四跑的实测漂移（见 ask._CITE_ECHO_RE
+    注释）；[N7] 那条是模型把指令里的占位符也抄了进来。
+    """
+    from mikasa.pipeline.ask import _normalize_cite_echo_stream
+
+    def run(pieces):
+        return "".join(_normalize_cite_echo_stream(pieces))
+
+    assert run(["[1] 正常 [2] 答案"]) == "[1] 正常 [2] 答案"  # 无变体原样
+    assert run(["【资料7】第 67 页 · 砂特性"]) == "[7]第 67 页 · 砂特性"
+    assert run(["[N7] 第 67 页 · 砂特性"]) == "[7] 第 67 页 · 砂特性"
+    # 变体被切碎成三段：悬挂缓冲等它拼齐再替换（替换永不跨段）
+    assert run(["前文【资", "料1", "2】后文"]) == "前文[12]后文"
+    assert run(["前文[N", "1", "]后文"]) == "前文[1]后文"
+    assert run(["尾巴半截【资料3"]) == "尾巴半截【资料3"  # 流结束时凑不齐 → 原样
+    assert run(["尾巴半截[N1"]) == "尾巴半截[N1"
+    assert run(["【表格】只是标记词"]) == "【表格】只是标记词"  # 非引用变体不误伤
+    assert run(["[3] 与 [N7] 混用"]) == "[3] 与 [7] 混用"
+
+
+def test_table_list_intent_enumerates_all_table_chunks(tmp_path, offline_settings):
+    """全库盘点：两个文档的表块全部注入（各一条【资料N】）、说明段在场、
+    引用按注入口编号解析、latency 带 retrieve 键（历史回放契约）；
+    替身答案故意抄来源行的【资料N】格式——归化后必须仍是可解析的 [N]。"""
+    _seed_tables(tmp_path, offline_settings)
+    llm = _CapturingStream(["【资料1】力学参数表 [2] 试验参数表"])
+    events = list(AskService(offline_settings, llm=llm).ask_stream("列出所有表格"))
+
+    assert len(llm.calls) == 1, "盘点轮只有一次生成调用（无翻译/无补检索）"
+    user_msg = llm.calls[0][-1]["content"]
+    assert "盘点表格" in user_msg, "说明段必须注入（模型才知道资料就是表格全集）"
+    assert _table_source_count(user_msg) == 2, "两个表块都注入"
+    assert "岩石类型" in user_msg and "layer" in user_msg
+
+    answer = events[-1].answer
+    assert answer.text == "[1]力学参数表 [2] 试验参数表"  # 抄来源行的写法被归化
+    assert "retrieve" in answer.latency_ms, "qa.js 用 retrieve 键判定 kb 轮（回放契约）"
+    assert {c.marker for c in answer.citations} == {1, 2}
+    # 拼接恒等仍是契约（qa.js 用流式 buffer 渲染，不读 done.text）
+    deltas = "".join(e.text for e in events if e.kind == "delta")
+    assert deltas == answer.text
+
+
+def test_table_list_intent_respects_document_scope(tmp_path, offline_settings):
+    """阅读器"只看本篇"口径：只枚举该文档的表块；全库口径才有两篇。"""
+    _seed_tables(tmp_path, offline_settings)
+    doc_id = _doc_id(offline_settings, "岩石类型")
+
+    llm = _CapturingStream(["[1] 本篇表格"])
+    events = list(AskService(offline_settings, llm=llm).ask_doc_stream(doc_id, "列出所有表格"))
+    user_msg = llm.calls[0][-1]["content"]
+    assert _table_source_count(user_msg) == 1
+    assert "岩石类型" in user_msg and "layer" not in user_msg
+    sources = events[-1].sources or []
+    assert len(sources) == 1 and sources[0].current_doc
+
+
+def test_table_list_intent_falls_back_without_table_chunks(tmp_path, offline_settings):
+    """作用域内没有表块：静静退回常规检索（注入里没有盘点说明段）。"""
+    _seed(tmp_path, offline_settings)  # NOTE.md 不含【表格】标记
+    llm = _CapturingStream(["根据资料，与问题相关的说明如下：L2 正则化 [1]"])
+    list(AskService(offline_settings, llm=llm).ask_stream("列出所有表格"))
+
+    user_msg = llm.calls[0][-1]["content"]
+    assert "盘点表格" not in user_msg
+    assert "【资料片段】" in user_msg  # 走的是常规检索注入（不是枚举说明段）
+
+
+def test_table_list_intent_truncation_is_disclosed(tmp_path, offline_settings, monkeypatch):
+    """超预算截断必须如实说明"共 N 张、只列前 M 张"（静默截断=原故障形态）。"""
+    _seed_tables(tmp_path, offline_settings)
+    monkeypatch.setattr("mikasa.pipeline.ask._TABLE_ENUM_CHAR_BUDGET", 1)  # 强制只保留第一块
+    llm = _CapturingStream(["[1] 第一张表"])
+    list(AskService(offline_settings, llm=llm).ask_stream("列出所有表格"))
+
+    user_msg = llm.calls[0][-1]["content"]
+    assert _table_source_count(user_msg) == 1
+    assert "共 2 张" in user_msg and "只注入了前 1 张" in user_msg
+
+
+def test_table_list_intent_skips_bilingual_block(tmp_path, offline_settings):
+    """盘点轮跳过双语对照块（几十张英文表一次批量翻译必然超上限、白烧一轮）。"""
+    _seed_tables(tmp_path, offline_settings)
+    # 引用 [2]（英文表块）：若双语块没被跳过，这里会再发生一次翻译调用
+    llm = _CapturingStream(["[2] 试验参数表（英文）"])
+    settings = _bilingual_ready(offline_settings)
+    events = list(AskService(settings, llm=llm).ask_stream("列出所有表格"))
+
+    answer = events[-1].answer
+    assert len(llm.calls) == 1, "翻译调用一次都不许发生（盘点轮跳过双语块）"
+    assert "原文与译文对照" not in answer.text
+    assert "translate_answer" not in answer.latency_ms

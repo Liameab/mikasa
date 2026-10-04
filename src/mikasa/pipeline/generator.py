@@ -23,6 +23,7 @@ from mikasa.pipeline.prompts import (
     REFUSAL_TEXT,
     SOURCE_CHUNK_ID_TEMPLATE,
     SYSTEM_PROMPT,
+    TABLE_ENUM_OUTPUT_CONTRACT,
     build_user_message,
 )
 from mikasa.utils.logging import get_logger
@@ -208,20 +209,26 @@ class Generator:
         titles: dict[int, str],
         history_summary: str | None = None,
         context: str | None = None,
+        note: str | None = None,
     ) -> list[dict[str, str]]:
         """证据注入的提示词组装：generate / stream_text 共用同一构造。
 
         结构化路径（`llm.structured_output`）只改三处：系统提示追加 JSON 契约、
         来源行多一个 chunk_id 供模型抄写、其余逐字相同——差异必须**只有序列化层**。
+        note 是「盘点表格」轮的注入说明（可空），只被流式链路传入。
         """
         sources = [
             (i + 1, self._describe(hit, titles, with_chunk_id=self._structured), hit.chunk.content)
             for i, hit in enumerate(hits)
         ]
         user_message = build_user_message(
-            question, sources, history_summary=history_summary, context=context
+            question, sources, history_summary=history_summary, context=context, note=note
         )
         system = SYSTEM_PROMPT + JSON_OUTPUT_CONTRACT if self._structured else SYSTEM_PROMPT
+        if note is not None:
+            # 盘点轮追加输出契约（与 JSON 契约同机制）：压住规则 6 的展开倾向，
+            # 行首强制 [N]（服务端另有 _normalize_cite_echo_stream 兜底抄来源行）
+            system += TABLE_ENUM_OUTPUT_CONTRACT
         return [
             {"role": "system", "content": system},
             {"role": "user", "content": user_message},
@@ -234,6 +241,7 @@ class Generator:
         titles: dict[int, str],
         history_summary: str | None = None,
         context: str | None = None,
+        note: str | None = None,
     ) -> Iterator[str]:
         """流式补全：按 LLM 的增量逐段产出正文文本（Web SSE 的数据源）。
 
@@ -242,7 +250,7 @@ class Generator:
         CLI / 评测的非流式 generate 不受影响。
         """
         messages = self._build_messages(
-            question, hits, titles, history_summary=history_summary, context=context
+            question, hits, titles, history_summary=history_summary, context=context, note=note
         )
         yield from self._llm.stream(
             messages,

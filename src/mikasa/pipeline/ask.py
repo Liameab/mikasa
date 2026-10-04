@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Literal
 from mikasa.config.settings import Settings
 from mikasa.errors import ConfigError, StorageError
 from mikasa.index.manager import IndexManager
+from mikasa.ingest.loaders import TABLE_MARK  # 表块前缀（「盘点表格」按它过滤）
 from mikasa.models.answer import Answer, ReaderSource
 from mikasa.models.retrieval import RetrievedChunk
 from mikasa.pipeline.generator import Generator
@@ -29,6 +30,7 @@ from mikasa.pipeline.prompts import (
     TITLE_CHAR_LIMIT,
     TRANSLATE_MAX_TOKENS,
     TRANSLATE_TO_ZH_MAX_TOKENS,
+    build_table_enum_note,
     build_title_messages,
     build_translate_messages,
     build_translate_to_zh_messages,
@@ -135,6 +137,87 @@ def _translate_query(llm, question: str) -> str | None:
         logger.debug("查询翻译结果不可用（空或仍含汉字），回退单路检索")
         return None
     return text
+
+
+# ---------------------------------------------------------------------------
+# 「盘点表格」意图（2026-10-04，用户实测报障的修复）
+#
+# 故障形态：问"把这篇论文所有表格提取出来"，14 条命中里 0 条表块——这是
+# **全局聚合题**，top-k 采样天然塞不下（实测那篇论文有 31 个表块），生成端
+# 只能诚实答"未提供具体表格内容"。修法：识别盘点意图 → 跳过检索、把作用域
+# 内全部表块按文档顺序直接注入（配合 prompts.build_table_enum_note 说明）。
+# ---------------------------------------------------------------------------
+
+# 列举词：与"表格"相邻（±12 字窗口）出现才算盘点意图
+_TABLE_ENUM_WORDS_RE = re.compile(
+    r"所有|全部|列出|列举|罗列|提取|导出|整理|汇总|统计|一览|清单|哪些|几个|多少|几张|每张|整篇|整份"
+)
+# 反例否决：这些表述是在**要求用表格作答/问表内内容**，不是盘点表格本身
+# （"请用表格写出参数"、"表格里第二行是什么"、"提取表格中的所有数据"）。
+_TABLE_ENUM_VETO_RE = re.compile(r"用表格|以表格|表格[里中内的]")
+
+# 单次盘点注入的总字符预算。现状实测：doc4 螺旋锚 31 个表块共 9920 字、
+# doc5 于庆磊 2 个 670 字，一万二够放下一个表格密集的论文库；超出按
+# 文档顺序截断（说明写进注入文案，不允许静默截断——那正是本 bug 的形态）。
+_TABLE_ENUM_CHAR_BUDGET = 12000
+
+
+def _is_table_list_intent(question: str) -> bool:
+    """问句是否在"盘点表格"（列出/提取全部表格）。
+
+    只认**相邻**的列举词 + "表格"（±12 字窗口）、并否决"用表格/表格里"等
+    表述——宁漏勿误：漏了退回常规检索（现状行为，能答表内问题），误了会把
+    一个表内问题答成表清单。已知误触发形态："生成一个表格总结所有参数"
+    （"所有"在窗口内）；后果是答成表清单，无数据危害，故不为此加复杂度。
+    """
+    for match in re.finditer("表格", question):
+        window = question[max(0, match.start() - 12) : match.end() + 12]
+        if _TABLE_ENUM_VETO_RE.search(window):
+            continue
+        if _TABLE_ENUM_WORDS_RE.search(window):
+            return True
+    return False
+
+
+# 模型抄来源行格式写的引用 → 归化成 [数字]。为什么需要（2026-10-04 真机
+# 实测）：盘点轮的注入资料以【资料N】开头，小模型时常把该格式直接抄进答案
+# ——同一份提示词跑了四次，标记格式飘了四种（[7] ✓ / 【资料7】/ [N] [7] /
+# [N7]），而引用解析与前端角标只认纯数字方括号——不归化就出现"列了 31 张
+# 表、一张都点不动"。提示词已双重禁止（用户消息说明 + 系统契约），这里做
+# 确定性兜底；[N] 里那个字母恰是模型从指令占位符上抄下来的。
+_CITE_ECHO_RE = re.compile(r"【资料(\d{1,3})】")
+_CITE_ECHO_LETTER_RE = re.compile(r"\[N(\d{1,3})\]")
+# 尾部悬挂检测：只留"还可能长成标记"的后缀（【/【资/【资料/【资料12…；
+# [/*[N/[N1/[N12…）——半截标记留到下一段凑齐，替换因此永不跨段，
+# `"".join(输出) == 归化("".join(输入))` 逐字成立（有测试锁）
+_CITE_ECHO_HOLD_RE = re.compile(r"(?:【(?:资(?:料(?:\d{1,3})?)?)?|\[(?:N(?:\d{1,3})?)?)$")
+
+
+def _normalize_cite_echo(text: str) -> str:
+    """抄来源行的引用变体 → 纯数字方括号 [n]（两条规则的唯一真源）。"""
+    return _CITE_ECHO_LETTER_RE.sub(r"[\1]", _CITE_ECHO_RE.sub(r"[\1]", text))
+
+
+def _normalize_cite_echo_stream(pieces: Iterator[str]) -> Iterator[str]:
+    """在流上做 _normalize_cite_echo，且**不破坏"拼接恒等"**（流式契约）。
+
+    做法：悬挂缓冲——每段只吐出"不可能再变成更长标记"的前缀，尾部的半截
+    （如半个【资料1、半个[N1）留到下一段凑齐再替换。qa.js 用流式拼接的
+    buffer 渲染正文（不读 done.text），所以归化必须发生在流里、且拼接恒等
+    必须逐字保持。
+    """
+    pending = ""
+    for piece in pieces:
+        pending += piece
+        hold = _CITE_ECHO_HOLD_RE.search(pending)
+        cut = len(pending) - (len(hold.group(0)) if hold else 0)
+        if cut > 0:
+            out = _normalize_cite_echo(pending[:cut])
+            pending = pending[cut:]
+            if out:
+                yield out
+    if pending:
+        yield _normalize_cite_echo(pending)
 
 
 @dataclass(frozen=True)
@@ -402,8 +485,23 @@ class AskService:
             focus_document_id: 阅读器正在读的文档（给片段标 current_doc）
         帧序与旧版逐字一致：meta → delta×n（双语块是末帧 delta）→ done；
         任何异常从迭代中抛出（Web 层转 error 帧）。
+
+        「盘点表格」意图（见 _is_table_list_intent）：跳过检索、枚举作用域内
+        全部表块；帧序与常规轮完全同构（不算新链路，前端零感知）。
         """
-        hits, latency, t0 = self._retrieve(question, document_id=document_id, context=context)
+        # 盘点意图 + 作用域内确有表块才走枚举；没有表块就静静回退常规检索
+        t0 = time.perf_counter()
+        enum = self._table_enum_hits(document_id) if _is_table_list_intent(question) else None
+        if enum is not None:
+            hits, table_total = enum
+            # 枚举不走检索，但耗时仍记在 retrieve 键下：qa.js 用
+            # "latency_ms 含 retrieve" 区分 kb 轮与 free 轮（历史回放契约），
+            # 缺了它会把这轮回放渲染成 free（不渲染引用角标）。
+            latency = {"retrieve": round((time.perf_counter() - t0) * 1000.0, 1)}
+            note = build_table_enum_note(table_total, len(hits))
+        else:
+            hits, latency, t0 = self._retrieve(question, document_id=document_id, context=context)
+            note = None
         with open_db(self.settings.db_path) as conn:
             titles = repo.document_title_map(conn)
 
@@ -413,10 +511,15 @@ class AskService:
         generator = Generator(self.settings, self._llm)
         yield StreamEvent(kind="meta", session_id=session_id, sources=sources)
 
+        pieces = generator.stream_text(
+            question, hits, titles, history_summary=history_summary, context=context, note=note
+        )
+        if note is not None:
+            # 盘点轮兜底：模型抄来源行的【资料N】格式 → 归化 [N]（拼接恒等保持，
+            # 见 _normalize_cite_echo_stream；提示词压不住时的确定性保底）
+            pieces = _normalize_cite_echo_stream(pieces)
         parts: list[str] = []
-        for piece in generator.stream_text(
-            question, hits, titles, history_summary=history_summary, context=context
-        ):
+        for piece in pieces:
             parts.append(piece)
             yield StreamEvent(kind="delta", text=piece)
 
@@ -434,8 +537,10 @@ class AskService:
         )
         answer = answer.model_copy(update={"latency_ms": self._finalize_latency(latency, t0)})
         # 双语块作为额外 delta 在 done 前流出：保证 delta 拼接 === done.text
-        # （流式契约测试锁定），且落库 content 已是含块的终态
-        block = self._maybe_bilingual_block(answer, hits)
+        # （流式契约测试锁定），且落库 content 已是含块的终态。
+        # 盘点轮跳过双语对照：被引用的英文表块可能几十张，一次批量翻译必然
+        # 超上限、产出半截对照块白烧一轮——看原文点角标跳页面即可。
+        block = None if note is not None else self._maybe_bilingual_block(answer, hits)
         if block:
             answer = answer.model_copy(update={"text": answer.text + block})
             yield StreamEvent(kind="delta", text=block)
@@ -558,6 +663,32 @@ class AskService:
             )
             latency.update(extra_latency)
         return hits, latency, t0
+
+    def _table_enum_hits(self, document_id: int | None) -> tuple[list[RetrievedChunk], int] | None:
+        """枚举作用域内全部表块（含 TABLE_MARK 的块），返回 (命中, 表块总数)。
+
+        排序按（文档、块序）= 阅读顺序；作用域内没有表块时返回 None（调用方
+        回退常规检索，不需要错误分支）。预算 _TABLE_ENUM_CHAR_BUDGET 按序
+        截断——总数照实返回，由注入文案说明"只列了前 N 张"（静默截断正是
+        本 bug 的原始形态）。rank 按注入位次编号，与 markdown [n] 对齐。
+        """
+        table_chunks = [
+            chunk
+            for chunk in self._manager.corpus().chunks
+            if TABLE_MARK in chunk.content
+            and (document_id is None or chunk.document_id == document_id)
+        ]
+        if not table_chunks:
+            return None
+        table_chunks.sort(key=lambda chunk: (chunk.document_id or 0, chunk.seq))
+        hits: list[RetrievedChunk] = []
+        used = 0
+        for chunk in table_chunks:
+            if hits and used + len(chunk.content) > _TABLE_ENUM_CHAR_BUDGET:
+                break
+            hits.append(RetrievedChunk(chunk=chunk, rank=len(hits) + 1))
+            used += len(chunk.content)
+        return hits, len(table_chunks)
 
     @staticmethod
     def _finalize_latency(latency: dict[str, float], t0: float) -> dict[str, float]:
