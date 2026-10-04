@@ -904,3 +904,49 @@ far faster than reading logs; (2) §7's "the same hostname is not the same endpo
 stacks" gains a companion: **loopback is not automatically proxy-free either**; (3) an environment
 bug this expensive deserves a code fix — a `NO_PROXY` line in a README knows nothing about what
 proxy software the user has installed.
+
+## 13. Real Bug Cases from Development (Continued, 2026-10-04): "extract every table in this paper" answered nothing
+
+**Symptom** (reported by the user): asking, library-wide, "把这篇论文所有表格提取出来"
+(extract all tables of this paper), the 14 hits contained **zero table chunks** (the top
+hit was boilerplate from a *different* paper), and the generator honestly answered
+"specific table contents not provided". Not hallucination — a shape mismatch in retrieval.
+
+**Three root causes**: (1) the reference "this paper" was never treated as a scope (the
+chat page searches the whole library, and the Chinese question kept colliding with the
+other Chinese paper); (2) **a global aggregation question** — that paper has 911 chunks /
+31 table chunks, and top-k sampling (8–14) simply cannot fit them; (3) the dense path
+over English chunks is near-noise (ADR-0014, one embedding model at a time), adding junk.
+Corroboration: searching just "表格" alone puts twenty 【表格】 chunks in BM25's top 20 —
+the marker mechanism itself was fine.
+
+**Fix** (the user decided: both a list and a chat path): a fourth reader tab **Tables**
+(「表格 N」) listing every table chunk of the document (page + preview; clicking reuses
+the citation-jump path to highlight the real table — **pure frontend**, scanned from the
+stitched text plus chunk offsets, zero new endpoints); and a chat-level **table-inventory
+intent** (enumeration words within a ±12-character window of "表格", with "用表格 /
+表格里" phrasings vetoed) → skips top-k sampling and injects every table chunk in scope
+in document order (12,000-character budget, disclosed when exceeded; "this document" in
+the reader, whole library on the chat page). eval/CLI/MCP never pass through
+`_kb_stream`, so eval baselines are untouched.
+
+**Three small-model behaviours** (four live runs, all recorded in code comments):
+
+1. Abstract placeholders in a prompt get **copied verbatim**: writing "[N]" as the
+   template produced `[N] [7]` and `[N7]` in answers — format examples must use
+   **concrete numbers** ([3], [12]);
+2. System-prompt rule 6 ("original is a table → present it in full") overrides
+   instructions in the user message → the model copied every table, hit max_tokens at
+   table 25 of 33, and took 291 seconds — fixed with a system-level output contract
+   (the same mechanism as the JSON contract) plus a precedence clause on rule 6;
+3. Across four runs of the same question the marker format drifted four ways
+   ([7] ✓ /【资料7】/ [N] [7] / [N7]) → **a critical format cannot rest on prompting
+   alone**: the server now normalizes echoes deterministically in
+   `_normalize_cite_echo_stream` (a hanging buffer so substitutions never cross a piece
+   boundary, keeping "concatenated deltas === done.text" exact). Final verification:
+   33/33 citations library-wide and 31/31 in the reader, 40–50 s, every marker clickable.
+
+**Also fixed, a pre-existing red**: `tools/chrome_page_hl.py` asserted "default zoom must
+be 100%", which was the UI before the 2026-09-30 fit-to-window default; it had been
+failing ever since. It now clicks "Original size" (reset) and asserts 100% — which also
+covers the reset button. A stale assertion left in place only stays red forever.
