@@ -375,6 +375,12 @@ async def run(args) -> int:
               const range = document.querySelector('#rd-zoom-range');
               const label = () =>
                 (document.querySelector('.rd-zoom-label')?.textContent || '').trim();
+              // 默认缩放是"适应窗口"（2026-09-30 起 fit-to-window，打开即整页可见）：
+              // 先点「原始大小」复位到 100% 再测——顺带验证复位按钮。旧断言写死
+              // "默认必须 100%" 是 fit 默认化之前的 UI，留到今天只会永远红
+              // （2026-10-04 修复；fit 本身由 chrome_reader 的整页可见断言覆盖）。
+              document.querySelector('#rd-zoom-reset')?.click();
+              await wait(400);
               const before = { label: label(), pannable: !!canvas?.classList.contains('pannable') };
               // 单调性：95% < 100% < 105%。修复前 100% 走 fit-content、其余走
               // "容器比例"，两套模型在 100% 处跳变（用户实测：拖到 100% 反而
@@ -424,7 +430,7 @@ async def run(args) -> int:
               return { before, zoomed, panned, widths };
             })()""")
             if zoomtest["before"]["label"] != "100%":
-                bad.append(f"默认缩放应为 100%：{zoomtest['before']}")
+                bad.append(f"「原始大小」复位后应为 100%：{zoomtest['before']}")
             if zoomtest["zoomed"]["label"] != "300%":
                 bad.append(f"滑条改 300% 后标签未跟随：{zoomtest['zoomed']}")
             w = zoomtest.get("widths", {})

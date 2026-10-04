@@ -200,6 +200,20 @@ async def run(args):
             pdf_doc = fitz_lib.open()
             page = pdf_doc.new_page()
             page.insert_text((72, 96), "Page one: helical anchor capacity degrades with cycles.")
+            # 三列 × 三行、列隙远超 8pt：触发 loaders 的表格版面判定 → 该页
+            # 走几何重建并产出【表格】标记（「表格」清单标签页的 E2E 素材）。
+            # 列距/行距写死是刻意的：判定阈值是 8pt，这里留了十倍余量。
+            for i, (a, b, c) in enumerate(
+                [
+                    ("Layer", "Modulus", "Cohesion"),
+                    ("Sand", "15.7", "1.68"),
+                    ("Rock", "18.4", "2.42"),
+                ]
+            ):
+                y = 140 + i * 20
+                page.insert_text((72, y), a)
+                page.insert_text((200, y), b)
+                page.insert_text((320, y), c)
             pdf_doc.save(pdf_fixture)
             pdf_doc.close()
             q = await cdp.call(
@@ -229,7 +243,7 @@ async def run(args):
               const label = document.querySelector('#reader-inline .rd-page-label');
               const open = document.querySelector('#reader-inline .rd-page-open');
               return {
-                tabs: ['rd-tab-text', 'rd-tab-page', 'rd-tab-file'].map((id) => {
+                tabs: ['rd-tab-text', 'rd-tab-page', 'rd-tab-tables', 'rd-tab-file'].map((id) => {
                   const b = document.getElementById(id);
                   if (!b) return id + ':missing';
                   const vis = b.classList.contains('hidden') ? 'hidden' : 'shown';
@@ -257,10 +271,10 @@ async def run(args):
                   .map((b) => b.textContent),
               };
             })()""")
-            # PDF 有三个标签：文本（隐藏）/ 页面（当前）/ 原文件。
-            # 旧断言读的是 `#rd-tab-file` 并期望"页面"——那是"原文件"标签还没恢复
-            # 时的 UI，留到今天只会永远红（2026-09-11 排查踩到）。
-            if pdf_state["tabs"] != ["文本:hidden", "页面:shown", "原文件:shown"]:
+            # PDF 有四个标签：文本（隐藏）/ 页面（当前）/ 表格（夹具含 1 张表）/
+            # 原文件。旧断言读的是 `#rd-tab-file` 并期望"页面"——那是"原文件"
+            # 标签还没恢复时的 UI，留到今天只会永远红（2026-09-11 排查踩到）。
+            if pdf_state["tabs"] != ["文本:hidden", "页面:shown", "表格 1:shown", "原文件:shown"]:
                 bad.append(f"PDF 标签可见性不对：{pdf_state['tabs']!r}")
             if "/" not in pdf_state["label"]:
                 bad.append(f"页面标签缺少页数：{pdf_state['label']!r}")
@@ -278,6 +292,36 @@ async def run(args):
                     f"页面视图默认没适应窗口：页图高 {fit['imgH']}、可视区高 {fit['canvasH']}，"
                     f"底部超出 {fit['over']}px（用户会只看到半页）"
                 )
+
+            # ---- 2.55) 「表格」清单（2026-10-04，用户报障"提取所有表格"的修复）----
+            # 夹具 PDF 含 1 个表块（三列三行触发几何重建）→ 标签显示"表格 1"。
+            # 清单数据纯前端扫正文得出（零新端点）；点行 = 引用跳转同一条路
+            # （revealChunk → 页面视图 + 高亮）。
+            await cdp.evaluate("document.querySelector('#rd-tab-tables').click()")
+            await wait_until(
+                cdp,
+                "!document.querySelector('#reader-inline .rd-tables').classList.contains('hidden')"
+                " && document.querySelectorAll('#reader-inline .rd-table-item').length === 1",
+                "表格清单可见且恰一行",
+            )
+            table_state = await cdp.evaluate("""(() => {
+              const row = document.querySelector('#reader-inline .rd-table-item');
+              return {
+                page: row.querySelector('.rd-table-page').textContent,
+                preview: row.querySelector('.rd-table-preview').textContent,
+              };
+            })()""")
+            if table_state["page"] != "第 1 页":
+                bad.append(f"表格清单行页码不对：{table_state['page']!r}")
+            if "Layer" not in table_state["preview"]:
+                bad.append(f"表格清单预览没取到表内容：{table_state['preview']!r}")
+            await cdp.evaluate("document.querySelector('#reader-inline .rd-table-item').click()")
+            await wait_until(
+                cdp,
+                "document.querySelector('#reader-inline .rd-page-layer .rd-hl')"
+                " && document.getElementById('rd-tab-page').classList.contains('active')",
+                "点表格行跳页面视图并出现高亮",
+            )
 
             # ---- 可选：把面板的 DOM 结构抄下来（--dump-dom）----
             # 为什么需要：写 E2E 断言的人（或另一个 agent）未必跑得起来浏览器
@@ -363,6 +407,11 @@ async def run(args):
                 " === 'L2 正则化笔记'",
                 "阅读器标题切回 md 文档",
             )
+            # md 没有【表格】标记（PDF 解析器专属）→ 「表格」标签必须整体隐藏
+            if not await cdp.evaluate(
+                "document.getElementById('rd-tab-tables').classList.contains('hidden')"
+            ):
+                bad.append("md 文档不该显示「表格」标签（标记是 PDF 专属）")
             await cdp.evaluate("document.querySelector('#rd-tab-file').click()")
             try:
                 await wait_until(
