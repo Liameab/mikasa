@@ -42,3 +42,21 @@ def test_static_assets_served(client):
 def test_unknown_api_returns_404(client):
     c, _ = client
     assert c.get("/api/不存在").status_code == 404
+
+
+def test_page_routes_ignore_query_params(client):
+    """页面路由不吃查询参数：`?page=` 不能改道到别的文件（2026-10-05 审查修复）。
+
+    旧实现把 `lambda page=page:` 直接交给 FastAPI——带默认值的参数被当成
+    查询参数声明，`GET /documents?page=../../../../pyproject.toml` 会原样进入
+    FileResponse：未鉴权的任意文件读取（本机、以及 `--host 0.0.0.0` 下同网段
+    都能打）。修法 = 闭包把 page 关进去，handler 签名零参数。
+    """
+    c, _ = client
+    baseline = c.get("/documents").text
+    # 探到仓库根的真实文件（static 目录向上四级）：修好前这条会 200 返回
+    # pyproject.toml 的正文，修好后必须仍是 documents 页面本身
+    resp = c.get("/documents", params={"page": "../../../../pyproject.toml"})
+    assert resp.status_code == 200
+    assert resp.text == baseline
+    assert "[tool" not in resp.text

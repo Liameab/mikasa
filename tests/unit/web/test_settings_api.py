@@ -33,20 +33,37 @@ def _put_body(**overrides) -> dict:
 
 
 @pytest.fixture()
-def known_slots_cleared(monkeypatch):
-    """把已知密钥槽清干净。
+def known_slots_cleared():
+    """把已知密钥槽清干净；用例期间**任何人**写入的这些键，结束后都摘掉。
 
     开发机上真 export 过的密钥会顺着环境钻进测试进程，"这个槽有没有密钥"
-    的断言就不由测试自己说了算（monkeypatch 退出时会把原值放回去）。
+    的断言就不由测试自己说了算。
+
+    **不能只靠 monkeypatch.delenv**（2026-10-05 修复）：pytest 对"删一个
+    本来就不存在的键"是空操作、不登记 undo（_pytest/monkeypatch.py 的
+    delitem），而本文件的用例经应用层**直写** os.environ（_apply_api_key）——
+    开发机上这些键通常不存在，teardown 便清不掉，值会泄漏给后续用例：实测
+    test_key_slot_survives_switching_away_and_back 泄漏的 DEEPSEEK_API_KEY
+    打红了下游断言"链序加载只覆盖未设置键"的 dotenv 用例（全量套件因目录
+    顺序恰好没踩中，子集/乱序运行必炸）。这里显式快照与恢复，不依赖
+    monkeypatch 的删除语义。
     """
-    for name in (
+    names = (
         "DEEPSEEK_API_KEY",
         "SILICONFLOW_API_KEY",
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
         "MIKASA_LLM_API_KEY",
-    ):
-        monkeypatch.delenv(name, raising=False)
+    )
+    saved = {name: os.environ.get(name) for name in names}
+    for name in names:
+        os.environ.pop(name, None)
+    yield
+    for name, old in saved.items():
+        if old is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = old
 
 
 @pytest.fixture()
@@ -509,6 +526,49 @@ def test_ollama_models_default_url_and_failure(client, monkeypatch):
     assert seen["base_url"] == "http://localhost:11434/v1"  # 缺省 = local 档默认端点
     assert resp.status_code == 502
     assert "Ollama 服务不可达" in resp.json()["error"]["message"]
+
+
+def test_put_rejects_invalid_key_env_name(client):
+    """密钥变量名必须是合法环境变量名（2026-10-05 审查修复）。
+
+    它会成为 `.env` 的 KEY 与 os.environ 的键：带换行的值能往 .env 注入
+    任意行（实测 `"N\\nDEEPSEEK_API_KEY"` 会追加一行假 DEEPSEEK_API_KEY，
+    覆盖真密钥），`"A=B"` 还会让 os.environ 抛 ValueError → 500。
+    """
+    c, _ = client
+    for bad in ("N\nDEEPSEEK_API_KEY", "A=B", "1LEADING", "带中文"):
+        resp = c.put("/api/settings/model", json=_put_body(api_key_env=bad))
+        assert resp.status_code == 422, f"{bad!r} 应被拒：{resp.text}"
+        assert "变量名" in resp.text
+    # 合法名照常可保存
+    ok = c.put("/api/settings/model", json=_put_body(api_key_env="MIKASA_TEST_SLOT_2"))
+    assert ok.status_code == 200
+    # 被拒的提交一个字节都不能落盘
+    env_file = user_env_path()
+    text = env_file.read_text(encoding="utf-8") if env_file.is_file() else ""
+    assert "DEEPSEEK" not in text
+
+
+def test_put_rejects_lan_base_url(client):
+    """保存路径与探测端点走同一道出网闸门（2026-10-05 审查修复）。
+
+    修前：探测拒内网、保存却放行——`base_url=http://192.168.x/v1` 会 200
+    落进覆盖层，其后每次问答都把密钥与语料正文发往该地址（SSRF 被持久化）。
+    """
+    c, _ = client
+    for endpoint in ("/api/settings/model", "/api/settings/vision", "/api/settings/image"):
+        body = {
+            "backend": "api",
+            "base_url": "http://192.168.1.50:9/v1",
+            "api_key_env": "MIKASA_TEST_SLOT",
+            "model": "m",
+            "api_key": "sk-x",
+        }
+        if endpoint.endswith("image"):
+            body["size"] = "1024x1024"
+        resp = c.put(endpoint, json=body)
+        assert resp.status_code == 422, f"{endpoint} 应被拒：{resp.text}"
+        assert "安全策略" in resp.json()["detail"]
 
 
 def test_probe_rejects_lan_addresses(client):

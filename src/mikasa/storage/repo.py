@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from collections.abc import Iterable
 from pathlib import PureWindowsPath
@@ -15,6 +16,9 @@ from pathlib import PureWindowsPath
 import numpy as np
 
 from mikasa.models.document import Chunk, Document
+from mikasa.utils.logging import get_logger
+
+logger = get_logger("storage.repo")
 
 # ---------------------------------------------------------------------------
 # documents
@@ -83,8 +87,14 @@ def get_document_by_upload_name(conn: sqlite3.Connection, name: str) -> Document
     同样用 `PureWindowsPath`：脏值是反斜杠形式，POSIX 下 `Path(...).name` 会把
     整串当成一个文件名而失配（与读侧同一取舍）。
     """
+    key = os.path.normcase(name)
     for row in conn.execute("SELECT * FROM documents ORDER BY id DESC"):
-        if PureWindowsPath(str(row["file_path"] or "")).name == name:
+        # normcase 比较（2026-10-05 审查修复）：Windows 文件系统大小写不敏感，
+        # `Probe.md` 与 `probe.md` 是**同一个副本槽**——精确比较会把后来的那张
+        # 判成新文件并插出第二行，两行共享一份物理副本，删谁都会把另一行唯一的
+        # 副本 unlink 掉。normcase 在 Linux 上是恒等变换，那边副本槽本就大小写
+        # 敏感，行为与修复前一致（两文件两行，各自安好）。
+        if os.path.normcase(PureWindowsPath(str(row["file_path"] or "")).name) == key:
             return _row_to_document(row)
     return None
 
@@ -101,6 +111,15 @@ def get_document_by_sha(conn: sqlite3.Connection, file_sha256: str) -> Document 
 def delete_document(conn: sqlite3.Connection, doc_id: int) -> None:
     # chunk/embedding 由外键 ON DELETE CASCADE 清理
     conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+
+
+def delete_document_chunks(conn: sqlite3.Connection, doc_id: int) -> None:
+    """删掉某文档的全部 chunk（embeddings 由外键级联清理）。
+
+    用在"chunk 已落库、向量没落库"的失败收尾：留一个 0 块的 failed 行，
+    避免缺向量把**全库** dense 路拖降级（见 IngestService._mark_failed）。
+    """
+    conn.execute("DELETE FROM chunks WHERE document_id = ?", (doc_id,))
 
 
 def count_documents(conn: sqlite3.Connection) -> int:
@@ -341,11 +360,32 @@ def load_embedding_matrix(
     if not rows:
         return None
     dim = rows[0]["dim"]
+    # 同一模型名下混入不同维度（半迁移残留：切嵌入模型后没重嵌干净）：
+    # 硬拼成一个矩阵会在 reshape 处抛 ValueError，而这条路径在每次提问时都会走
+    # ——表现为"每次提问都报内部错误"（2026-10-07 审查）。这里按**不可用**如实
+    # 降级（返回 None → 上层关掉 dense 路、日志指路 reindex），与 manager 对
+    # "向量行与 chunk 对不上"的既有取舍同款。
+    if dim <= 0 or any(r["dim"] != dim for r in rows):
+        logger.warning(
+            "向量维度不一致（模型 %s，首行 dim=%s）——dense 路降级。"
+            "请运行 mikasa ingest --reindex 重建向量。",
+            model,
+            dim,
+        )
+        return None
     chunk_ids: list[int] = []
     blobs: list[bytes] = []
     for r in rows:
         chunk_ids.append(r["chunk_id"])
         blobs.append(bytes(r["vector"]))
+    if sum(len(b) for b in blobs) != len(rows) * dim * 4:
+        # 维度字段对、字节长度对不上（截断残留）：同样是 reshape 会炸的形态
+        logger.warning(
+            "向量字节长度与 dim 不符（模型 %s）——dense 路降级。"
+            "请运行 mikasa ingest --reindex 重建向量。",
+            model,
+        )
+        return None
     matrix = np.frombuffer(b"".join(blobs), dtype=np.float32).reshape(len(rows), dim)
     return chunk_ids, matrix
 

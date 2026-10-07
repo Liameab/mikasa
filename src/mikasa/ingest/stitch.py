@@ -56,7 +56,13 @@ SEAM_WINDOW = 64
 
 @dataclass(frozen=True)
 class ChunkSpan:
-    """一块在拼接全文中的位置区间（半开区间 [start, end)）。"""
+    """一块在拼接全文中的位置区间（半开区间 [start, end)）。
+
+    偏移单位是 **UTF-16 码元**，不是 Python 码点：前端按 `text.slice(start, end)`
+    取块，而 JS 的字符串下标就是这个口径。两者只在星文平面字符（emoji、CJK
+    扩展 B）上分叉——按码点发偏移会让阅读视图从第一个这类字符起整段错位
+    （2026-10-07 修复）。纯 BMP 语料下两口径相等，历史数据不受影响。
+    """
 
     chunk_id: int | None
     seq: int
@@ -125,6 +131,10 @@ def stitch_chunks(
       - 相邻 `spans[i].end == spans[i+1].start`（偏移连续无空洞）；
       - `sum(end - start) == len(text)`；
       - 绝不把某块裁空（`k >= len(cur)` 一律不裁）。
+
+    **偏移单位是 UTF-16 码元**（与前端 `String.slice` 同口径，见 ChunkSpan）：
+    上面的 `len(text)` 在纯 BMP 文本下成立，含星文平面字符时要用
+    `len(text.encode("utf-16-le")) // 2`。
     """
     if not chunks:
         return StitchedText(text="", spans=[], trimmed_chars=0)
@@ -158,7 +168,8 @@ def stitch_chunks(
                     trimmed += k
 
         start = cursor
-        cursor += len(content)
+        # UTF-16 码元长度：ASCII/BMP 与本行下方的 len() 等值，星文平面字符翻倍
+        cursor += len(content.encode("utf-16-le")) // 2
         parts.append(content)
         spans.append(
             ChunkSpan(

@@ -226,6 +226,41 @@ def test_open_redirect_is_refused(tmp_path):
         assert resp.headers["location"] == "/"
 
 
+def test_login_page_escapes_next(tmp_path):
+    """登录页把 next 转义后再进 HTML（2026-10-05 审查修复）。
+
+    修前：`GET /login?next=/"><script>…` 原样插进 hidden input 的 value，
+    免鉴权页面上直接执行——同源脚本可调全部 /api、还能改写登录表单窃取口令。
+    """
+    settings = load_settings("offline")
+    auth.set_password(settings.data_dir, PASSWORD)
+    app = _app("0.0.0.0")
+    payload = '/"><script>alert(1)</script>'
+    with _client(app, host="192.168.1.9") as c:
+        resp = c.get("/login", params={"next": payload})
+        assert resp.status_code == 200
+        assert "<script>" not in resp.text
+        assert "&lt;script&gt;" in resp.text
+
+
+def test_backslash_redirect_is_refused(tmp_path):
+    """`//evil.com` 的花式写法 `/\\evil.com` 也要打回 `/`。
+
+    浏览器 URL 解析把反斜杠当斜杠（`/\\` ≡ `//`）——只查 startswith("//")
+    会放过开放重定向（2026-10-05 审查修复，与登录页转义同批）。
+    """
+    settings = load_settings("offline")
+    auth.set_password(settings.data_dir, PASSWORD)
+    app = _app("0.0.0.0")
+    with _client(app, host="192.168.1.9") as c:
+        resp = c.post(
+            "/api/auth/login",
+            data={"password": PASSWORD, "next": "/\\evil.example.com/x"},
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/"
+
+
 @pytest.mark.parametrize("host", ["0.0.0.0", "::"])
 def test_wildcard_bindings_are_gated(host: str):
     """通配绑定（0.0.0.0 / ::）都算"开给网络"，都要门。"""

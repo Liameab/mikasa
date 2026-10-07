@@ -140,3 +140,34 @@ def test_refusal_when_sources_empty(tmp_path: Path, offline_settings):
     assert answer.refused is True
     assert answer.text == REFUSAL_TEXT
     assert answer.citations == []
+
+
+# ---------------------------------------------------------------------------
+# #14 空补全守卫：上游返回空串时如实报错，而不是入库一条空回答
+# ---------------------------------------------------------------------------
+
+
+class _EmptyLLM:
+    """空补全的假模型：complete 返回空串（网关/超时给出空 content 的形态）。"""
+
+    model = "fake-empty"
+
+    def complete(self, messages, *, temperature=0.0, max_tokens=0):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(text="", prompt_tokens=None, completion_tokens=None)
+
+
+def test_generate_raises_on_empty_completion(offline_settings):
+    """空补全必须抛错（对齐 local 档 _empty_answer_message 的既有行为）。
+
+    否则 Answer(text="") 会 refused=False 地落库/展示——用户看到"答完了但一片空白"，
+    评测也会把它当成一次"作答"计入。真实上游（网关/限流/截断）会给出空 content。
+    """
+    import pytest
+
+    from mikasa.errors import ProviderError
+
+    gen = Generator(offline_settings, _EmptyLLM())
+    with pytest.raises(ProviderError):
+        gen.generate("L2 正则化是什么？", _hits(), TITLES)

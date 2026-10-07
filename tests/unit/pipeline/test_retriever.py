@@ -375,3 +375,26 @@ def test_hop_expand_ignores_neighbours_with_no_candidate(tmp_path, offline_setti
     retriever, _ids = _linked_retriever(tmp_path, offline_settings, hop=1, bm25_top_k=1)
     hits, _ = retriever.retrieve("预应力锚索的锚固段长度怎么取")
     assert len(hits) == 1, "候选里只剩一块时，邻居没有「顺带一提」的资格"
+
+
+# ---------------------------------------------------------------------------
+# #12 重排返回空 → 退回融合序，而不是清空命中（清空会被判成"资料不足"拒答）
+# ---------------------------------------------------------------------------
+
+
+class _EmptyReranker:
+    """重排服务"识别不出候选"的形态：返回空列表。"""
+
+    model = "fake-rerank"
+
+    def rerank(self, query, documents, top_n):  # noqa: ANN001, ARG002
+        return []
+
+
+def test_rerank_empty_result_keeps_fusion_order(tmp_path, offline_settings):
+    retriever, _ = _retriever(tmp_path, offline_settings)
+    retriever._reranker = _EmptyReranker()  # 覆盖默认 NoReranker，走重排支路
+    hits, latency = retriever.retrieve("量子退火如何让系统落入能量最低的基态")
+    assert hits, "重排返回空不该把可答问题的命中清空"
+    assert latency["rerank"] >= 0.0
+    assert [h.rank for h in hits] == list(range(1, len(hits) + 1))

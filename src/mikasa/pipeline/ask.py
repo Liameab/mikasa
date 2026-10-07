@@ -938,11 +938,19 @@ class AskService:
             return None
         with open_db(self.settings.db_path) as conn:
             messages = repo.messages_by_session(conn, session_id)
-        pairs = [
-            messages[i : i + 2]
-            for i in range(0, len(messages) - 1, 2)
-            if messages[i]["role"] == "user"
-        ][-_HISTORY_ROUNDS:]
+        # 按 role 配对，而不是"固定 2 步长 + 检查偶数位是 user"：图片生成会往
+        # 会话里插一条**只有 assistant**的行（images.py），一个孤儿行就把其后
+        # 所有轮次错位、整段历史从提示词里抹掉（多轮指代直接断掉）。这里顺序
+        # 扫描，见到 user 就暂存、紧跟的 assistant 收成一答，孤儿 assistant 直接跳过。
+        pairs: list[list[dict]] = []
+        pending_user: dict | None = None
+        for msg in messages:
+            if msg["role"] == "user":
+                pending_user = msg
+            elif msg["role"] == "assistant" and pending_user is not None:
+                pairs.append([pending_user, msg])
+                pending_user = None
+        pairs = pairs[-_HISTORY_ROUNDS:]
         if not pairs:
             return None
         lines: list[str] = []

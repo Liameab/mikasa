@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import html
 import ipaddress
 import json
 import os
@@ -283,7 +284,10 @@ def login_page_html(*, error: str = "", next_url: str = "/") -> str:
     样式只借配色，不引 style.css：这一页必须在**任何静态资源都取不到**的
     情况下也能正常显示（静态资源本身也在这道门后面）。
     """
-    alert = f'<p class="err">{error}</p>' if error else ""
+    # next_url 来自查询串，必须转义后再进 HTML（2026-10-05 审查修复）：
+    # 原样插入 hidden input 的 value 就是免鉴权页面上的反射 XSS
+    # （实测 `GET /login?next=/"><script>…` 直接执行）。
+    alert = f'<p class="err">{html.escape(error)}</p>' if error else ""
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -315,7 +319,7 @@ def login_page_html(*, error: str = "", next_url: str = "/") -> str:
     <p class="hint">这台 Mikasa 开给了局域网访问，所以要口令。
       口令在运行 Mikasa 的那台电脑上设置（<code>mikasa auth set-password</code>）。</p>
     {alert}
-    <input type="hidden" name="next" value="{next_url}">
+    <input type="hidden" name="next" value="{html.escape(next_url, quote=True)}">
     <input type="password" name="password" placeholder="访问口令" autofocus
            autocomplete="current-password">
     <button type="submit">进入</button>

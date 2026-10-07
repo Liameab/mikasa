@@ -1164,6 +1164,19 @@ def serve(
     # （密钥就在服务端配置里）。宁可拒绝启动、给一条能照做的命令，也不默认裸奔。
     from mikasa.web import auth as auth_module
 
+    # ---- --reload 与"开给网络"互斥（2026-10-05 审查修复） ----
+    # reload 的热重载子进程按 import string 重建应用（serve_app_factory），
+    # 拿不到这里的 listen_host：口令门会按配置里的 127.0.0.1 判定、**保持关闭**，
+    # 而 uvicorn 实绑 0.0.0.0——门形同虚设。与 --profile/--config 同因（子进程
+    # 拿不到父进程参数），同拦；reload 本就只面向本机开发调试。
+    if reload and not auth_module.is_loopback_host(listen_host):
+        console.print(
+            "[red]--reload 不能与对外开放的监听地址同用[/]：热重载子进程拿不到\n"
+            "  --host，口令门会误判为仅本机而保持关闭，服务却实际绑定 0.0.0.0。\n"
+            "  想开给局域网请去掉 --reload。"
+        )
+        raise typer.Exit(code=1)
+
     if not auth_module.is_loopback_host(listen_host) and not auth_module.is_configured(
         settings.data_dir
     ):

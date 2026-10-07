@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from mikasa.config.settings import Settings
+from mikasa.errors import ProviderError
 from mikasa.models.answer import Answer, Citation
 from mikasa.models.retrieval import RetrievedChunk
 from mikasa.pipeline.prompts import (
@@ -278,6 +279,14 @@ class Generator:
         引用仍然从**正文标记**解析：编号才是绑定证据的那个，citations 数组
         是显式声明，只用于校验与计数（ADR-0037）。
         """
+        if not text.strip():
+            # 空补全如实报错（对齐 local 档 OllamaNativeLLM 的既有行为）：上游网关
+            # 限流/截断会给出空 content，若放进 Answer 就是 refused=False 的空回答
+            # 落库/展示——用户看到"答完了却一片空白"，评测还会把它当一次作答计入。
+            raise ProviderError(
+                f"模型返回了空回答（{self.settings.llm.model}）。"
+                "请重试；若反复出现，检查模型服务是否被限流或输出被截断。"
+            )
         return Answer(
             question=question,
             text=text,

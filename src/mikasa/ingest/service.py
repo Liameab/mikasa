@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import threading
 from dataclasses import dataclass, field
@@ -70,6 +71,40 @@ class IngestSummary:
     chars_added: int = 0
 
 
+def _disambiguated_upload_names(files: list[Path]) -> dict[Path, str]:
+    """批内同名文件（不同子目录）的 uploads 副本名去重（2026-10-05 审查修复）。
+
+    副本名此前直接取 `file.name`，而 uploads 是平铺的：同一批里
+    `ch1/笔记.md` 与 `ch2/笔记.md` 指向同一个副本槽——第二篇走"同名更新"
+    分支把第一篇顶掉（正文换新、标题还留第一篇的），批内两篇最后只剩一篇，
+    汇总却报 ingested 2。规则：批内同名（大小写不敏感——normcase 口径，
+    Windows 文件系统不区分大小写；Linux 上文件本就以原名共存，两个判断
+    同为"不同槽"，行为一致）的全体加**父目录前缀**；前缀后仍撞（不同层级
+    的同名父目录）按 `_collect_files` 的确定顺序补序号。结果与运行次数无关，
+    重导同一棵树仍命中"同名替换"。
+
+    只对**有碰撞**的文件改名：常规单文件/无碰撞批次零变化（副本名语义
+    "文件名即稳定键"原样保留，reindex 的 keep 映射不受影响）。
+    """
+    counts: dict[str, int] = {}
+    for f in files:
+        key = os.path.normcase(f.name)
+        counts[key] = counts.get(key, 0) + 1
+    taken: set[str] = {os.path.normcase(f.name) for f in files}
+    out: dict[Path, str] = {}
+    for f in files:
+        if counts[os.path.normcase(f.name)] <= 1:
+            continue
+        base = f"{f.parent.name}-{f.name}" if f.parent.name else f.name
+        name, n = base, 1
+        while os.path.normcase(name) in taken:
+            n += 1
+            name = f"{Path(base).stem}-{n}{Path(base).suffix}"
+        taken.add(os.path.normcase(name))
+        out[f] = name
+    return out
+
+
 class IngestService:
     """一次运行持有一个 embedder；可被 CLI 与 Web 复用（每个实例一次生命周期）。"""
 
@@ -109,9 +144,13 @@ class IngestService:
 
     def _ingest_paths(self, paths: list[Path], *, force: bool) -> IngestSummary:
         summary = IngestSummary()
-        for file in self._collect_files(paths):
+        files = self._collect_files(paths)
+        upload_names = _disambiguated_upload_names(files)
+        for file in files:
             try:
-                status, added_chunks, added_chars = self.ingest_one(file, force=force)
+                status, added_chunks, added_chars = self.ingest_one(
+                    file, force=force, upload_name=upload_names.get(file)
+                )
             except (ZhiwenError, OSError) as exc:
                 summary.failed.append((str(file), redact(str(exc))))
                 logger.error("入库失败 %s：%s", file, redact(str(exc)))
@@ -134,6 +173,7 @@ class IngestService:
         force: bool = False,
         source_ref: str | None = None,
         title: str | None = None,
+        upload_name: str | None = None,
     ) -> tuple[str, int, int]:
         """处理单个文件（加锁串行，理由见 __init__ 的 _lock 注释）。
 
@@ -152,9 +192,15 @@ class IngestService:
         注意 title 与 force 是**配套**的：内容未变时（同名同 sha）非 force 会
         在 title 回填**之前**就返回 skipped，于是"只改标题"静默不生效。笔记
         链路两处调用都同时传了 force=True。
+
+        upload_name 只由批处理（ingest_paths）传入：批内出现同名文件时，
+        uploads 副本名需要按父目录去重（见 _disambiguated_upload_names），
+        单文件链路一律 None（副本名 = file.name，语义不变）。
         """
         with self._lock:
-            return self._ingest_one(file, force=force, source_ref=source_ref, title=title)
+            return self._ingest_one(
+                file, force=force, source_ref=source_ref, title=title, upload_name=upload_name
+            )
 
     def _ingest_one(
         self,
@@ -163,11 +209,12 @@ class IngestService:
         force: bool,
         source_ref: str | None = None,
         title: str | None = None,
+        upload_name: str | None = None,
     ) -> tuple[str, int, int]:
         if not file.is_file():
             raise FileNotFoundError(f"文件不存在：{file}")
         sha = sha256_file(file)
-        copy_path = self.settings.uploads_dir / file.name
+        copy_path = self.settings.uploads_dir / (upload_name or file.name)
 
         # 同内容已在库：直接跳过（先查再解析——大 PDF 解析很贵，重复上传别白付）。
         # **但只跳"已完成"的那一行**：进程被杀（关窗/Ctrl-C/断电）时行会停在
@@ -306,21 +353,32 @@ class IngestService:
             )
             self._embed_chunks(chunks, doc_title)
             self._mark_done(doc_id, len(chunks))
-        except Exception:
-            # 回滚半成品：保证索引一致与幂等（重跑可完整重建）
+        except Exception as exc:
             if doc_id is not None:
-                with open_db(self.settings.db_path) as conn:
-                    repo.delete_document(conn, doc_id)
-                    conn.commit()
-            # 只删**本次复制进来**的副本（2026-09-11 修复）：reindex 场景里源
-            # 文件就是 uploads 副本，无条件 unlink 会把用户的源文件删掉——
-            # reindex 开头已清空全部行，等于文档在库和磁盘上同时消失。
-            if copied:
-                copy_path.unlink(missing_ok=True)
-            # 让位的旧副本放回原位：库里那行虽然没了，盘上的原件要保住，
-            # 用户重传或 reindex 都能把它接回来（宁留文件，不留半成品）
-            if displaced is not None:
-                displaced.rename(copy_path)
+                # 行与副本已就位（分块落库过了，失败在嵌入或其后收尾）：**标 failed
+                # 而不是删行**。设计里的 failed 态此前从没被写过——"上传失败"于是
+                # 表现为文档**静默消失**（用户既看不到、也无从重试）。留行 + 留副本
+                # 之后，界面按 failed 显示"尚未入库完成"，重传/重跑会重做这一篇
+                # （非 done 行不走去重闸，见 _ingest_one 开头）。2026-10-07 审查。
+                self._mark_failed(doc_id, exc)
+                # 新副本已就位、库行已指向它，让位的旧副本不再需要（内容随行换成新版）。
+                # 删不掉只记日志，不能把失败本身掩掉。
+                if displaced is not None:
+                    try:
+                        displaced.unlink(missing_ok=True)
+                    except OSError:
+                        logger.warning("旧副本未能退役（不影响失败处理）：%s", displaced)
+            else:
+                # 行还没建（解析/落库阶段就失败）：清干净本次的一切痕迹
+                # 只删**本次复制进来**的副本（2026-09-11 修复）：reindex 场景里源
+                # 文件就是 uploads 副本，无条件 unlink 会把用户的源文件删掉——
+                # reindex 开头已清空全部行，等于文档在库和磁盘上同时消失。
+                if copied:
+                    copy_path.unlink(missing_ok=True)
+                # 让位的旧副本放回原位：库里那行虽然没了，盘上的原件要保住，
+                # 用户重传或 reindex 都能把它接回来（宁留文件，不留半成品）
+                if displaced is not None:
+                    displaced.rename(copy_path)
             raise
         if displaced is not None:
             # 成功之后的收尾：**绝不能让它把成功翻成失败**。旧副本若是只读或被别的
@@ -402,7 +460,10 @@ class IngestService:
                     repo.delete_document(conn, doc.id)
             conn.commit()
         summary = self.ingest_paths([uploads], force=True)
-        self._remove_keep()  # 重建成功才删：中途失败要留下现场给下一次收
+        if not summary.failed:  # 整批成功才删现场（2026-10-05 审查修复）
+            # 有文件失败时映射必须留盘：下一次重跑才能把标题/文件夹/note 标记
+            # 收回来——旧代码无条件删，而它自己的注释早就写着"重建成功才删"。
+            self._remove_keep()
         self._sync_meta()
         return summary
 
@@ -656,6 +717,29 @@ class IngestService:
                 conn, doc_id, ingest_status="done", chunk_count=chunk_count
             )
             conn.commit()
+
+    def _mark_failed(self, doc_id: int, exc: BaseException) -> None:
+        """把半成品行标成 failed（保行 + 保副本 + **清掉刚落的块**）。
+
+        比"删行重来"更诚实：失败在界面上可见（前端对 failed 显示"尚未入库完成"）、
+        能被下一次重传自愈。写标记本身失败只记日志——绝不能把原始入库异常吞掉。
+        连块一起清：chunk 落了、向量没落时，dense 路会因"向量与语料不一致"在
+        全库范围降级（manager._rebuild）——留一个 0 块的行既避免拖垮全库语义检索，
+        也正好对上"failed 文档返回空 chunks"的前端契约。
+        """
+        try:
+            with open_db(self.settings.db_path) as conn:
+                repo.delete_document_chunks(conn, doc_id)
+                repo.update_document_after_ingest(
+                    conn,
+                    doc_id,
+                    ingest_status="failed",
+                    chunk_count=0,
+                    error_message=redact(str(exc)),
+                )
+                conn.commit()
+        except Exception:  # noqa: BLE001 - 标记失败不能掩盖原始入库异常
+            logger.exception("标记 failed 状态失败（文档 #%s）", doc_id)
 
     def sync_meta(self) -> None:
         """公开的 meta.json 同步入口（Web 入库尾链用）。

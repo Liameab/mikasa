@@ -1229,3 +1229,35 @@ def test_table_list_intent_skips_bilingual_block(tmp_path, offline_settings):
     assert len(llm.calls) == 1, "翻译调用一次都不许发生（盘点轮跳过双语块）"
     assert "原文与译文对照" not in answer.text
     assert "translate_answer" not in answer.latency_ms
+
+
+# ---------------------------------------------------------------------------
+# #15 历史配对：不能被"孤儿" assistant 行（图片生成落库的形态）打断
+# ---------------------------------------------------------------------------
+
+
+def test_history_summary_survives_a_lone_assistant_message(offline_settings):
+    """会话里插了一条只有 assistant 的行（images.py 图片生成的真实形态）后，
+    后续轮次仍要进历史摘要——旧实现按固定 2 步长配对，一个"孤儿"行就让
+    其后所有轮次错位、整段历史从提示词里消失（多轮指代直接断掉）。"""
+    svc = AskService(offline_settings)
+    with open_db(offline_settings.db_path) as conn:
+        sid = repo.create_session(conn, offline_settings.profile)
+        repo.insert_qa_message(conn, session_id=sid, role="user", content="第一问：L2 正则化？")
+        repo.insert_qa_message(
+            conn, session_id=sid, role="assistant", content="第一答[1]", citations_json="[1]"
+        )
+        # 图片生成落库：一条 assistant 行，没有配对的 user
+        repo.insert_qa_message(
+            conn, session_id=sid, role="assistant", content="![图](/api/images/generated/x.png)"
+        )
+        repo.insert_qa_message(conn, session_id=sid, role="user", content="第二问：根号 dk？")
+        repo.insert_qa_message(
+            conn, session_id=sid, role="assistant", content="第二答[1]", citations_json="[1]"
+        )
+        conn.commit()
+
+    summary = svc._history_summary(sid)
+    assert summary is not None
+    assert "第一问" in summary
+    assert "第二问" in summary, "孤儿 assistant 行之后的轮次被错位丢掉了"

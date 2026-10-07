@@ -110,6 +110,58 @@ def test_api_reranker_http_error_wrapped(monkeypatch):
         ApiReranker(_FakeConfig()).rerank("q", ["d"], top_n=3)  # type: ignore[arg-type]
 
 
+def test_api_reranker_rejects_malformed_results(monkeypatch):
+    """results 形状不对（缺 index / 非数组）→ ProviderError，而不是 KeyError / 静默空。
+
+    重排是外部服务，响应不完全可控：条目缺 `index` 会让 `int(item["index"])` 抛
+    KeyError 直穿到 Web 变"内部错误"；results 缺失被 `or []` 吞成空 → 可答问题
+    一律被判"资料不足"拒答（静默降级，比报错更难查）。
+    """
+    import json as _json
+
+    import mikasa.providers.reranker as rk
+
+    class _FakeConfig:
+        api_key = "sk-test"
+        base_url = "https://example.invalid/v1"
+        model = "m"
+
+    class _Resp:
+        def __init__(self, payload: dict) -> None:
+            self._body = _json.dumps(payload).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self) -> bytes:
+            return self._body
+
+    def _urlopen(payload):
+        def _fn(*args, **kwargs):  # noqa: ANN002, ANN003, ARG001
+            return _Resp(payload)
+
+        return _fn
+
+    for payload in (
+        {},  # 缺 results
+        {"results": "nope"},  # results 不是数组
+        {"results": [{"relevance_score": 0.9}]},  # 条目缺 index
+        {"results": [{"index": "x"}]},  # index 非整数
+    ):
+        monkeypatch.setattr(rk.urllib.request, "urlopen", _urlopen(payload))
+        with pytest.raises(ProviderError, match="Reranker"):
+            ApiReranker(_FakeConfig()).rerank("q", ["d", "e"], top_n=2)  # type: ignore[arg-type]
+
+    # 合法响应照常返回下标（不因加校验误伤正路）
+    monkeypatch.setattr(
+        rk.urllib.request, "urlopen", _urlopen({"results": [{"index": 1}, {"index": 0}]})
+    )
+    assert ApiReranker(_FakeConfig()).rerank("q", ["d", "e"], top_n=2) == [1, 0]  # type: ignore[arg-type]
+
+
 # ---------------------------------------------------------------------------
 # local 提供方：分派 + 免密钥放行（ADR-0014）+ 依赖缺失的 ConfigError
 # ---------------------------------------------------------------------------

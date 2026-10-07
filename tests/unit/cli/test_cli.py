@@ -591,6 +591,23 @@ def test_serve_host_port_override(tmp_path, monkeypatch):
     assert calls["kwargs"]["port"] == 9000
 
 
+def test_serve_reload_rejects_non_loopback_host(tmp_path, monkeypatch):
+    """--reload + 对外开放监听必须直接拒绝（2026-10-05 审查修复）。
+
+    reload 子进程按 import string 重建应用、拿不到 --host，口令门按配置里的
+    127.0.0.1 判定而保持关闭，uvicorn 却实绑 0.0.0.0——门形同虚设，整个库
+    与 API 裸奔（横幅还只印 127.0.0.1，掩盖暴露）。与 --profile/--config
+    同因（子进程拿不到父进程参数），同拦。
+    """
+    calls = _serve_args_capture(monkeypatch, tmp_path)
+    result = runner.invoke(app, ["serve", "--reload", "--host", "0.0.0.0"])
+    assert result.exit_code == 1
+    # rich 会按终端宽度折行，比对前先去掉所有空白
+    flat = "".join(result.output.split())
+    assert "--reload不能与对外开放的监听地址同用" in flat
+    assert calls == {}  # 压根没启动 uvicorn（calls 只在 run 被调用时填充）
+
+
 def test_serve_reload_config_conflict_exits_1(tmp_path, monkeypatch):
     """--reload 与 --config 互斥：退出 1 且不启动。"""
     calls = _serve_args_capture(monkeypatch, tmp_path)

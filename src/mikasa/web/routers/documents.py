@@ -757,7 +757,25 @@ def delete_document(
         if doc.file_path:
             # uploads 目录要 resolve：与 _resolve_upload_file 同口径。传相对路径时
             # is_relative_to 永远为假 → 副本静默不删 → 下次 reindex 把它"复活"
-            copy = _inside_uploads(Path(doc.file_path), settings.uploads_dir.resolve())
+            uploads_root = settings.uploads_dir.resolve()
+            # 两跳解析（2026-10-05 审查修复）：① 原样路径；② 按名兜底——
+            # file_path 是历史脏值（旧项目路径 / 改名前的 data 路径，真实库里
+            # 23 行曾占 21 行）时第①跳必空，此前静默跳过 → 副本留盘 → reindex
+            # 复活。兜底口径与 _resolve_upload_file 的第①跳一致。
+            name = PureWindowsPath(str(doc.file_path)).name
+            copy = _inside_uploads(Path(doc.file_path), uploads_root) or _inside_uploads(
+                uploads_root / name, uploads_root
+            )
+            if copy is not None:
+                # 删前必查"还有没有别的行在用这份副本"（2026-10-05 审查修复）：
+                # 大小写不敏感的文件系统上两行可能引用同一份物理文件
+                # （Probe.md / probe.md 的历史遗留数据），删一行不能把幸存行
+                # 唯一的副本 unlink 掉。本行此刻已从库里删除，查到的任何行都是别人。
+                with open_db(settings.db_path) as conn:
+                    survivor = repo.get_document_by_upload_name(conn, name)
+                if survivor is not None:
+                    logger.warning("同名文件仍被文档 #%s 引用，副本保留不删：%s", survivor.id, copy)
+                    copy = None
             if copy is not None:
                 try:
                     copy.unlink(missing_ok=True)

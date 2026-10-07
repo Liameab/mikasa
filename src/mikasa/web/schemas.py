@@ -5,12 +5,31 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from mikasa.pipeline.ask import AnswerMode
+
+
+def _check_env_name(value: str) -> str:
+    """密钥槽位名必须是合法环境变量名（2026-10-05 审查修复）。
+
+    这个字符串会成为 `.env` 的 KEY 与 `os.environ` 的键名：带换行的值能把
+    任意"键=值"注入 .env（实测 `"N\\nDEEPSEEK_API_KEY"` 可追加一行假密钥
+    覆盖真密钥），`"A=B"` 则让 os.environ 抛 ValueError 变 500。空串合法
+    （= 用默认槽位 / 非 api 后端），兜底名由路由层决定。
+    """
+    name = value.strip()
+    if name and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        raise ValueError("密钥变量名必须是合法环境变量名（字母或下划线开头，只含字母/数字/下划线）")
+    return value
+
+
+# 三个"保存"请求体（模型/视觉/出图）共用的密钥槽位名校验
+ApiKeyEnvName = Annotated[str, AfterValidator(_check_env_name)]
 
 
 class QuestionIn(BaseModel):
@@ -124,7 +143,7 @@ class ModelSettingsIn(BaseModel):
     backend: Literal["api", "local"] = Field(description="api=OpenAI 兼容云端；local=本机 Ollama")
     base_url: str = Field(default="", max_length=500, description="OpenAI 兼容端点（含 /v1）")
     model: str = Field(default="", max_length=200, description="模型名")
-    api_key_env: str = Field(default="", max_length=100, description="密钥所在环境变量名")
+    api_key_env: ApiKeyEnvName = Field(default="", max_length=100, description="密钥所在环境变量名")
     api_key: str | None = Field(default=None, max_length=500, description="None=不改/空串=清除")
     # local 档专属（api 档忽略）：None = 不写进请求、跟随默认——"没配置"与"关掉"是两件事
     think: bool | None = Field(default=None, description="None=模型默认；False=关思考（快）")
@@ -176,7 +195,7 @@ class VisionSettingsIn(BaseModel):
     )
     base_url: str = Field(default="", max_length=500, description="OpenAI 兼容端点（含 /v1）")
     model: str = Field(default="", max_length=200, description="视觉模型名")
-    api_key_env: str = Field(default="", max_length=100, description="密钥所在环境变量名")
+    api_key_env: ApiKeyEnvName = Field(default="", max_length=100, description="密钥所在环境变量名")
     api_key: str | None = Field(
         default=None, max_length=500, description="None=不改；非空=写入；空串=拒绝（见类说明）"
     )
@@ -222,7 +241,7 @@ class ImageSettingsIn(BaseModel):
     base_url: str = Field(default="", max_length=500, description="OpenAI 兼容端点（含 /v1）")
     model: str = Field(default="", max_length=200, description="出图模型名")
     size: str = Field(default="", max_length=20, description="如 1328x1328（各模型推荐值不同）")
-    api_key_env: str = Field(default="", max_length=100, description="密钥所在环境变量名")
+    api_key_env: ApiKeyEnvName = Field(default="", max_length=100, description="密钥所在环境变量名")
     api_key: str | None = Field(
         default=None, max_length=500, description="None=不改；非空=写入；空串=拒绝（见类说明）"
     )

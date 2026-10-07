@@ -154,3 +154,31 @@ def test_empty_and_single_chunk():
     single = stitch_chunks([_chunk("唯一一块。", 0)])
     assert single.text == "唯一一块。"
     assert single.spans[0].start == 0 and single.spans[0].end == len("唯一一块。")
+
+
+# ---------------------------------------------------------------------------
+# #13 偏移单位：必须与 JS 同口径（UTF-16 码元），否则 emoji / CJK 扩展 B 错位
+# ---------------------------------------------------------------------------
+
+
+def test_spans_use_utf16_offsets_for_astral_chars():
+    """前端按 `text.slice(start, end)` 取块，JS 的字符串下标是 **UTF-16 码元**；
+    而 Python `len()` 是**码点**。星文平面字符（emoji、CJK 扩展 B）在两边差一倍，
+    按码点发偏移会让阅读视图从第一个 emoji 起整段错位。偏移必须按 UTF-16 发。"""
+    first = "\U0001d54f" * 3 + "甲"  # 4 码点、7 个 UTF-16 码元
+    second = "乙" * 2
+    stitched = stitch_chunks([_chunk(first, 0), _chunk(second, 1)])
+
+    assert len(first) == 4  # 码点口径
+    assert len(first.encode("utf-16-le")) // 2 == 7  # UTF-16 口径
+    assert stitched.spans[0].start == 0
+    assert stitched.spans[0].end == 7, "第一块结束偏移应是 UTF-16 长度"
+    assert stitched.spans[1].start == 7, "第二块起点必须接在 UTF-16 偏移之后"
+    assert stitched.spans[-1].end == len(stitched.text.encode("utf-16-le")) // 2
+
+
+def test_utf16_offsets_still_exact_for_bmp_text():
+    """纯 BMP 文本（本项目绝大多数语料）两口径相等——偏移与旧值逐字一致。"""
+    stitched = stitch_chunks([_chunk("第一块正文。", 0), _chunk("第二块正文。", 1)])
+    assert stitched.spans[0].end == len("第一块正文。")
+    assert stitched.spans[-1].end == len(stitched.text)

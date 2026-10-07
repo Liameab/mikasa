@@ -154,7 +154,14 @@ def test_explicit_title_beats_inherited_title_and_reaches_index(tmp_path, offlin
 # ---------------------------------------------------------------------------
 
 
-def test_embed_failure_rolls_back_document_and_copy(tmp_path, offline_settings, monkeypatch):
+def test_embed_failure_marks_document_failed_not_deleted(tmp_path, offline_settings, monkeypatch):
+    """嵌入失败：**留行标 failed**（2026-10-07 改语义），而不是删行删副本。
+
+    旧语义"回滚得干干净净"的代价是失败**静默消失**——用户看不到失败、也无从重试
+    （failed 态在 schema 与前端里都有，却从没被写过）。新语义：行留下并标 failed +
+    错误说明，盘上副本留下（行指向它），重传可自愈。**块要清掉**：缺向量会让全库
+    dense 路降级（manager._rebuild），留一个 0 块的行才不拖垮语义检索。
+    """
     note = _write_note(tmp_path, "a.md", CONTENT_A)
     svc = _svc(offline_settings)
 
@@ -166,10 +173,12 @@ def test_embed_failure_rolls_back_document_and_copy(tmp_path, offline_settings, 
         svc.ingest_one(note)
 
     with open_db(offline_settings.db_path) as conn:
-        assert repo.count_documents(conn) == 0  # 文档回滚
-        assert repo.count_chunks(conn) == 0
-    uploads = list(offline_settings.uploads_dir.rglob("*"))
-    assert uploads == []  # 半成品副本也清除
+        assert repo.count_documents(conn) == 1  # 留行（不静默消失）
+        assert repo.count_chunks(conn) == 0  # 但块清掉（缺向量会拖垮全库 dense）
+        doc = repo.list_documents(conn)[0]
+    assert doc.ingest_status == "failed"
+    assert doc.error_message and "模拟嵌入服务故障" in doc.error_message
+    assert (offline_settings.uploads_dir / "a.md").is_file()  # 副本留下，行指向它
 
 
 def test_empty_document_reported_as_failure(tmp_path, offline_settings):
@@ -469,19 +478,18 @@ def test_same_name_bad_reupload_keeps_old_document(tmp_path, offline_settings):
     assert (offline_settings.uploads_dir / "笔记.md").is_file(), "uploads 旧副本必须保留"
 
 
-def test_same_name_reupload_embed_failure_keeps_old_copy(tmp_path, offline_settings, monkeypatch):
-    """同名重传时嵌入失败：盘上的旧副本必须保住（2026-09-11 打包前审查修复）。
+def test_same_name_reupload_embed_failure_marks_failed(tmp_path, offline_settings, monkeypatch):
+    """同名重传时嵌入失败：**留行标 failed**，而不是悄悄退回旧版本（2026-10-07 改语义）。
 
-    旧行在解析通过后就被删掉并提交，若随后嵌入阶段失败（API 限流/超时），
-    旧实现会把新副本也 unlink —— 文档在库里和磁盘上同时消失。现在旧副本
-    先改名让位（同目录 rename，不复制数据），失败则原样放回。
+    旧实现把新行删掉、把让位副本放回原位——文档静默退回旧版，用户以为什么都没发生
+    也没有任何重试入口。新语义：库行保留并标 failed、盘上留下**新版**副本（行已指向
+    它），界面显示"尚未入库完成"，重传即自愈（非 done 行不走去重闸）。
     """
     note = _write_note(tmp_path, "笔记.md", CONTENT_A)
     svc = _svc(offline_settings)
     svc.ingest_one(note)
     copy_path = offline_settings.uploads_dir / "笔记.md"
     assert copy_path.is_file()
-    original_text = copy_path.read_text(encoding="utf-8")
 
     # 同名、内容已变的新文件；让嵌入阶段失败
     changed = _write_note(tmp_path, "笔记.md", CONTENT_A.replace("Adam", "AdamW 优化器"))
@@ -493,8 +501,13 @@ def test_same_name_reupload_embed_failure_keeps_old_copy(tmp_path, offline_setti
     with pytest.raises(ProviderError):
         svc.ingest_one(changed)
 
-    assert copy_path.is_file(), "旧副本必须放回原位（否则文档彻底消失）"
-    assert copy_path.read_text(encoding="utf-8") == original_text, "放回的应是旧版内容"
+    with open_db(offline_settings.db_path) as conn:
+        rows = repo.list_documents(conn)
+    assert len(rows) == 1, "失败要留一行（而不是删掉）"
+    assert rows[0].ingest_status == "failed"
+    assert rows[0].error_message and "429" in rows[0].error_message
+    assert copy_path.is_file(), "新版副本必须留在盘上（库行指向它）"
+    assert copy_path.read_text(encoding="utf-8") != CONTENT_A, "留下的应是新版内容"
     assert not list(offline_settings.uploads_dir.glob("*.replacing")), "让位文件不能残留"
 
 
@@ -698,3 +711,66 @@ def test_reindex_recovers_props_after_interrupted_run(tmp_path, offline_settings
         assert doc.folder_id == folder
         assert doc.source_ref == "note:abcdef123456"
     assert not (offline_settings.index_dir / "reindex-keep.json").exists(), "成功收尾要清掉现场"
+
+
+def test_reindex_batch_failure_keeps_the_props_map(tmp_path, offline_settings, monkeypatch):
+    """重导里有文件失败时，组织属性映射（reindex-keep.json）必须留在盘上。
+
+    2026-10-05 审查修复：`_remove_keep()` 原先无条件执行，而注释写的是
+    "重建成功才删"。有任何一个文件失败（嵌入故障/坏文件）就丢掉现场——
+    下一次重跑内容能回来，标题/文件夹/note 标记却全部回落到默认。
+    """
+    _write_note(tmp_path, "a.md", CONTENT_A)
+    svc = _svc(offline_settings)
+    svc.ingest_paths([tmp_path])
+    with open_db(offline_settings.db_path) as conn:
+        folder = repo.create_kb_folder(conn, "论文")
+        doc = repo.list_documents(conn)[0]
+        repo.set_document_title(conn, doc.id, "整理名")
+        repo.move_document(conn, doc.id, folder)
+        conn.commit()
+
+    def boom(self, chunks, doc_title):
+        raise ProviderError("模拟嵌入服务故障（如 429）")
+
+    monkeypatch.setattr(IngestService, "_embed_chunks", boom)
+    summary = IngestService(offline_settings).reindex()
+    assert summary.failed, "嵌入故障应记入 failed"
+    assert (offline_settings.index_dir / "reindex-keep.json").is_file(), (
+        "失败的批要留下现场（映射），否则重跑时属性全丢"
+    )
+
+    # 故障恢复后重跑：属性从盘上映射收回来——这就是"现场"的价值
+    monkeypatch.undo()
+    rebuilt = _svc(offline_settings).reindex()
+    assert rebuilt.failed == []
+    with open_db(offline_settings.db_path) as conn:
+        doc = repo.list_documents(conn)[0]
+        assert doc.title == "整理名"
+        assert doc.folder_id == folder
+    assert not (offline_settings.index_dir / "reindex-keep.json").exists()
+
+
+def test_same_batch_same_basename_keeps_both(tmp_path, offline_settings):
+    """同一批里两个同名文件（不同子目录）都要入库，不能互相顶掉。
+
+    2026-10-05 审查修复：uploads 副本名原先直接取 file.name（平铺目录），
+    ch1/笔记.md 与 ch2/笔记.md 指向同一个副本槽——第二篇走"同名更新"把
+    第一篇顶掉（正文换新、标题还留第一篇的），批内两篇最后只剩一篇，
+    而汇总里 `ingested` 却是 2。修复 = 批内同名（大小写不敏感）全体加
+    父目录前缀，结果与文件顺序无关、重导仍命中同名替换。
+    """
+    (tmp_path / "ch1").mkdir()
+    (tmp_path / "ch2").mkdir()
+    _write_note(tmp_path / "ch1", "笔记.md", CONTENT_A)
+    _write_note(tmp_path / "ch2", "笔记.md", "# 另一章\n\n另一份完全不同的内容，用于区分两篇。\n")
+    svc = _svc(offline_settings)
+    summary = svc.ingest_paths([tmp_path])
+    assert summary.failed == []
+    assert len(summary.ingested) == 2
+    with open_db(offline_settings.db_path) as conn:
+        docs = repo.list_documents(conn)
+    assert len(docs) == 2, "批内同名文件不能互相顶掉"
+    assert len({d.file_sha256 for d in docs}) == 2, "两篇内容不同，应各自成行"
+    copies = sorted(p.name for p in offline_settings.uploads_dir.glob("*.md"))
+    assert len(copies) == 2, f"uploads 副本要落成两份：{copies}"

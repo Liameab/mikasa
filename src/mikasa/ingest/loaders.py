@@ -231,15 +231,13 @@ def load_markdown(path: Path) -> LoadedDocument:
                 paragraphs.append(Para(text=body, heading_path=_path_of(heading_stack)))
             continue
         atx = _ATX_HEADING.match(line)
-        setext_next = False
         # 注意：**不能**要求"下划线之后还有行"（旧代码的 `i + 1 < len(lines)`）——
         # 文件以 Setext 标题结尾是常见写法（笔记末尾无空行），那样会识别不出标题，
         # 下划线本身还会被当正文混进段落（2026-09-11 修复）
         if atx is None and _SEPARATOR_HEADING.match(line):
             prev = lines[i - 1].strip() if i > 0 else ""
             if prev and not _ATX_HEADING.match(prev):
-                # Setext：上行为标题文本
-                setext_next = True
+                # Setext：上行为标题文本（当前行是下划线；推进只越过它自己，见下）
                 level = 1 if line.startswith("=") else 2
                 atx_text = prev
                 atx = _ATX_HEADING.match("#" * level + " " + atx_text)
@@ -254,7 +252,10 @@ def load_markdown(path: Path) -> LoadedDocument:
             if title is None:
                 title = heading_text
             _push_heading(heading_stack, level, heading_text)
-            i += 1 if not setext_next else 2
+            # i += 1（2026-10-05 审查修复）：当前行只消费自身——ATX 时是标题行、
+            # Setext 时是下划线行，两种都只该前进一行。旧式 `+2` 会把下划线之后
+            # 的第一行**跳过**（从未进 buffer），静默从索引/引用/阅读视图里消失。
+            i += 1
             continue
         add_line(raw)
         i += 1

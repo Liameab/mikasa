@@ -950,3 +950,32 @@ the reader, whole library on the chat page). eval/CLI/MCP never pass through
 be 100%", which was the UI before the 2026-09-30 fit-to-window default; it had been
 failing ever since. It now clicks "Original size" (reset) and asserts 100% — which also
 covers the reset button. A stale assertion left in place only stays red forever.
+
+---
+
+## 7. Full-repo audit 2026-10-05: 15 fixed findings (closed 2026-10-07)
+
+> A full-repo audit of v0.1.14 (18 parallel finders plus independent verification per
+> finding). **Fifteen findings made the "confirmed" list, and every one was fixed only
+> after a regression test that failed first.** The complete list, fix status, and the
+> 30+ long-tail items live in `ideas-and-backlog.md` §10 (a private ledger, not shipped).
+> The table below keeps only "root cause → guard"; details live in the code comments.
+
+| Area | Case | Root cause | Guard |
+| --- | --- | --- | --- |
+| Security | Page routes `?page=…` could read any file | `lambda page=page`'s default argument *is* a query-parameter declaration in FastAPI, so a caller could point it anywhere | Argument-free closure handler + `test_page_routes_ignore_query_params` |
+| Security | Login page reflected XSS via `next`; `/\evil.example.com` open redirect | `next` went into a hidden input unescaped; `_safe_next` only rejected `//` | `html.escape(quote=True)`; `_safe_next` also rejects `/\` |
+| Security | `serve --reload --host 0.0.0.0` lost the auth gate | The reload child rebuilt the app from config and dropped the CLI's local host variable — banner said loopback while bound to all interfaces | Rejected explicitly, like `--profile`/`--config` |
+| Security | `api_key_env` could inject a `.env` line (overwriting a real key) | Only length was validated, not the format, so a newline could forge a second `KEY=` | `ApiKeyEnvName` annotated type (valid env-var name regex), shared by the three save models |
+| Security | A saved `base_url` could persist an intranet/metadata address | The probe endpoints passed the SSRF guard; the **save endpoint did not** | One guard line in each of the three `_validated_*_fields` |
+| Data | Two files with the same name in one batch overwrote each other (while the summary reported 2) | The copy slot used `file.name`, so same-named files shared one slot | Same-named files in a batch all get a parent-directory prefix (collection is already sorted → deterministic) |
+| Data | Deleting one row on a case-insensitive filesystem deleted another row's only copy | Name lookup compared exactly (`Probe.md` ≠ `probe.md`); a stale `file_path` was skipped silently | `os.path.normcase` comparison + two-hop delete resolution that checks for survivors first |
+| Data | A failed reindex still deleted the property map | Its own comment said "delete only on success", but the code deleted unconditionally | `if not summary.failed` |
+| Data | An embedding failure **deleted the row and the copy** — the failure vanished silently | Rollback always "cleaned up", and the `failed` status present in the schema and the UI was never written | Keep the row as `failed` with `error_message` and keep the copy; **drop the chunks** (a missing vector degrades dense retrieval repo-wide), and a re-upload heals it |
+| Data | A Setext heading swallowed the first body line after the underline | `i += 2` after recognizing the heading skipped one line too many | `i += 1` (and the dead `setext_next` flag removed) |
+| Crash | Mixed/truncated vector dimensions → **a 500 on every question** | `np.reshape` raised ValueError on mixed dims, escaping the existing "degrade to BM25" path | Validate dim and byte length across the table; degrade as "model unavailable" and point at reindex |
+| Crash | A malformed reranker response → KeyError / a blanket refusal of answerable questions | A missing `results` was swallowed by `or []`; a missing `index` let `int(...)` raise | `_parse_rerank_indices` normalizes to ProviderError; an empty rerank falls back to the fused order |
+| Crash | The reader view was misaligned from the first emoji onward | The backend emitted **code-point** offsets while the frontend `String.slice`s by **UTF-16 code unit** | Offsets are now UTF-16 code units (identical values for BMP-only corpora) |
+| Crash | An empty completion was recorded and shown as an answer | `""` went straight into `Answer` with `refused=False` | Empty text raises ProviderError (matching the local profile's existing behavior) |
+| Crash | One orphan assistant row (an image-generation record) dropped every later turn from the prompt | History pairing used "fixed 2-step stride, even index must be user", so one orphan row shifted everything after it | Pair by role in order (stash a user, pair it with the immediately following assistant), skipping orphans |
+| Tests | Environment variables leaked between test cases (the full suite only hid it by directory order) | pytest's `delenv(raising=False)` registers no undo for a key that was **never set**, while the app writes `os.environ` directly | Fixtures snapshot/`pop` explicitly, with the pytest semantics spelled out in a comment |

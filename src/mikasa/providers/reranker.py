@@ -47,6 +47,27 @@ class NoReranker:
         return list(range(top_n))
 
 
+def _parse_rerank_indices(data: Any) -> list[int]:
+    """从重排服务的响应体里取出候选下标；形状不对一律 ProviderError。
+
+    重排是外部服务，响应不完全可控（2026-10-07 审查）：
+      - `results` 缺失被 `or []` 吞成空 → 可答问题一律被判"资料不足"拒答，
+        静默降级比报错更难查；
+      - 条目缺 `index` 会让 `int(item["index"])` 抛 KeyError 直穿到 Web 变
+        "内部错误"（provider 层其它路径都规整地包成 ProviderError）。
+    这两种形态都在这里翻译成 ProviderError，交给调用方如实报错。
+    """
+    results = data.get("results") if isinstance(data, dict) else None
+    if not isinstance(results, list):
+        raise ProviderError(f"Reranker 响应缺少 results 数组：{str(data)[:200]}")
+    indices: list[int] = []
+    for item in results:
+        if not isinstance(item, dict) or not isinstance(item.get("index"), int):
+            raise ProviderError(f"Reranker 响应的 results 条目格式不符：{str(item)[:200]}")
+        indices.append(item["index"])
+    return indices
+
+
 class ApiReranker:
     """SiliconFlow rerank API（免费 bge-reranker-v2-m3）。"""
 
@@ -108,9 +129,8 @@ class ApiReranker:
             raise ProviderError(
                 f"Reranker 响应异常（{self.model}）：{type(exc).__name__}: {exc}"
             ) from exc
-        results = data.get("results") or []
         # results 已是降序；只保留下标（回填排序在调用方完成）
-        return [int(item["index"]) for item in results]
+        return _parse_rerank_indices(data)
 
 
 class LocalReranker:

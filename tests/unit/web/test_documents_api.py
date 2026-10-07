@@ -6,8 +6,14 @@ MockLLM 离线链路不含真实嵌入，上传文档即入库分块（与 inges
 
 from __future__ import annotations
 
+import os
+
+import pytest
+
 from mikasa.errors import ProviderError
 from mikasa.ingest.service import IngestService
+from mikasa.models.document import Document
+from mikasa.storage import repo
 from mikasa.storage.db import open_db
 from tests.unit.web.conftest import NOTE
 
@@ -112,6 +118,9 @@ def test_upload_embedding_provider_failure_502(client, monkeypatch):
     于是"上游额度用尽"以客户端错误的形式回到浏览器；同一个 ProviderError 在别的
     端点上由 app 层处理器给 502。三条入库链路（上传/论文导入/笔记）共用这条尾链，
     这里锁上传路径，笔记路径见 test_notes_api。
+
+    失败语义是"**留痕**"而非"静默消失"（2026-10-07 改）：行标 failed 留在库里、
+    副本留在 uploads，界面按 failed 显示"尚未入库完成"，重传会重做这一篇。
     """
     c, settings = client
 
@@ -122,9 +131,12 @@ def test_upload_embedding_provider_failure_502(client, monkeypatch):
     resp = _upload(c, "笔记.md")
     assert resp.status_code == 502, resp.text
     assert "入库失败" in resp.json()["detail"]
-    # 失败不留半成品：库 / uploads / web-tmp 三处都要干净
-    assert c.get("/api/documents").json()["documents"] == []
-    assert list(settings.uploads_dir.iterdir()) == []
+    # 失败留痕：库里一行 failed（带错误说明）、uploads 留着副本
+    docs = c.get("/api/documents").json()["documents"]
+    assert [d["ingest_status"] for d in docs] == ["failed"]
+    assert docs[0]["title"] == "机器学习笔记"
+    assert [p.name for p in settings.uploads_dir.iterdir()] == ["笔记.md"]
+    # web-tmp 是请求级临时目录，与库/盘状态无关 → 仍要清干净
     tmp_dir = settings.data_dir / "web-tmp"
     assert not tmp_dir.exists() or not any(tmp_dir.iterdir())
 
@@ -144,6 +156,57 @@ def test_delete_removes_uploads_copy(client):
     assert any(f.name == "待删除.md" for f in uploads)
     c.delete(f"/api/documents/{doc_id}")
     assert not any(f.name == "待删除.md" for f in settings.uploads_dir.glob("*"))
+
+
+def test_delete_removes_copy_when_file_path_is_stale(client):
+    """file_path 是历史脏值时，删除仍要清掉 uploads 副本（2026-10-05 审查修复）。
+
+    修前只按原样路径解析：脏路径（旧项目目录 / 改名前的 data 路径，真实库里
+    23 行曾占 21 行）必然解析失败 → 静默跳过 → 副本留盘 → 下次 reindex 把它
+    当新文档"复活"。修复 = 解析失败时按文件名兜底（与 _resolve_upload_file
+    的第①跳同口径）。
+    """
+    c, settings = client
+    doc_id = _upload(c, "脏路径.md").json()["document"]["id"]
+    assert any(f.name == "脏路径.md" for f in settings.uploads_dir.glob("*"))
+    with open_db(settings.db_path) as conn:
+        repo.set_document_file_path(conn, doc_id, r"D:\Code\MyProject1\data\uploads\脏路径.md")
+        conn.commit()
+    assert c.delete(f"/api/documents/{doc_id}").status_code == 200
+    assert not any(f.name == "脏路径.md" for f in settings.uploads_dir.glob("*")), (
+        "脏 file_path 不能挡住副本清理——留下的副本会被 reindex 复活"
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="大小写不敏感文件系统的别名问题（Windows 专属）")
+def test_case_variant_pair_delete_keeps_the_surviving_copy(client):
+    """历史遗留的大小写变体双行（Probe.md / probe.md 共享同一份物理副本）：
+
+    删除其中一行不能把幸存行唯一的副本 unlink 掉（2026-10-05 审查修复：
+    删前必须查"还有没有别的行在用这份副本"）。
+    """
+    c, settings = client
+    doc_id = _upload(c, "Probe.md").json()["document"]["id"]
+    # 模拟修复前已产生的存量数据：第二行用同一份副本（大小写变体路径）
+    with open_db(settings.db_path) as conn:
+        ghost_id = repo.insert_document(
+            conn,
+            Document(
+                title="probe",
+                file_path=str(settings.uploads_dir / "probe.md"),
+                file_type="md",
+                file_sha256="0" * 64,  # 幽灵行：没有真实内容，只为占住"另一行"
+                char_count=0,
+            ),
+        )
+        conn.commit()
+    assert c.delete(f"/api/documents/{doc_id}").status_code == 200
+    assert any(f.name.lower() == "probe.md" for f in settings.uploads_dir.glob("*")), (
+        "幸存行还在用这份副本，不能删"
+    )
+    # 幸存行被删时，副本才该收掉
+    assert c.delete(f"/api/documents/{ghost_id}").status_code == 200
+    assert not any(f.name.lower() == "probe.md" for f in settings.uploads_dir.glob("*"))
 
 
 def test_delete_then_ask_reflects_corpus_change(client):

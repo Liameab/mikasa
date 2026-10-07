@@ -178,6 +178,10 @@ def _validated_llm_fields(body: ModelSettingsIn) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="模型名不能为空")
     if not base_url:
         raise HTTPException(status_code=422, detail="API 地址（base_url）不能为空")
+    # 保存路径与探测端点**同一道出网闸门**（2026-10-05 审查修复）：此前只有
+    # 探测端点拦内网/元数据地址、保存却放行——base_url 会被持久化进覆盖层，
+    # 其后每次问答都把密钥与语料正文发往该地址（SSRF 被持久化）。
+    _guard_base_url(base_url)
     fields: dict[str, Any] = {
         "backend": body.backend,
         "base_url": base_url,
@@ -462,6 +466,7 @@ def _validated_vision_fields(body: VisionSettingsIn) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="视觉模型名不能为空")
     if not base_url:
         raise HTTPException(status_code=422, detail="API 地址（base_url）不能为空")
+    _guard_base_url(base_url)  # 与探测端点同一道闸（2026-10-05 审查修复，见模型段）
     env_name = body.api_key_env.strip() or (
         _DEFAULT_VISION_KEY_ENV if body.backend == "api" else ""
     )
@@ -614,6 +619,7 @@ def _validated_image_fields(body: ImageSettingsIn) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="出图模型名不能为空")
     if not base_url:
         raise HTTPException(status_code=422, detail="API 地址（base_url）不能为空")
+    _guard_base_url(base_url)  # 与探测端点同一道闸（2026-10-05 审查修复，见模型段）
     env_name = body.api_key_env.strip() or _DEFAULT_IMAGE_KEY_ENV
     if body.api_key == "":
         raise HTTPException(

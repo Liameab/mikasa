@@ -22,9 +22,13 @@ router = APIRouter()
 
 
 def _safe_next(raw: str | None) -> str:
-    """只接受站内路径（挡 `//evil.com` 与绝对 URL 的开放重定向）。"""
+    r"""只接受站内路径（挡 `//evil.com`、`/\evil.com` 与绝对 URL 的开放重定向）。
+
+    反斜杠也要挡（2026-10-05 审查修复）：浏览器 URL 解析里 `\` 等同 `/`，
+    `/\evil.com` 会被当成 `//evil.com` 跳走——只查 startswith("//") 会漏。
+    """
     target = (raw or "").strip()
-    if not target.startswith("/") or target.startswith("//"):
+    if not target.startswith("/") or target.startswith("//") or target.startswith("/\\"):
         return "/"
     return target
 

@@ -57,6 +57,20 @@ def test_markdown_setext_heading_at_eof(tmp_path: Path):
     assert not any("===" in t for t in texts), "下划线不能混进正文段落"
 
 
+def test_markdown_setext_heading_does_not_swallow_next_line(tmp_path: Path):
+    """Setext 标题下面紧跟的正文行不能被吞掉（2026-10-05 审查修复）。
+
+    修前 `i += 1 if not setext_next else 2`：当前行（下划线）只消费 1 步就
+    推进到下一行才对，却按 2 步跳——下划线之后的**第一行从未进入 buffer**，
+    静默从索引、引用与阅读视图里消失，且毫无报错。
+    """
+    md = tmp_path / "setext-skip.md"
+    md.write_text("开头\n===\n第三部分收尾。\n", encoding="utf-8")
+    doc = load_markdown(md)
+    texts = [p.text for p in doc.paragraphs]
+    assert "第三部分收尾。" in texts, f"标题下一行必须进正文，实际段落：{texts}"
+
+
 def test_markdown_indexes_fenced_code_as_a_plain_paragraph(tmp_path: Path):
     """代码块进索引，但**不参与结构解析**（2026-09-20 改）。
 

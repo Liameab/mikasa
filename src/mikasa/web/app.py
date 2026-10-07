@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import mimetypes
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -109,8 +110,19 @@ def create_app(settings: Settings) -> FastAPI:
     for _ext, _mime in ((".woff2", "font/woff2"), (".woff", "font/woff"), (".ttf", "font/ttf")):
         mimetypes.add_type(_mime, _ext)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    # 页面路由必须用**无参 handler**（2026-10-05 审查修复）：`lambda page=page:`
+    # 的默认参数会被 FastAPI 当成查询参数声明——`?page=../../x` 能改掉
+    # FileResponse 的目标文件，等于未鉴权任意文件读取。闭包把文件名关进去，
+    # handler 签名零参数，FastAPI 无从暴露。
+    def _page_handler(target: str) -> Callable[[], FileResponse]:
+        def handler() -> FileResponse:
+            return FileResponse(STATIC_DIR / target)
+
+        return handler
+
     for route, page in _PAGES.items():
-        app.get(route, include_in_schema=False)(lambda page=page: FileResponse(STATIC_DIR / page))
+        app.get(route, include_in_schema=False)(_page_handler(page))
 
     # ---- 业务路由 ----
     app.include_router(health.router)

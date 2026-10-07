@@ -58,7 +58,11 @@ def test_put_writes_overlay_and_hot_applies(client, monkeypatch):
     assert c.app.state.settings.vision.backend == "api"
     # 密钥进了 .env 与进程环境（面板 PUT 的三段语义里"写入"那一支）
     assert os.environ.get("SILICONFLOW_API_KEY") == "sk-test-vision"
-    monkeypatch.delenv("SILICONFLOW_API_KEY", raising=False)  # 别漏给别的测试
+    # 别漏给别的测试——必须用 pop 而不是 monkeypatch.delenv（2026-10-05 修复）：
+    # delenv 对**已存在**的键记录的是**当前值**（= 刚被应用层写进来的泄漏值），
+    # teardown 会把它原样还原回去，等于把泄漏"合法化"。pop 则真正清场；
+    # 若测试前本来就有值，开头那次 delenv 已登记原值，teardown 自会恢复它。
+    os.environ.pop("SILICONFLOW_API_KEY", None)
     assert user_config_path().is_file()
 
 

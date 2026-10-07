@@ -195,7 +195,13 @@ class Retriever:
             # 函数——于是测试守着一份没人执行的副本，改坏真正生效的内联版也不会
             # 变红（2026-09-11 复查发现）。
             safe = _sanitize_indices(indices, len(reranked_rows))
-            reranked_rows = [reranked_rows[i] for i in safe]
+            if safe:
+                reranked_rows = [reranked_rows[i] for i in safe]
+            else:
+                # 重排把候选全丢了（服务端认不出这批文档）：退回融合序，而不是
+                # 把命中清空——清空会被生成层判成"资料不足"，对一个可答问题一律
+                # 拒答（2026-10-07 审查）。保持召回质量，只在日志留痕。
+                logger.warning("重排未返回任何可用候选，退回融合序（本轮不改序）")
             lat["rerank"] = (perf_counter() - t1) * 1000.0
         else:
             lat["rerank"] = 0.0

@@ -278,3 +278,45 @@ def test_delete_doc_links_clears_both_directions(offline_settings):
         repo.replace_doc_links(conn, b, [{"dst_doc_id": a, "relation": "前置知识"}])
         repo.delete_doc_links(conn, a)
         assert repo.links_for_document(conn, b) == []
+
+
+def test_load_embedding_matrix_rejects_mixed_dim(offline_settings):
+    """同一模型名下混入不同维度/长度的向量（半迁移残留）→ 返回 None 降级，
+    而不是让 np.reshape 抛 ValueError 穿到上层（表现为"每次提问都 500"）。"""
+    import numpy as np
+
+    from mikasa.models.document import Chunk, Document
+
+    with open_db(offline_settings.db_path) as conn:
+        doc_id = repo.insert_document(
+            conn,
+            Document(title="t", file_path="t.md", file_type="md", file_sha256="s", char_count=1),
+        )
+        repo.insert_chunks(
+            conn,
+            [
+                Chunk(document_id=doc_id, seq=0, content="a", content_sha256="a"),
+                Chunk(document_id=doc_id, seq=1, content="b", content_sha256="b"),
+            ],
+        )
+        ids = repo.chunk_ids_of_document(conn, doc_id)
+
+        # 正常：同维 → 可读出矩阵
+        repo.save_embeddings(conn, "m", ids, np.zeros((2, 4), dtype=np.float32))
+        assert repo.load_embedding_matrix(conn, "m") is not None
+
+        # 混维：一条 4 维、一条 2 维 → 不可用
+        conn.execute(
+            "UPDATE embeddings SET dim = 2, vector = ? WHERE chunk_id = ?",
+            (np.zeros(2, dtype=np.float32).tobytes(), ids[1]),
+        )
+        conn.commit()
+        assert repo.load_embedding_matrix(conn, "m") is None
+
+        # 维度字段对、但字节长度对不上（截断残留）→ 同样不可用
+        conn.execute(
+            "UPDATE embeddings SET dim = 4, vector = ? WHERE chunk_id = ?",
+            (np.zeros(2, dtype=np.float32).tobytes(), ids[1]),
+        )
+        conn.commit()
+        assert repo.load_embedding_matrix(conn, "m") is None

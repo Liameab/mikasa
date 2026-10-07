@@ -811,7 +811,11 @@ def test_note_stem_truncation_keeps_visible_characters(client):
 
 
 def test_note_embedding_provider_failure_502(client, monkeypatch):
-    """笔记入库撞上嵌入服务失败 → 502（与上传/论文导入同一条尾链，2026-09-17）。"""
+    """笔记入库撞上嵌入服务失败 → 502（与上传/论文导入同一条尾链，2026-09-17）。
+
+    失败语义 2026-10-07 改为**留痕**：行留下标 failed（0 块）、副本留下，
+    web-tmp 仍收干净——失败在界面上可见、重存可自愈，而不是悄悄消失。
+    """
     c, settings = client
 
     def boom(self, chunks, doc_title):
@@ -821,6 +825,8 @@ def test_note_embedding_provider_failure_502(client, monkeypatch):
     resp = _create(c)
     assert resp.status_code == 502, resp.text
     assert "入库失败" in resp.json()["detail"]
-    assert _rows(settings) == [], "失败不留半成品行"
-    assert _uploads_files(settings) == [], "失败不留 uploads 副本"
+    rows = _rows(settings)
+    assert len(rows) == 1 and rows[0].ingest_status == "failed", "失败要留一行标 failed"
+    assert rows[0].chunk_count == 0, "失败的行不该留块（缺向量会拖垮全库 dense）"
+    assert _uploads_files(settings), "失败要留下 uploads 副本（行指向它）"
     assert _web_tmp_leftovers(settings) == [], "失败也要把 web-tmp 独占子目录收干净"
