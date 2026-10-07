@@ -20,6 +20,9 @@
 - **ADR-0005 is a gap**: a planning-phase draft that was skipped and never landed any
   decision, with zero references in code. The hole is kept (renumbering would orphan
   every existing comment, which is not worth it).
+- **ADR-0041 is also a gap**: the number was ceded during a parallel development
+  round to avoid a collision; no decision ever landed under it and no code references
+  it. The hole is kept, for the same reason as 0005.
 - Status: `Accepted` (current) / `Superseded` (replaced by a later decision, kept for
   its record value). Superseded decisions are not deleted — in technical review, how a
   decision was overturned by data is often worth more than the decision itself.
@@ -66,6 +69,7 @@
 | ADR-0038 | Usage visibility: how tokens are captured, displayed and totalled | Accepted |
 | ADR-0039 | Evidence self-assessment plus one supplementary retrieval: a minimal Self-RAG closure (off by default, A/B not significant) | Accepted |
 | ADR-0040 | Demo examples become placeholders, plus "the prompt is not source material": removing the bait that gets copied | Accepted |
+| ADR-0041 | (numbering gap, see Reading Conventions) | — |
 | ADR-0042 | Claim-level faithfulness (claim-level L2): break the faithfulness ruler down to claims, and accept only the citation closure as the evidence face | Accepted |
 | ADR-0043 | The RAGAS comparison: a control, not a foundation, plus the measure and the language must be reported with the numbers | Accepted |
 
