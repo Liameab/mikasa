@@ -211,21 +211,27 @@ class Generator:
         history_summary: str | None = None,
         context: str | None = None,
         note: str | None = None,
+        structured: bool | None = None,
     ) -> list[dict[str, str]]:
         """证据注入的提示词组装：generate / stream_text 共用同一构造。
 
         结构化路径（`llm.structured_output`）只改三处：系统提示追加 JSON 契约、
         来源行多一个 chunk_id 供模型抄写、其余逐字相同——差异必须**只有序列化层**。
         note 是「盘点表格」轮的注入说明（可空），只被流式链路传入。
+
+        `structured` 缺省跟随配置，但**流式路径必须显式传 False**（ADR-0037 定的
+        就是"默认关、只非流式"）：流式链路没有任何 JSON 解析，若系统提示照样要求
+        JSON，用户会在聊天里看到一段裸 JSON（2026-10-05 审查）。
         """
+        use_structured = self._structured if structured is None else structured
         sources = [
-            (i + 1, self._describe(hit, titles, with_chunk_id=self._structured), hit.chunk.content)
+            (i + 1, self._describe(hit, titles, with_chunk_id=use_structured), hit.chunk.content)
             for i, hit in enumerate(hits)
         ]
         user_message = build_user_message(
             question, sources, history_summary=history_summary, context=context, note=note
         )
-        system = SYSTEM_PROMPT + JSON_OUTPUT_CONTRACT if self._structured else SYSTEM_PROMPT
+        system = SYSTEM_PROMPT + JSON_OUTPUT_CONTRACT if use_structured else SYSTEM_PROMPT
         if note is not None:
             # 盘点轮追加输出契约（与 JSON 契约同机制）：压住规则 6 的展开倾向，
             # 行首强制 [N]（服务端另有 _normalize_cite_echo_stream 兜底抄来源行）
@@ -251,7 +257,13 @@ class Generator:
         CLI / 评测的非流式 generate 不受影响。
         """
         messages = self._build_messages(
-            question, hits, titles, history_summary=history_summary, context=context, note=note
+            question,
+            hits,
+            titles,
+            history_summary=history_summary,
+            context=context,
+            note=note,
+            structured=False,  # 流式链路不解析 JSON，见 _build_messages 的说明
         )
         yield from self._llm.stream(
             messages,

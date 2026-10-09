@@ -188,3 +188,23 @@ def test_mock_profile_falls_back_to_marker_path(offline_settings) -> None:
     assert answer.structured is False and answer.format_ok is None
     assert llm.seen[0][0]["content"] == SYSTEM_PROMPT  # 没带 JSON 契约
     assert "chunk_id=" not in llm.seen[0][1]["content"]
+
+
+def test_stream_path_never_asks_for_json(offline_settings) -> None:
+    """流式链路不解析 JSON，就**不能**要求 JSON 契约（ADR-0037 定的就是只非流式）。
+
+    原来两条路共用 self._structured：配置打开结构化输出后走 Web 流式提问时，系统
+    提示照样要求 JSON，而流式路径没有任何解析 → 用户会在聊天里看到一段裸 JSON
+    （2026-10-05 审查）。
+    """
+    gen = Generator(offline_settings, _FakeLLM("x"))
+    gen._structured = True  # 模拟"配置里打开了结构化输出"
+
+    stream_msgs = gen._build_messages("问", HITS, {1: "文档"}, structured=False)
+    assert JSON_OUTPUT_CONTRACT not in stream_msgs[0]["content"]
+    assert JSON_OUTPUT_CONTRACT not in stream_msgs[1]["content"]
+
+    # 非流式路径原样保留契约（chunk_id 声明与 JSON 要求都在）
+    sync_msgs = gen._build_messages("问", HITS, {1: "文档"})
+    assert JSON_OUTPUT_CONTRACT in sync_msgs[0]["content"]
+    assert "chunk_id" in sync_msgs[1]["content"]
