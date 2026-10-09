@@ -428,4 +428,12 @@ const free = (text, citations = []) => renderAnswer(text, citations, false); // 
   assert(fmtTime("") === "", "空值给空串");
 }
 
+/* ---- 正文里真出现 U+E000 时，占位符哨兵要自动加长（2026-10-05 审查）---- */
+{
+  const pua = "\uE000";
+  const t = kb(`正文${pua}2${pua}结尾`, []);
+  assert(t.includes(`${pua}2${pua}`), "正文里的 U+E000 序列原样保留");
+  assert(!t.includes("undefined"), "不会把正文误当占位符还原成 undefined");
+}
+
 console.log(`✓ smoke_render：${passed} 条断言全部通过`);

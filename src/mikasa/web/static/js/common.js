@@ -488,7 +488,11 @@ export function renderAnswer(text, citations, showCites = true) {
   const byMarker = showCites ? new Map(citations.map((c) => [c.marker, c])) : null;
   const mathTokens = []; // 公式的 KaTeX HTML（末段统一还原）
   // 占位符用私用区字符（正常文本与 esc 输出都不会含 ）
-  const PH = "";
+  // 万一文本里**真的**有 U+E000（模型从别处抄来的图标字），就把哨兵加长到不再
+  // 冲突为止——否则正文里恰好出现的「PH+数字+PH」会被当成占位符还原成
+  // tokens[数字]（越界即 undefined，页面上直接显示 undefined，2026-10-05 审查）。
+  let PH = "\uE000";
+  while (text.includes(PH)) PH += "\uE000";
   const inline = (escaped) => {
     // 三段替换串行执行会互相污染（<code> 里的 [n] 也会变 chip），
     // 因此每步先抽到 tokens 数组占位，最后一次性还原。
