@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import re
 import threading
 import uuid
 from pathlib import Path
@@ -113,6 +114,23 @@ def _shares_topic(title: str, candidate: str, minimum: int = 2) -> bool:
     return len(_cjk_bigrams(title) & _cjk_bigrams(candidate)) >= minimum
 
 
+_ARXIV_VERSION_RE = re.compile(r"v\d+$")
+
+
+def _normalize_source_ref(ref: str) -> str:
+    """`source:id` → 去掉 arXiv id 的版本后缀（其余来源原样返回）。
+
+    arXiv 的结果 id 常常带版本号（`2401.12345v2`），而"已在库中"原先拿
+    `source:id` **精确比对**入库时写的 source_ref——同一条记录这次带 v2、
+    下次不带，就对不上，表现为**明明导入过却永远显示"未在库中"**（2026-10-05 审查）。
+    两侧都过这个函数：老库里已经带版本号的行也照常命中。
+    """
+    source, _, ident = ref.partition(":")
+    if source == "arxiv":
+        ident = _ARXIV_VERSION_RE.sub("", ident)
+    return f"{source}:{ident}"
+
+
 def _items_with_library(settings: Settings, papers) -> list[dict]:  # noqa: ANN001 - 序列即可
     """把 PaperResult 序列转成响应项（含"已在库中"标记）。
 
@@ -120,11 +138,11 @@ def _items_with_library(settings: Settings, papers) -> list[dict]:  # noqa: ANN0
     复用同一套行渲染与导入链路（ADR-0020 的 source_ref 语义不变）。
     """
     with open_db(settings.db_path) as conn:
-        in_library = repo.list_source_refs(conn)
+        in_library = {_normalize_source_ref(ref) for ref in repo.list_source_refs(conn)}
     items = []
     for paper in papers:
         item = dataclasses.asdict(paper)
-        item["in_library"] = f"{paper.source}:{paper.id}" in in_library
+        item["in_library"] = _normalize_source_ref(f"{paper.source}:{paper.id}") in in_library
         items.append(item)
     return items
 

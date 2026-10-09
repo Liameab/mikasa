@@ -783,3 +783,35 @@ def test_related_applies_the_topic_guard(client, monkeypatch):
     c, _ = client
     body = c.get("/api/papers/related", params={"source": "openalex", "id": "W2123456789"}).json()
     assert [r["title"][:6] for r in body["results"]] == ["南海北部神狐"]
+
+
+def test_normalize_source_ref_strips_only_arxiv_versions():
+    """只有 arXiv 的 id 去版本后缀（2026-10-05 审查）。"""
+    from mikasa.web.routers.papers import _normalize_source_ref
+
+    assert _normalize_source_ref("arxiv:2401.12345v2") == "arxiv:2401.12345"
+    assert _normalize_source_ref("arxiv:math.AP/0501001v1") == "arxiv:math.AP/0501001"
+    assert _normalize_source_ref("core:72543") == "core:72543"
+    assert _normalize_source_ref("openalex:W123v9") == "openalex:W123v9"
+
+
+def test_in_library_ignores_the_arxiv_version_suffix(client, fake_sources, fake_downloader):
+    """导入过 `2401.12345`，检索回来的是 `2401.12345v2` 也要显示"已在库中"。
+
+    原先是 `source:id` 精确比对：同一条记录这次带版本号、下次不带就对不上，
+    表现为**明明导入过却永远显示"未在库中"**（2026-10-05 审查）。
+    """
+    c, _settings = client
+    src = _FakeSource("arxiv")
+    src.fetch_map["2401.12345"] = _paper("arxiv", "2401.12345")
+    fake_sources("arxiv", src)
+    fake_sources("openalex", _FakeSource("openalex"))
+    assert (
+        c.post("/api/papers/import", json={"source": "arxiv", "id": "2401.12345"}).status_code
+        == 201
+    )
+
+    hits = _FakeSource("arxiv", [_paper("arxiv", "2401.12345v2")])
+    fake_sources("arxiv", hits)
+    body = c.post("/api/papers/search", json={"q": "x", "sources": ["arxiv"]}).json()
+    assert [r["in_library"] for r in body["results"]] == [True]
