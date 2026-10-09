@@ -75,7 +75,15 @@ export function el(tag, attrs = {}, ...children) {
 /** ISO 时间 → "MM-DD HH:mm"（消息/会话列表的紧凑时间）。 */
 export function fmtTime(iso) {
   if (!iso) return "";
-  const d = new Date(iso);
+  // SQLite 的 datetime('now') 是 **UTC**，且形如 "2026-10-09 01:57:44"（没有时区
+  // 标记）。JS 对这种串按**本地时间**解析，于是显示出来的比真实时刻差一个时区
+  // （北京 +8h：刚发的消息显示成 8 小时前，2026-10-05 审查）。没有时区标记的
+  // 一律按 UTC 解析，再由下面几个本地 getter 转成本地时间展示。
+  const raw = String(iso);
+  const normalized = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(raw)
+    ? `${raw.replace(" ", "T")}Z`
+    : raw;
+  const d = new Date(normalized);
   const pad = (n) => String(n).padStart(2, "0");
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }

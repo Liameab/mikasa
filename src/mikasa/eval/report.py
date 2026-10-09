@@ -18,6 +18,7 @@ from mikasa.config.settings import Settings
 from mikasa.eval.golden import GoldenSet
 from mikasa.eval.metrics import bootstrap_ci, summarize
 from mikasa.eval.runner import EvalResult, ItemRecord
+from mikasa.utils.text import local_time_text
 
 # 报告列宽口径：markdown 管道表不换行，数值列统一对齐
 _HEADER_SEP = "---"
@@ -350,7 +351,8 @@ def _meta_table(
         set_label += f"，**自动生成**（{golden.model or '未知模型'}）"
     rows = [
         ["run id", str(run_id) if run_id is not None else "—（未落库）"],
-        ["时间", created_at or datetime.now().isoformat(timespec="seconds")],
+        # 库里存的是 UTC（无时区标记），印出来前先转本地——否则报告时间差一个时区
+        ["时间", local_time_text(created_at) or datetime.now().isoformat(timespec="seconds")],
         ["profile", result.profile],
         ["黄金集", set_label],
         ["生成模型", f"{settings.llm.backend} / {settings.llm.model}"],

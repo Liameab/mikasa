@@ -41,6 +41,7 @@ from mikasa.providers.ollama import (
     ollama_api_root as _ollama_api_root,  # noqa: F401 - 兼容别名（单测按旧名引用）
 )
 from mikasa.utils.logging import default_log_file, get_logger, setup_logging
+from mikasa.utils.text import local_time_text
 
 app = typer.Typer(
     name="mikasa",
@@ -515,7 +516,7 @@ def list_documents(
             f"{doc.char_count:,}",
             str(doc.chunk_count),
             doc.ingest_status,
-            (doc.updated_at or "")[:19],
+            local_time_text(doc.updated_at),
         )
     console.print(table)
 
@@ -777,7 +778,7 @@ def eval_list(
             (row["corpus_sha256"] or "")[:12] + "…",
             Text(llm_model),
             Text(judge_model),
-            (row["created_at"] or "")[:19],
+            local_time_text(row["created_at"]),
         )
     console.print(table)
 

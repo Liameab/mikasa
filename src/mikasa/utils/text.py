@@ -15,6 +15,23 @@ from __future__ import annotations
 import html
 import re
 import unicodedata
+from datetime import UTC, datetime
+
+
+def local_time_text(stamp: str | None) -> str:
+    """库里的 UTC 时间戳（`YYYY-MM-DD HH:MM:SS`）→ 本地时间文本。
+
+    库里 created_at / updated_at 一律是 SQLite 的 `datetime('now')`：**UTC 且不带
+    时区标记**。直接印给用户看就差一个时区偏移（北京 8 小时，2026-10-05 审查）。
+    认不出的值原样返回；空值返回空串（调用方据此走兜底）。
+    """
+    if not stamp:
+        return ""
+    try:
+        dt = datetime.strptime(stamp[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+    except ValueError:
+        return stamp
+    return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def normalize_text(text: str) -> str:

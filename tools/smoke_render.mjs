@@ -17,8 +17,16 @@ const source = fs.readFileSync(
   "utf8"
 );
 const mod = await import("data:text/javascript;base64," + Buffer.from(source).toString("base64"));
-const { renderAnswer, renderCitations, renderMarkdown, fmtLatency, fmtSeconds, errorMessage, el } =
-  mod;
+const {
+  renderAnswer,
+  renderCitations,
+  renderMarkdown,
+  fmtLatency,
+  fmtSeconds,
+  fmtTime,
+  errorMessage,
+  el,
+} = mod;
 
 let passed = 0;
 const assert = (cond, msg) => {
@@ -406,6 +414,18 @@ const free = (text, citations = []) => renderAnswer(text, citations, false); // 
   assert(texts(withNull).join("|") === "标题", "null 子节点不产生文本");
   const withUndef = el("div", {}, undefined, "实文本");
   assert(texts(withUndef).join("|") === "实文本", "undefined 子节点同样跳过");
+}
+
+/* ---- fmtTime：无时区标记的 SQLite 时间戳按 UTC 解析（2026-10-05 审查）---- */
+{
+  const expect = (() => {
+    const d = new Date("2026-10-09T01:57:44Z");
+    const p = (n) => String(n).padStart(2, "0");
+    return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  })();
+  assert(fmtTime("2026-10-09 01:57:44") === expect, "无时区时间戳按 UTC 解析再转本地");
+  assert(fmtTime("2026-10-09T01:57:44Z") === expect, "带 Z 的原样解析");
+  assert(fmtTime("") === "", "空值给空串");
 }
 
 console.log(`✓ smoke_render：${passed} 条断言全部通过`);

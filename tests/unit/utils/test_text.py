@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC
+
 from mikasa.utils.text import decode_text, is_english_dominant, normalize_text, strip_repeated_lines
 
 
@@ -115,3 +117,22 @@ def test_strip_markup_removes_tags_and_restores_entities():
     assert strip_markup("A &amp; B &lt;5 mg/L") == "A & B <5 mg/L"
     assert strip_markup("  多  <i>空</i>  白  ") == "多 空 白"
     assert strip_markup("") == ""
+
+
+def test_local_time_text_converts_stored_utc_to_local():
+    """库里存的 UTC 时间戳要转成本地时间再展示（2026-10-05 审查）。
+
+    created_at / updated_at 一律是 SQLite 的 `datetime('now')`——UTC 且不带时区
+    标记，直接印出来差一个时区偏移（北京 8 小时）。期望值现算，免得机器时区
+    不同就红（CI 的 ubuntu 跑在 UTC）。
+    """
+    from datetime import datetime
+
+    from mikasa.utils.text import local_time_text
+
+    expect = datetime(2026, 10, 9, 1, 57, 44, tzinfo=UTC).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    assert local_time_text("2026-10-09 01:57:44") == expect
+    # 认不出的值原样返回、空值给空串——都不抛
+    assert local_time_text("不是时间") == "不是时间"
+    assert local_time_text(None) == ""
+    assert local_time_text("") == ""
