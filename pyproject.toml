@@ -30,9 +30,11 @@ classifiers = [
 # 版本锁定说明（详见 docs/design-decisions.md 的 ADR 记录）：
 #   - openai>=3.20.0,<4  : 3.0 起更换底层传输层（httpx2），API 层不变；若遇 TLS
 #                       问题可退回 openai<3（ADR-0006）
-#   - jieba==0.42.1 + setuptools<85 : 2026 年起新版 setuptools 移除
-#                       pkg_resources 导致 import jieba 崩溃（jieba#1043），
-#                       此为官方认可的临时方案；另有纯 Python bigram 兜底
+#   - jieba==0.42.1 + setuptools<85 : 新版 setuptools 起不再带 pkg_resources
+#                       （jieba#1043 的背景）。jieba 的 `_compat.py` 对该 import
+#                       有 try/except 兜底，2026-10-09 实测 setuptools 84 +
+#                       Python 3.13 下 import 与分词均正常——上限只留一档缓冲；
+#                       另有纯 Python bigram 兜底，doctor 会报生效实现
 #   - numpy>=2.1,<3   : fastembed 0.8 要求 numpy>=2.1，勿锁回 1.x
 # ---------------------------------------------------------------------------
 dependencies = [
