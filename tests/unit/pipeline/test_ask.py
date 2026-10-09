@@ -1261,3 +1261,34 @@ def test_history_summary_survives_a_lone_assistant_message(offline_settings):
     assert summary is not None
     assert "第一问" in summary
     assert "第二问" in summary, "孤儿 assistant 行之后的轮次被错位丢掉了"
+
+
+def test_free_stream_records_token_usage(tmp_path, offline_settings):
+    """free 流式也要记 token 用量（2026-10-05 审查）。
+
+    kb 流式在流尽后读 `last_usage`，而 free 流式原先两个字段恒为 None——同一份
+    用量统计里少了一半来源，界面上显示"—"。
+    """
+    _seed(tmp_path, offline_settings)
+    svc = AskService(offline_settings)
+
+    class _UsageLLM:
+        model = "fake"
+
+        def __init__(self) -> None:
+            self.last_usage = (None, None)
+
+        def stream(self, messages, *, temperature, max_tokens):  # noqa: ANN001, ARG002
+            yield "答"
+            yield "案"
+            self.last_usage = (7, 9)
+
+    svc._llm = _UsageLLM()
+    with open_db(offline_settings.db_path) as conn:
+        sid = repo.create_session(conn, offline_settings.profile)
+        conn.commit()
+
+    events = list(svc._free_stream("问题", sid))
+    done = next(e for e in events if e.kind == "done")
+    assert done.answer.prompt_tokens == 7
+    assert done.answer.completion_tokens == 9

@@ -37,3 +37,31 @@ def test_sse_response_headers():
     resp = sse_response(iter([]))
     assert resp.media_type == "text/event-stream"
     assert resp.headers["cache-control"] == "no-cache"
+
+
+def test_disconnect_closes_the_sync_iterator():
+    """客户端断开时要**显式** close 同步生成器（2026-10-05 审查）。
+
+    Starlette 的 StreamingResponse 只做 iterate_in_threadpool，断开时不会 close
+    那个同步生成器——它的 finally（收尾、关上游流）要等 GC 才跑。
+    """
+    import asyncio
+
+    from mikasa.web.sse import _closing_stream
+
+    closed: list[str] = []
+
+    def frames():
+        try:
+            yield "a"
+            yield "b"
+        finally:
+            closed.append("closed")
+
+    async def consume_then_abort() -> None:
+        agen = _closing_stream(frames())
+        assert await agen.__anext__() == "a"
+        await agen.aclose()  # 模拟客户端断开
+
+    asyncio.run(consume_then_abort())
+    assert closed == ["closed"]

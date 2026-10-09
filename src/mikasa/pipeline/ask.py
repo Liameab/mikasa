@@ -927,6 +927,11 @@ class AskService:
             refused=False,
             model=self._llm.model,
             latency_ms={"generate": round((time.perf_counter() - t0) * 1000.0, 1)},
+            # 用量与 kb 流式同口径（ADR-0038）：provider 流尽后把末帧用量放在
+            # `last_usage` 上。原先 free 流式两个字段恒为 None，用量统计少一半
+            # （2026-10-05 审查）。
+            prompt_tokens=getattr(self._llm, "last_usage", (None, None))[0],
+            completion_tokens=getattr(self._llm, "last_usage", (None, None))[1],
         )
         self._log(answer, question, [])
         self._record(session_id, question, answer)
