@@ -24,8 +24,8 @@ RRF 融合、中文结构化分块、引用协议、三阶段自动化评测都�
 <!-- 主截图占位（先留位，补图后取消注释）：
 ![问答页：回答带可点击的引用角标](docs/images/qa-citations.png) -->
 
-**当前版本 v0.1.15**（[下载](https://github.com/Liameab/mikasa/releases/latest)）：
-1188 单测全绿、ruff + mypy clean、覆盖率 ~92%；Windows 免安装包与安装向导，
+**当前版本 v0.1.16**（[下载](https://github.com/Liameab/mikasa/releases/latest)）：
+1210 单测全绿、ruff + mypy clean、覆盖率 ~92%；Windows 免安装包与安装向导，
 应用内自带「检查更新 → 一键下载安装」（断点续传，关弹窗/切页/刷新都不打断，ADR-0024）。
 逐版沿革见文末[里程碑](#里程碑)。
 
@@ -221,7 +221,7 @@ claude mcp list          # 应显示 mikasa ✔ Connected
   英文镜像在 [README.en.md](README.en.md) 与 [`docs/en/`](docs/en/)——两棵树同名文件一一对应，
   有护栏测试盯着（`tests/unit/web/test_docs_trees.py`）；ruff + mypy 三绿基线
   `ruff format . && ruff check . && mypy src`（整仓，不只 `src tests`——CI 也是整仓查）；
-- 测试与覆盖率：**1188 单测**，覆盖率 ~92%（见 evaluation.md 回归门禁）；
+- 测试与覆盖率：**1210 单测**，覆盖率 ~92%（见 evaluation.md 回归门禁）；
 - 零编译安装：Windows + CPython 3.13 全部依赖均有预编译 wheel
   （版本锁定理由见 pyproject.toml 注释与 ADR-0006/0008）。
 
@@ -276,6 +276,7 @@ config/           # profiles/*.yaml + 全字段示例
 | v0.1.13 | **MCP server**（`mikasa mcp`：把知识库挂给 Claude Code / Codex 这类 agent，三个只读工具 search/read/ask，agent 提问不落库，ADR-0036）+ **token 用量可见**（问答 who 行 / 评测报告 / `mikasa usage`，只报 token 不折算钱，ADR-0038）+ **代理根治**（带系统代理的机器上，发往本机 Ollama 的请求一律直连——原来被塞进代理假死）+ 本机档生成超时 60s→180s（长回答不再整题丢失）+ 阅读器三修（适应窗口默认 / 提问框自增高 / 计时 1000×）+ 提示词示范例占位符化（小模型不再照抄示范，ADR-0040）；评测侧：置信区间与配对比较、claim 级忠实性（ADR-0042）、RAGAS 对照（ADR-0043） | ✅ 1163 tests |
 | v0.1.14 | **论文表格盘点**（用户报"把这篇论文所有表格提取出来"答不出：全局聚合题装不进 top-k 采样）——阅读器新标签**「表格 N」**列出本篇全部表块（页码+预览，点击跳页面视图高亮，纯前端零新端点），问答识别"列出/提取所有表格"意图后**跳过采样、把全部表块按序喂模型**，逐张一行出清单、角标可点；小模型会照抄提示词占位符与格式，服务端做了确定性归化兜底（docs/limitations §13） | ✅ 1170 tests |
 | v0.1.15 | **全仓代码审查的 15 条修复**（安全 5：页面路由可读任意文件 / 登录页反射注入与开放重定向 / `--reload --host 0.0.0.0` 口令门失效 / 密钥槽名注入 .env / 保存路径绕过出网闸门；数据 5：入库失败改为留痕标 failed、同批同名互覆、大小写不敏感副本误删、reindex 失败仍删属性映射、Setext 吞行；崩溃 5：向量混维降级、重排形状校验与空回退、阅读器偏移改 UTF-16、空回答守卫、历史按角色配对）——每条先写会红的回归测试再修，案例表见 docs/limitations §五 | ✅ 1188 tests |
+| v0.1.16 | **审查长尾第二批 + 首页重排**（边界 9：出图并发临时文件 / 口令 cookie 非 ASCII 本该 401 / 跨站写闸门比端口 / 源响应截断 / jieba 大小写不一致 / cwd config.yaml 抢档 / 找论文显示字面量 null / 图片 URL 反斜杠 / 更新失败无重试入口；解析与流式 5：BOM 丢标题、front-matter 抢标题、结构化输出污染流式、SSE 断连不收尾、free 流式不记用量；会话与评测 4：幽灵空会话、黄金集损坏报错、arXiv 版本号导致"未在库中"、一条空跑的迁移测试）；同批把首页改成"安装优先"并加徽章 | ✅ 1210 tests |
 
 ## 许可证
 
