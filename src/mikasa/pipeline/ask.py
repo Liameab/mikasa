@@ -269,16 +269,26 @@ class AskService:
         if not question:
             raise StorageError("问题为空")
         self._guard_mode(mode)
-        if session_id is None:
+        created_here = session_id is None
+        if created_here:
             with open_db(self.settings.db_path) as conn:
                 session_id = repo.create_session(conn, self.settings.profile)
 
-        if mode == "free":
-            answer = self._complete_free(question, self._raw_history(session_id))
-        else:
-            history = self._history_summary(session_id)
-            answer = self._answer(question, history)
-        self._record(session_id, question, answer)
+        try:
+            if mode == "free":
+                answer = self._complete_free(question, self._raw_history(session_id))
+            else:
+                history = self._history_summary(session_id)
+                answer = self._answer(question, history)
+            self._record(session_id, question, answer)
+        except BaseException:
+            # 失败不留"幽灵空会话"：会话是提问前就建的，中途抛错（模型故障、额度
+            # 用尽）时 Web 端有 qa.py 兜底，CLI/MCP 这条路上原先会留一条空对话。
+            if created_here:
+                with open_db(self.settings.db_path) as conn:
+                    repo.delete_session_if_empty(conn, session_id)
+                    conn.commit()
+            raise
         return answer
 
     def ask_stream(

@@ -138,11 +138,7 @@ def _resolve_session(settings: Settings, session_id: int | None) -> tuple[int, b
 def _drop_session_if_empty(settings: Settings, session_id: int) -> None:
     """删除"一条消息都没有"的会话（失败清理专用，双保险再查一次消息表）。"""
     with open_db(settings.db_path) as conn:
-        if repo.get_session(conn, session_id) is None:
-            return
-        if repo.messages_by_session(conn, session_id):
-            return  # 已经有落库消息：那是用户的东西，绝不删
-        repo.delete_session(conn, session_id)
+        repo.delete_session_if_empty(conn, session_id)
         conn.commit()
 
 

@@ -1292,3 +1292,40 @@ def test_free_stream_records_token_usage(tmp_path, offline_settings):
     done = next(e for e in events if e.kind == "done")
     assert done.answer.prompt_tokens == 7
     assert done.answer.completion_tokens == 9
+
+
+def test_failed_ask_leaves_no_empty_session(tmp_path, offline_settings, monkeypatch):
+    """提问失败不留"幽灵空会话"（2026-10-05 审查）。
+
+    `ask()` 是"先建会话再问"：中途抛错（模型故障 / 额度用尽）时 Web 端有
+    qa.py 的兜底，而 CLI / MCP 这条路上会留下一条一条消息都没有的对话——在
+    会话树里就是一条点开什么都没有的空壳。
+    """
+    _seed(tmp_path, offline_settings)
+    svc = AskService(offline_settings)
+
+    def boom(*args, **kwargs):  # noqa: ANN002, ANN003, ARG001
+        raise ProviderError("模拟模型故障")
+
+    monkeypatch.setattr(svc, "_answer", boom)
+    with pytest.raises(ProviderError):
+        svc.ask("L2 正则化是什么？")
+    assert _count(offline_settings, "qa_sessions") == 0
+
+
+def test_failed_ask_keeps_a_previous_session(tmp_path, offline_settings, monkeypatch):
+    """已有历史的会话（显式传 session_id）失败了也**绝不能删**。"""
+    _seed(tmp_path, offline_settings)
+    svc = AskService(offline_settings)
+    first = svc.ask("L2 正则化是什么？")
+    assert not first.refused
+    with open_db(offline_settings.db_path) as conn:
+        sid = int(conn.execute("SELECT id FROM qa_sessions ORDER BY id LIMIT 1").fetchone()[0])
+
+    def boom(*args, **kwargs):  # noqa: ANN002, ANN003, ARG001
+        raise ProviderError("模拟模型故障")
+
+    monkeypatch.setattr(svc, "_answer", boom)
+    with pytest.raises(ProviderError):
+        svc.chat(sid, "再问一句")
+    assert _count(offline_settings, "qa_sessions") == 1

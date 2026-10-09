@@ -463,6 +463,21 @@ def insert_qa_message(
     )
 
 
+def delete_session_if_empty(conn: sqlite3.Connection, session_id: int) -> bool:
+    """删掉"一条消息都没有"的会话；有消息或会话不存在则不动。返回是否删了。
+
+    失败清理专用（"别在会话树里留幽灵空对话"）：双保险再查一次消息表——已经有
+    落库消息的会话是用户的东西，绝不删。CLI/MCP 与 Web 两条路共用这一份判据
+    （原先只写在 Web 路由里，CLI 失败就会留下空会话，2026-10-05 审查）。
+    """
+    if get_session(conn, session_id) is None:
+        return False
+    if messages_by_session(conn, session_id):
+        return False
+    delete_session(conn, session_id)
+    return True
+
+
 def messages_by_session(conn: sqlite3.Connection, session_id: int) -> list[dict]:
     rows = conn.execute(
         "SELECT * FROM qa_messages WHERE session_id = ? ORDER BY id", (session_id,)
