@@ -12,17 +12,27 @@ quality ourselves: every trade-off, price and mistake is written up in the
 [design decisions](docs/en/design-decisions.md) and the
 [failure archive](docs/en/limitations-and-failures.md).
 
-**Status**: M0 skeleton → M1 core pipeline → M2 automated evaluation → M3 web UI → M3.5 dual QA
-modes → M4 local profile → M4.5 session management (including the first real schema migration v1→v2)
-→ corpus folders v3 → table rendering → cross-lingual retrieval → original + translation for cited
-English passages → document reader with citation jump → pre-M5 audit (23 fixes, 4 of them
-data-safety) → packaged installer → model settings in the panel → the embedding model shipped inside the package (first ingest is offline, ADR-0030) → text-to-image (draw straight from the ask page, ADR-0031) → Claude/OpenAI presets and in-app model pulling (ADR-0032) → browser/LAN access with an access password (ADR-0033) → ask-while-reading in the reader (ADR-0034)
-→ an MCP server (plug the knowledge base into AI agents, ADR-0036) → visible token usage (ADR-0038)
-→ confidence intervals and paired comparisons in evaluation → direct connections for local/private hosts (no more hangs behind a system proxy) → paper tables inventoried (a reader tab listing every table, plus a "list all tables" phrasing that bypasses sampling and enumerates them all) → the 15 fixes from a full-repo audit (security and data-safety boundaries; see docs/en/limitations §7). Currently **1188 tests passing**,
-ruff + mypy clean, ~92% coverage. Windows portable zip and installer builds are published
-(v0.1.0 → v0.1.15) with in-app update checking — downloads resume across dropped connections, and
-closing the dialog, switching pages or reloading no longer interrupts them (progress lives in a
-top-bar pill; ADR-0024).
+[![CI](https://github.com/Liameab/mikasa/actions/workflows/ci.yml/badge.svg)](https://github.com/Liameab/mikasa/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Liameab/mikasa)](https://github.com/Liameab/mikasa/releases/latest)
+[![License](https://img.shields.io/github/license/Liameab/mikasa)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.13-blue)](pyproject.toml)
+
+**Who it is for**: anyone who wants their pile of PDFs, notes and papers to become a private
+knowledge base they can *ask*, and still trace every claim back to the source — and anyone who
+wants to see how each layer of a RAG system is implemented and measured. **What is different**:
+you never have to trust the model. Every factual sentence carries a clickable `[n]` marker, the
+numbering is checked by the program (out-of-range markers are counted as violations), and when
+the evidence is missing the only allowed output is a fixed refusal sentence — a protocol that is
+scored item by item in the automated evaluation instead of hoped for via prompting.
+
+<!-- Screenshot placeholder (left blank for now):
+![Ask page: answers with clickable citation markers](docs/images/qa-citations.png) -->
+
+**Current version v0.1.15** ([download](https://github.com/Liameab/mikasa/releases/latest)):
+1188 tests passing, ruff + mypy clean, ~92% coverage. Windows portable zip and installer builds
+are published with in-app update checking — downloads resume across dropped connections, and
+closing the dialog, switching pages or reloading never interrupts them (progress lives in a
+top-bar pill; ADR-0024). Version-by-version history is in [Milestones](#milestones) at the end.
 
 ## Highlights
 
@@ -92,7 +102,26 @@ top-bar pill; ADR-0024).
 > the two trees correspond file by file and a guardrail test keeps them that way. Source comments
 > are in Chinese, the working language of this project's design notes.
 
-## Quick start
+## Install
+
+**The fastest path (Windows)**: grab `Mikasa-Setup-<version>-win64.exe` (or the portable
+`Mikasa-v<version>-win64.zip`) from [Releases](https://github.com/Liameab/mikasa/releases/latest)
+and follow the in-app onboarding. Installing over an old version is fine — **your knowledge base
+is untouched** (it lives in `%LOCALAPPDATA%\Mikasa`).
+
+**The two prerequisites people trip over first**:
+
+1. **A model source** — either install [Ollama](https://ollama.com) locally and
+   `ollama pull qwen3:8b` (~4.9 GB, or let the app pull it from the settings panel), or paste a
+   cloud API key in the panel's "Model" section (DeepSeek / SiliconFlow / Claude / OpenAI / any
+   OpenAI-compatible service — six presets).
+2. **A corpus** — upload PDF / Markdown / TXT / DOCX, or import open-access papers from the
+   "Papers" page.
+
+No model yet? `--profile offline` runs the whole pipeline (ingest → retrieve → cite → evaluate)
+with the built-in MockLLM and no keys, so you can look at the shape before choosing a model.
+
+## Quick start (source / other platforms)
 
 ```bash
 # 1) Install (development mode; no compilation needed on Windows)
@@ -219,7 +248,40 @@ Agent questions **leave no trace** in your Q&A history, and on the offline (mock
 | `mcp` | Expose the library to agents (MCP server over stdio): three read-only tools `search` / `read` / `ask` (ADR-0036) |
 | `usage` | Local cumulative token usage: Q&A (by profile) plus evaluation (by session) and a grand total (tokens only, never converted to money — ADR-0038) |
 
+## Engineering notes
+
+- Python ≥ 3.11 (3.13 recommended); optional NVIDIA GPU for local inference;
+- Source comments and the README are written in **Chinese** (the project's working language; this
+  page is the English edition); baseline gates are `ruff format`, `ruff check`, `mypy`, and
+  `pytest`;
+- Current suite: **1188 tests**, coverage ~92% (see the regression gate in `docs/en/evaluation.md`);
+- Zero-compilation install on Windows + CPython 3.13 (all dependencies ship prebuilt wheels;
+  see `pyproject.toml` and ADR-0006/0008 for the version-pinning rationale).
+
+## Project layout
+
+```
+src/mikasa/
+├── cli/          # typer + rich commands
+├── web/          # FastAPI + plain HTML/JS (chat / library / papers / evaluation + login)
+├── pipeline/     # retrieve → inject → generate → verify orchestration (citation protocol)
+├── ingest/       # four-format loaders + Chinese structural chunking
+├── index/        # self-implemented BM25 / numpy exact vector search / RRF fusion
+├── eval/         # golden-set evaluation: three stages + judge + question generation
+├── papers/       # online paper search: four sources + a defended PDF downloader
+├── update/       # in-app updates: check / resumable download / verify / launch installer
+├── providers/    # LLM (compatible surface + Ollama native) / embedding / rerank / vision / image
+├── storage/      # SQLite + meta.json snapshots
+└── config/       # pydantic settings (three profiles merged)
+sample-corpus/    # original sample corpus (MD / TXT / DOCX / PDF)
+evals/            # golden-set source (questions.yaml → golden_set.json)
+config/           # profiles/*.yaml + commented example
+```
+
 ## Milestones
+
+One row per milestone or release; the numbers in brackets are the collectible test count at the
+time (the suite grows with the features).
 
 | | What | State |
 | --- | --- | --- |
@@ -248,36 +310,6 @@ Agent questions **leave no trace** in your Q&A history, and on the offline (mock
 | v0.1.14 | **Paper tables inventoried** (a user report: "list every table in this paper" could not be answered — a global aggregation that top-k sampling cannot fit): a new reader tab **Tables** listing every table chunk of the document (page + preview, click to highlight it in the page view; pure frontend, zero new endpoints), and an inventory intent in chat that **skips sampling and feeds every table chunk in order**, answering as a one-row-per-table list with clickable markers; because small models copy prompt placeholders and marker formats verbatim, the server normalizes the echoed markers deterministically (docs/en/limitations §13) | ✅ 1170 tests |
 | v0.1.15 | **The 15 fixes from a full-repo audit** (security: a page route could read any file / the login page reflected input and allowed an open redirect / `--reload --host 0.0.0.0` dropped the auth gate / a key slot name could inject a `.env` line / the save path skipped the SSRF guard. Data: a failed ingest now leaves a `failed` row instead of vanishing, same-named files in one batch overwrote each other, deleting a row on a case-insensitive filesystem could remove another row's only copy, a failed reindex still dropped the property map, a Setext heading swallowed the next line. Crashes: mixed vector dimensions now degrade instead of 500ing, a malformed reranker response is validated and empty results fall back to the fused order, reader offsets are UTF-16, an empty completion raises, and history pairs by role) — every fix landed behind a regression test that failed first; case table in docs/en/limitations §7 | ✅ 1188 tests |
 | v0.1.12 | **Ask-while-reading in the reader** (a persistent ask bar at the bottom of the reader: scope defaults to "this document" with one-click "whole library", selected text becomes context, every retrieved hit is listed and clicking one jumps back to the highlighted passage, and questions are never saved to a session - ADR-0034); **"the API key had to be re-pasted on every switch" fixed** (the panel's "saved" hint described the currently active slot only - it now follows the slot of the source you picked; the key was never lost); **local-model question generation no longer times out** (thinking forced off locally, per-call timeout raised to 120s, and the error text now lists three things to try) | ✅ 1048 tests |
-
-## Engineering notes
-
-- Python ≥ 3.11 (3.13 recommended); optional NVIDIA GPU for local inference;
-- Source comments and the README are written in **Chinese** (the project's working language; this
-  page is the English edition); baseline gates are `ruff format`, `ruff check`, `mypy`, and
-  `pytest`;
-- Current suite: **1170 tests**, coverage ~92% (see the regression gate in `docs/en/evaluation.md`);
-- Zero-compilation install on Windows + CPython 3.13 (all dependencies ship prebuilt wheels;
-  see `pyproject.toml` and ADR-0006/0008 for the version-pinning rationale).
-
-## Project layout
-
-```
-src/mikasa/
-├── cli/          # typer + rich commands
-├── web/          # FastAPI + plain HTML/JS (chat / library / papers / evaluation + login)
-├── pipeline/     # retrieve → inject → generate → verify orchestration (citation protocol)
-├── ingest/       # four-format loaders + Chinese structural chunking
-├── index/        # self-implemented BM25 / numpy exact vector search / RRF fusion
-├── eval/         # golden-set evaluation: three stages + judge + question generation
-├── papers/       # online paper search: four sources + a defended PDF downloader
-├── update/       # in-app updates: check / resumable download / verify / launch installer
-├── providers/    # LLM (compatible surface + Ollama native) / embedding / rerank / vision / image
-├── storage/      # SQLite + meta.json snapshots
-└── config/       # pydantic settings (three profiles merged)
-sample-corpus/    # original sample corpus (MD / TXT / DOCX / PDF)
-evals/            # golden-set source (questions.yaml → golden_set.json)
-config/           # profiles/*.yaml + commented example
-```
 
 ## License
 

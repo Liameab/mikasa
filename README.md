@@ -11,19 +11,23 @@ RRF 融合、中文结构化分块、引用协议、三阶段自动化评测都�
 [设计决策记录](docs/design-decisions.md) 与
 [失败档案](docs/limitations-and-failures.md) 里。
 
-**项目状态**：M0 骨架 → M1 核心管道 → M2 自动化评测 → M3 Web 界面 →
-M3.5 问答双模式 → M4 本地推理 profile → M4.5 会话管理升级（含首次真实
-schema 迁移 v1→v2，见 ADR-0004 修订段）→ 语料文件夹 v3 → 表格形态呈现
-→ 跨语言检索 → 英文引用附原文/译文对照 → 文档阅读视图 + 引用跳转
-→ M5 前全量排查（修 23 项，含 4 项数据安全级）→ 安装版打包 → 设置面板模型接入 → 向量模型随包携带（首次入库不再联网，ADR-0030）
-→ 文生图（问答页直接出图，ADR-0031）→ 模型来源补齐 Claude / OpenAI + 本机模型在应用内拉取（ADR-0032）
-→ 浏览器 / 局域网访问 + 访问口令（ADR-0033）→ 阅读器「边看边问」（ADR-0034）
-→ MCP server（把知识库挂给 AI agent 用，ADR-0036）→ token 用量可见（ADR-0038）
-→ 评测置信区间与配对比较 → 本机/内网地址直连（带系统代理的机器上不再假死）
-→ 论文表格盘点（阅读器「表格 N」清单 + "列出所有表格"问法绕开采样、全部枚举）。
-当前 **1188 tests 全绿**，ruff + mypy clean，覆盖率 ~92%。已发布 Windows 免安装包与安装向导
-（v0.1.0 → v0.1.15），应用内自带「检查更新 → 一键下载安装」——下载支持断点续传，
-关掉弹窗/切页/刷新都不会打断，进度落在顶栏胶囊上（ADR-0024）。
+[![CI](https://github.com/Liameab/mikasa/actions/workflows/ci.yml/badge.svg)](https://github.com/Liameab/mikasa/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Liameab/mikasa)](https://github.com/Liameab/mikasa/releases/latest)
+[![License](https://img.shields.io/github/license/Liameab/mikasa)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.13-blue)](pyproject.toml)
+
+**给谁用**：想把自己那堆 PDF / 笔记 / 论文变成"能问、而且追得到原文"的私人知识库的人；
+以及想看清一个 RAG 系统**每一层怎么实现、怎么评测**的人。**最不一样的地方**是它不需要
+你信任模型：回答里每个事实性陈述都带可点击的 `[n]` 角标，编号由程序校验、越界即计数，
+资料不足时只允许一句固定拒答——这套协议在自动化评测里逐项留痕，而不是靠提示词祈祷。
+
+<!-- 主截图占位（先留位，补图后取消注释）：
+![问答页：回答带可点击的引用角标](docs/images/qa-citations.png) -->
+
+**当前版本 v0.1.15**（[下载](https://github.com/Liameab/mikasa/releases/latest)）：
+1188 单测全绿、ruff + mypy clean、覆盖率 ~92%；Windows 免安装包与安装向导，
+应用内自带「检查更新 → 一键下载安装」（断点续传，关弹窗/切页/刷新都不打断，ADR-0024）。
+逐版沿革见文末[里程碑](#里程碑)。
 
 ## 亮点
 
@@ -75,7 +79,24 @@ schema 迁移 v1→v2，见 ADR-0004 修订段）→ 语料文件夹 v3 → 表�
 | [已知问题与改进 backlog](docs/known-issues.md) | 未修复问题（裁决记录）与未排期候选的统一清单 |
 | [设计系统](DESIGN.md) | Web UI 的 token、字阶、圆角语法、z-index 阶梯与组件契约 |
 
-## 快速开始
+## 安装
+
+**最快的一条路（Windows）**：到 [Releases](https://github.com/Liameab/mikasa/releases/latest)
+下载 `Mikasa-Setup-<版本>-win64.exe`（或免安装的 `Mikasa-v<版本>-win64.zip`），装完按
+应用内的引导走一遍即可。装过旧版的直接覆盖安装，**知识库不受影响**（数据在
+`%LOCALAPPDATA%\Mikasa`）。
+
+**第一次用最容易卡住的两个前置**：
+
+1. **一个模型来源**——要么本机装 [Ollama](https://ollama.com) 再 `ollama pull qwen3:8b`
+   （约 4.9GB，也可以让应用在设置面板里帮你拉）；要么在设置面板「模型」里贴一个云端
+   API 密钥（DeepSeek / SiliconFlow / Claude / OpenAI / 任意 OpenAI 兼容服务，共六个预设）。
+2. **一份语料**——上传 PDF / Markdown / TXT / DOCX，或直接用「找论文」页导入开放获取论文。
+
+没接模型也不要紧：`--profile offline` 用内置 MockLLM 零密钥跑通全流程
+（导入 → 检索 → 引用 → 评测），先看形态再决定接哪个模型。
+
+## 快速开始（源码 / 其它平台）
 
 ```bash
 # 1) 安装（开发模式；Windows 全程零编译）
@@ -193,7 +214,40 @@ claude mcp list          # 应显示 mikasa ✔ Connected
 约 4-5 分钟）；结果落 `data/eval-reports/{run_id:04d}-{name}.md`，读报告指南
 见 evaluation.md。离线回归：`mikasa eval run --profile offline`。
 
-## 里程碑
+## 环境与工程纪律
+
+- Python ≥ 3.11（推荐 3.13）；可选 NVIDIA 显卡（本地推理加速）；
+- **源码注释与文档一律中文为主**（项目工作语言）：README 与 `docs/*.md` 都是中文，
+  英文镜像在 [README.en.md](README.en.md) 与 [`docs/en/`](docs/en/)——两棵树同名文件一一对应，
+  有护栏测试盯着（`tests/unit/web/test_docs_trees.py`）；ruff + mypy 三绿基线
+  `ruff format . && ruff check . && mypy src`（整仓，不只 `src tests`——CI 也是整仓查）；
+- 测试与覆盖率：**1188 单测**，覆盖率 ~92%（见 evaluation.md 回归门禁）；
+- 零编译安装：Windows + CPython 3.13 全部依赖均有预编译 wheel
+  （版本锁定理由见 pyproject.toml 注释与 ADR-0006/0008）。
+
+## 项目结构
+
+```
+src/mikasa/
+├── cli/          # typer+rich 命令
+├── web/          # FastAPI + 原生 HTML/JS（问答/知识库/找论文/评测四页 + 登录页）
+├── pipeline/     # 检索→注入→生成→校验编排（含引用协议）
+├── ingest/       # 四格式 loader + 中文结构分块
+├── index/        # 自实现 BM25 / numpy 精确向量 / RRF 融合 / 分词降级
+├── eval/         # 黄金集评测：三阶段口径 + 裁判 + 自动出题
+├── papers/       # 在线找论文：四源检索 + 有防线的 PDF 下载器
+├── update/       # 应用内更新：检查 / 可续传下载 / 校验 / 启动安装
+├── providers/    # LLM（兼容面 + Ollama 原生）/嵌入/重排/视觉/出图：Protocol + 实现
+├── storage/      # SQLite + meta.json 快照
+└── config/       # pydantic 配置（三 profile 合并）
+sample-corpus/    # 原创 AI 学习笔记语料（MD/PDF/DOCX/TXT）
+evals/            # 黄金集源（questions.yaml → golden_set.json）
+config/           # profiles/*.yaml + 全字段示例
+```
+
+## 沿革
+
+每一行是一个里程碑或一个发版，括号里是当时的可收集用例数（测试随功能一起长）。
 
 | | 内容 | 状态 |
 | --- | --- | --- |
@@ -222,37 +276,6 @@ claude mcp list          # 应显示 mikasa ✔ Connected
 | v0.1.13 | **MCP server**（`mikasa mcp`：把知识库挂给 Claude Code / Codex 这类 agent，三个只读工具 search/read/ask，agent 提问不落库，ADR-0036）+ **token 用量可见**（问答 who 行 / 评测报告 / `mikasa usage`，只报 token 不折算钱，ADR-0038）+ **代理根治**（带系统代理的机器上，发往本机 Ollama 的请求一律直连——原来被塞进代理假死）+ 本机档生成超时 60s→180s（长回答不再整题丢失）+ 阅读器三修（适应窗口默认 / 提问框自增高 / 计时 1000×）+ 提示词示范例占位符化（小模型不再照抄示范，ADR-0040）；评测侧：置信区间与配对比较、claim 级忠实性（ADR-0042）、RAGAS 对照（ADR-0043） | ✅ 1163 tests |
 | v0.1.14 | **论文表格盘点**（用户报"把这篇论文所有表格提取出来"答不出：全局聚合题装不进 top-k 采样）——阅读器新标签**「表格 N」**列出本篇全部表块（页码+预览，点击跳页面视图高亮，纯前端零新端点），问答识别"列出/提取所有表格"意图后**跳过采样、把全部表块按序喂模型**，逐张一行出清单、角标可点；小模型会照抄提示词占位符与格式，服务端做了确定性归化兜底（docs/limitations §13） | ✅ 1170 tests |
 | v0.1.15 | **全仓代码审查的 15 条修复**（安全 5：页面路由可读任意文件 / 登录页反射注入与开放重定向 / `--reload --host 0.0.0.0` 口令门失效 / 密钥槽名注入 .env / 保存路径绕过出网闸门；数据 5：入库失败改为留痕标 failed、同批同名互覆、大小写不敏感副本误删、reindex 失败仍删属性映射、Setext 吞行；崩溃 5：向量混维降级、重排形状校验与空回退、阅读器偏移改 UTF-16、空回答守卫、历史按角色配对）——每条先写会红的回归测试再修，案例表见 docs/limitations §五 | ✅ 1188 tests |
-
-## 环境与工程纪律
-
-- Python ≥ 3.11（推荐 3.13）；可选 NVIDIA 显卡（本地推理加速）；
-- **源码注释与文档一律中文为主**（项目工作语言）：README 与 `docs/*.md` 都是中文，
-  英文镜像在 [README.en.md](README.en.md) 与 [`docs/en/`](docs/en/)——两棵树同名文件一一对应，
-  有护栏测试盯着（`tests/unit/web/test_docs_trees.py`）；ruff + mypy 三绿基线
-  `ruff format . && ruff check . && mypy src`（整仓，不只 `src tests`——CI 也是整仓查）；
-- 测试与覆盖率：**1170 单测**，覆盖率 ~92%（见 evaluation.md 回归门禁）；
-- 零编译安装：Windows + CPython 3.13 全部依赖均有预编译 wheel
-  （版本锁定理由见 pyproject.toml 注释与 ADR-0006/0008）。
-
-## 项目结构
-
-```
-src/mikasa/
-├── cli/          # typer+rich 命令
-├── web/          # FastAPI + 原生 HTML/JS（问答/知识库/找论文/评测四页 + 登录页）
-├── pipeline/     # 检索→注入→生成→校验编排（含引用协议）
-├── ingest/       # 四格式 loader + 中文结构分块
-├── index/        # 自实现 BM25 / numpy 精确向量 / RRF 融合 / 分词降级
-├── eval/         # 黄金集评测：三阶段口径 + 裁判 + 自动出题
-├── papers/       # 在线找论文：四源检索 + 有防线的 PDF 下载器
-├── update/       # 应用内更新：检查 / 可续传下载 / 校验 / 启动安装
-├── providers/    # LLM（兼容面 + Ollama 原生）/嵌入/重排/视觉/出图：Protocol + 实现
-├── storage/      # SQLite + meta.json 快照
-└── config/       # pydantic 配置（三 profile 合并）
-sample-corpus/    # 原创 AI 学习笔记语料（MD/PDF/DOCX/TXT）
-evals/            # 黄金集源（questions.yaml → golden_set.json）
-config/           # profiles/*.yaml + 全字段示例
-```
 
 ## 许可证
 
