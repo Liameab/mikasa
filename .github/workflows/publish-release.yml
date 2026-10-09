@@ -5,8 +5,9 @@ name: Publish a release draft
 # 为什么单开一条路：`release.yml` 在 tag 上把安装包、zip 与校验和建好、挂进
 # 一个 draft，等人看过再发布——而"看过点发布"这一步原先只存在于浏览器里。
 # 浏览器打不开 Releases 页、或者手上没有可用 PAT 时（workflow_dispatch 一样要
-# token 才能触发），就往 main 推一个**提交消息里带 `[publish-release]` 标记**的
-# 普通提交：推送走 SSH key，不需要任何额外凭据。
+# token 才能触发），就往 main 推一个**首行以 `chore(release): publish` 开头**的
+# 普通提交（惯例上还会带 `[publish-release]` 标记，便于人肉搜索）：推送走 SSH
+# key，不需要任何额外凭据。判据只看**首行**，理由见下面 job 的 if 注释。
 #
 # 说明文案：`.github/release-notes/<tag>.md` 存在就用它，否则保留 GitHub 按提交
 # 自动生成的那份。发布同时置为 latest（应用的「检查更新」看的就是它）。
@@ -20,7 +21,10 @@ permissions:
 
 jobs:
   publish:
-    if: contains(github.event.head_commit.message, '[publish-release]')
+    # 只认**首行**：squash 合并会把 PR 标题与正文拼成一条提交，正文里只要出现
+    # 这个标记就会被 contains() 命中而误发布（2026-10-05 审查）。首行匹配把
+    # "被夹带的标记"排除掉；本仓的发布提交恒为 `chore(release): publish vX [publish-release]`。
+    if: startsWith(github.event.head_commit.message, 'chore(release): publish')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

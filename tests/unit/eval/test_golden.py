@@ -177,10 +177,12 @@ def test_load_golden_missing_file_raises(tmp_path):
 
 
 def test_load_golden_rejects_foreign_json(tmp_path):
-    # 缺 items 这种结构字段 → pydantic 校验失败（结构错配即拒绝，不留静默默认值）
+    # 缺 items 这种结构字段 → 结构错配即拒绝（不留静默默认值）。
+    # 异常类型自 2026-10-09 起统一成 EvalError：原先这里裸抛 pydantic 的
+    # ValidationError，CLI 变 traceback、Web 变 500（口径同 load_questions_yaml）。
     path = tmp_path / "bad.json"
     path.write_text(json.dumps({"name": "x"}), encoding="utf-8")
-    with pytest.raises(ValidationError):
+    with pytest.raises(EvalError, match="读取失败"):
         load_golden(path)
 
 
@@ -210,3 +212,20 @@ def _write_yaml(text: str, tmp_path):
     path = tmp_path / "test_questions.yaml"
     path.write_text(text, encoding="utf-8")
     return path
+
+
+def test_load_golden_translates_broken_file_to_eval_error(tmp_path):
+    """手改坏的黄金集 → EvalError（中文、带路径），而不是裸 JSONDecodeError /
+    ValidationError 抛栈（2026-10-05 审查）。口径与 load_questions_yaml 一致。"""
+    from mikasa.errors import EvalError
+
+    bad_json = tmp_path / "broken.json"
+    bad_json.write_text('{"items": [', encoding="utf-8")
+    with pytest.raises(EvalError, match="黄金集读取失败"):
+        load_golden(bad_json)
+
+    # JSON 合法但结构不对（少字段 / 类型错）同样翻译
+    bad_shape = tmp_path / "shape.json"
+    bad_shape.write_text('{"items": "nope"}', encoding="utf-8")
+    with pytest.raises(EvalError, match="黄金集读取失败"):
+        load_golden(bad_shape)

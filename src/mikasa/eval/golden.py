@@ -206,9 +206,15 @@ def load_golden(path: Path) -> GoldenSet:
 
     if not path.is_file():
         raise EvalError(f"黄金集不存在：{path}（先运行 tools/build_golden.py）")
-    data = json.loads(path.read_text(encoding="utf-8"))
-    golden = GoldenSet.model_validate(data)
-    golden.validate_items()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        golden = GoldenSet.model_validate(data)
+        golden.validate_items()
+    except (OSError, json.JSONDecodeError, ValidationError) as exc:
+        # 手改坏的黄金集（少个逗号、字段被删）要报"哪份文件读不出来"，而不是把
+        # JSONDecodeError 裸抛给 CLI（traceback）或 Web（500）——2026-10-05 审查。
+        # 口径与 load_questions_yaml 一致。
+        raise EvalError(f"黄金集读取失败（{path}）：{exc}") from exc
     return golden
 
 
