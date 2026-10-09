@@ -33,10 +33,13 @@ _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 def same_site(origin: str, host: str) -> bool:
-    """Origin 与请求 Host 是否同一主机（主机名比较，端口不参与）。
+    """Origin 与请求 Host 是否同一站点（主机名**与端口**都要一致）。
 
-    端口不比：同一台机器上不同端口互发请求在本机服务里没有安全含义，
-    而 Host 与 Origin 的端口写法（省略默认端口等）容易不一致。
+    端口曾经不比，理由是"同机不同端口没有安全含义"——**这个理由不成立**：
+    本机任何一个别的 Web 服务（另一个 dev server、随便哪个 127.0.0.1:3000 的页面）
+    都能对本应用发简单请求，而它只是"不同端口"（2026-10-07 审查）。
+    端口缺失一律按该 URL 的 scheme 默认端口补（http→80、https→443），两边同口径
+    比较——所以"省略默认端口"的写法不会被误杀。
     """
     # 两侧都交给 urlsplit 拆，且**解析失败一律按跨站处理**：Origin 与 Host 都是
     # 客户端可控输入，畸形值（`Origin: http://[::1`、`Host: [`）会让 urlsplit 抛
@@ -46,13 +49,26 @@ def same_site(origin: str, host: str) -> bool:
     # 会切出 `[`，strip 后成空串 → 判假 → `serve --host ::1` 或访问
     # `http://[::1]:8000/` 时**所有写请求 403**，整个界面变只读（2026-09-24 修）。
     try:
-        origin_host = (urlsplit(origin).hostname or "").lower()
-        req_host = (urlsplit(f"//{host}").hostname or "").lower()
+        origin_parts = urlsplit(origin)
+        req_parts = urlsplit(f"//{host}")
+        origin_host = (origin_parts.hostname or "").lower()
+        req_host = (req_parts.hostname or "").lower()
+        if not origin_host or not req_host or origin_host != req_host:
+            return False
+        # 端口比较也在 try 里：`Origin: http://a:99999` 会在取 .port 时抛 ValueError
+        return _effective_port(origin_parts) == _effective_port(req_parts)
     except ValueError:
         return False
-    if not origin_host or not req_host:
-        return False
-    return origin_host == req_host
+
+
+def _effective_port(parts: Any) -> int:
+    """端口缺失时按 scheme 补默认值（Host 侧没有 scheme → 本应用只跑明文 http）。
+
+    `parts.port` 本身也可能抛 ValueError（`Origin: http://a:99999`）——调用方在 try 里。
+    """
+    if parts.port is not None:
+        return parts.port
+    return 443 if parts.scheme == "https" else 80
 
 
 class CrossSiteWriteGuard:

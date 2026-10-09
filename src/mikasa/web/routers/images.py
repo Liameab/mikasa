@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import secrets
 import time
 from datetime import datetime
 from pathlib import Path
@@ -79,10 +80,17 @@ def generate_image(
     name = f"{datetime.now():%Y%m%d}-{digest}{ext_for_mime(image.mime)}"
     path: Path = settings.generated_dir / name
     if not path.is_file():
-        # 先写临时文件再原子替换：中途失败不会留下半张图（同配置覆盖层的写法）
-        tmp = path.with_name(path.name + ".tmp")
-        tmp.write_bytes(image.data)
-        os.replace(tmp, path)
+        # 先写临时文件再原子替换：中途失败不会留下半张图（同配置覆盖层的写法）。
+        # 临时名必须**每次唯一**：两个请求同时生成同一张图时，固定的 ".tmp" 名会让
+        # 两边打开同一个文件——Windows 上直接 WinError 32，POSIX 上先 replace 的那个
+        # 会让后一个拿到 FileNotFoundError（2026-10-07 审查）。
+        tmp = path.with_name(f"{path.name}.{secrets.token_hex(8)}.tmp")
+        try:
+            tmp.write_bytes(image.data)
+            os.replace(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)  # 半个临时文件不留
+            raise
     url = f"/api/images/generated/{name}"
     content = _image_markdown(prompt, url, image.model, image.size)
 

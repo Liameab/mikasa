@@ -13,6 +13,7 @@ arxiv.py 的节流注释：当天三个源里两个被自己打成了 429）。
 
 from __future__ import annotations
 
+import http.client
 import threading
 import time
 import urllib.error
@@ -105,8 +106,18 @@ class ThrottledClient:
             if exc.code == 429:
                 raise PaperError(self._busy_hint) from exc
             raise PaperError(f"{self._label} 服务返回错误（HTTP {exc.code}），请稍后重试") from exc
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
-            raise PaperError(f"无法连接 {self._label}（网络不可达或超时），请稍后重试") from exc
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            ConnectionError,
+            http.client.HTTPException,
+        ) as exc:
+            # HTTPException 这一支是 `resp.read()` 读到一半连接断了（IncompleteRead 等）：
+            # 它不是 OSError/URLError，不接住就会从 with_retry 里穿出去变成 500——
+            # 一个源响应被截断，整页搜索都失败（2026-10-07 审查）。
+            raise PaperError(
+                f"无法连接 {self._label}（网络不可达、超时或响应被截断），请稍后重试"
+            ) from exc
 
     @staticmethod
     def _read(url: str, timeout: float) -> bytes:

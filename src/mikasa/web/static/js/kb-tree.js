@@ -21,7 +21,7 @@
    与 documents.js 零循环依赖：选中/计数经 initCorpusTree 注入的回调回拨。
    ========================================================================= */
 
-import { $, apiFetch, el, esc, toast } from "./common.js";
+import { $, apiFetch, el, toast } from "./common.js";
 import { confirmDialog } from "./confirm.js"; // 自定义确认框（替换原生 confirm）
 import { buildDocTree, folderPath, isNote, subtreeIds } from "./tree.js";
 
@@ -502,7 +502,9 @@ function buildMoveMenu(target) {
     el(
       "div",
       { class: "ctx-head" },
-      `移动「${esc(kind === "folder" ? targetRow.name : displayTitle(targetRow))}」`
+      // 纯文本子节点（el() 走 createTextNode），**不能**再 esc 一次——
+      // 那会把 & 显示成 &amp;（2026-10-07 审查）
+      `移动「${kind === "folder" ? targetRow.name : displayTitle(targetRow)}」`
     ),
     menuItem("← 返回", () => showMainMenu()),
     menuItem("（根级）", () => moveTo(kind, id, null), {

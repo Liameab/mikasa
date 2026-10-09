@@ -175,7 +175,10 @@ def token_ok(data_dir: Path, token: str, *, now: float | None = None) -> bool:
     except (ValueError, UnicodeEncodeError):
         return False
     expected = hmac.new(secret, signed, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, signature):
+    # compare_digest 对**非 ASCII 字符串**直接抛 TypeError（"comparing strings with
+    # non-ASCII characters is not supported"）——签名段是 Cookie 里的原始文本，
+    # `Cookie: mikasa_session=123.é` 会让口令门 500 而不是 401（2026-10-07 审查）。
+    if not signature.isascii() or not hmac.compare_digest(expected, signature):
         return False
     return expires > int(now if now is not None else time.time())
 

@@ -237,7 +237,8 @@ def test_update_note_title_only_rebuilds_index_text(client):
     assert resp.status_code == 201, resp.text
     updated = resp.json()["document"]
     assert updated["title"] == "ZetaMarker9"
-    assert "ZetaMarker9" in _chunk_tokens(settings, updated["id"])
+    # 词空间统一小写（2026-10-07，jieba 与 bigram 同口径）
+    assert "zetamarker9" in _chunk_tokens(settings, updated["id"])
 
 
 def test_update_note_unchanged_is_noop(client):

@@ -265,3 +265,17 @@ def test_backslash_redirect_is_refused(tmp_path):
 def test_wildcard_bindings_are_gated(host: str):
     """通配绑定（0.0.0.0 / ::）都算"开给网络"，都要门。"""
     assert auth.is_loopback_host(host) is False
+
+
+def test_token_with_non_ascii_signature_is_401_not_500(tmp_path):
+    """签名段带非 ASCII → 判假（401），而不是 500（2026-10-07 审查）。
+
+    `hmac.compare_digest` 对含非 ASCII 的 str 直接抛 TypeError，而这个值来自
+    Cookie——任何人都能送：`Cookie: mikasa_session=123.é` 曾把口令门打成 500。
+    （同一类坑：`int()` 认全角数字，2026-09-24 修。）
+    """
+    auth.set_password(tmp_path, PASSWORD)
+    expires = auth.make_token(tmp_path).split(".")[0]
+    assert auth.token_ok(tmp_path, f"{expires}.é") is False
+    assert auth.token_ok(tmp_path, f"{expires}.签名") is False
+    assert auth.token_ok(tmp_path, f"{expires}.死beef") is False

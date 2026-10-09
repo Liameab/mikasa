@@ -58,3 +58,17 @@ def test_get_tokenizer_name_reports_jieba_when_available(monkeypatch):
     monkeypatch.setattr(tk, "_jieba_status", True)
     assert tk.get_tokenizer_name() == "jieba"
     assert tk.get_tokenizer() is tk.jieba_tokenizer
+
+
+def test_ascii_tokens_are_lowercased_on_both_paths():
+    """jieba 与 bigram 的词空间必须同口径：ASCII 一律小写（2026-10-07 审查）。
+
+    bigram 那条路本来就小写，jieba 不折——同一份笔记里 `Adam` 与查询词 `adam`
+    于是是两个词，英文关键词在 BM25 里零命中。
+    """
+    for tokenizer in (tk.bigram_tokenizer, tk.jieba_tokenizer):
+        tokens = tokenizer("Adam 优化器 Transformer")
+        assert "adam" in tokens, tokenizer.__name__
+        assert "transformer" in tokens, tokenizer.__name__
+        assert "优化" in tokens, tokenizer.__name__
+        assert all(t.islower() or not t.isascii() for t in tokens if t.strip()), tokenizer.__name__

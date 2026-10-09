@@ -406,7 +406,10 @@ function render(w) {
   // 就诚实地摆出「打开发布页」，而不是给一个点了会失败的按钮
   const canInstall = Boolean(info && info.asset) && Boolean(info && info.install_supported);
   const pageUrl = pageUrlOf(info);
-  const showPrimary = ready || (offer && canInstall);
+  // 失败态也要露出主按钮：它的文案在上面已经是「重新下载」，点击走 startOrAdopt
+  // 重来一次。原先 error 时 offer=false → 主按钮也被藏起来，用户只剩一个
+  // 「打开发布页」，那个"重新下载"的分支是死代码（2026-10-07 审查）。
+  const showPrimary = ready || st.status === "error" || (offer && canInstall);
   ui.laterBtn.classList.toggle("hidden", !offer);
   ui.skipBtn.classList.toggle("hidden", !offer);
   ui.keepBtn.classList.toggle("hidden", !active);

@@ -254,3 +254,27 @@ def test_image_test_endpoint_checks_model_list(client, monkeypatch):
         json={"base_url": "https://api.example.com/v1", "model": "m", "api_key_env": ""},
     )
     assert nokey.status_code == 200 and nokey.json()["ok"] is False
+
+
+# ---------------------------------------------------------------------------
+# 并发：同一张图的临时文件名必须唯一（2026-10-07 审查）
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_same_image_does_not_share_a_temp_path(client, monkeypatch):
+    """两次生成**同一张**图（文件名 = 日期 + 内容哈希，因此完全相同）时，写盘用的
+    临时路径必须各不相同——固定 ".tmp" 后缀会让并发请求打开同一个文件：Windows
+    上 WinError 32，POSIX 上先 replace 的那个会让后一个 FileNotFoundError。
+    """
+    c, _ = client
+    c.app.state.services.image = _FakeImage()
+    seen: list[str] = []
+
+    def record_replace(src, dst):  # noqa: ANN001, ARG001 - 只记录，不真搬
+        seen.append(str(src))
+
+    monkeypatch.setattr("mikasa.web.routers.images.os.replace", record_replace)
+    assert _generate(c).status_code == 200
+    assert _generate(c).status_code == 200
+    assert len(seen) == 2
+    assert seen[0] != seen[1], "两次请求共用了同一个临时文件"

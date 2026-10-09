@@ -145,8 +145,9 @@ def test_explicit_title_beats_inherited_title_and_reaches_index(tmp_path, offlin
         tokens = " ".join(
             t for chunk in repo.chunks_by_document(conn, docs[0].id) for t in chunk.tokens
         )
-    assert "SecondTitleB" in tokens
-    assert "FirstTitleA" not in tokens
+    # 词空间自 2026-10-07 起统一小写（jieba 与 bigram 同口径，见 tokenizer.jieba_tokenizer）
+    assert "secondtitleb" in tokens
+    assert "firsttitlea" not in tokens
 
 
 # ---------------------------------------------------------------------------

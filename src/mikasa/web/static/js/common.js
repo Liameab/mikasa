@@ -63,6 +63,10 @@ export function el(tag, attrs = {}, ...children) {
     else if (value !== null && value !== undefined) node.setAttribute(key, value);
   }
   for (const child of children.flat()) {
+    // 条件渲染：`cond ? node : null` / `cond ? node : undefined` 是常见写法，
+    // 直接 String() 会把 null 变成**字面量文本 "null"** 显示在页面上
+    // （2026-10-07 审查：找论文的结果行没有摘要时就能看到这个 "null"）。
+    if (child === null || child === undefined) continue;
     node.append(child instanceof Node ? child : document.createTextNode(String(child)));
   }
   return node;
@@ -508,8 +512,10 @@ export function renderAnswer(text, citations, showCites = true) {
   const safeImageUrl = (raw) => {
     const url = raw.trim();
     if (!url.startsWith("/") || url.startsWith("//")) return null;
-    // 属性注入面：esc 已经兜底一次，这里再挡一次"引号/尖括号/空白"
-    return /[<>"'\s]/.test(url) ? null : url;
+    // 属性注入面：esc 已经兜底一次，这里再挡一次"引号/尖括号/空白"。
+    // **反斜杠也要挡**：浏览器把 URL 里的 `\` 当 `/` 处理，`/\evil.example.com/x.png`
+    // 于是成了协议相对地址，绕过上面那道 `//` 检查变成外部请求（追踪像素）。
+    return /[<>"'\\\s]/.test(url) ? null : url;
   };
 
   /** 围栏代码块：独立区域 = 角标行（语言 + 复制钮）+ 等宽代码主体。

@@ -780,6 +780,7 @@ def test_rename_refreshes_index_tokens(client):
         after = _repo.chunks_by_document(conn, doc_id)[0].tokens
     old_joined, new_joined = "".join(before), "".join(after)
     # 标题取自正文首个 `#`（loader 规则），所以旧 tokens 里是「傅里叶变换」
-    assert "傅里叶变换" in old_joined and "FFT" not in old_joined
+    # 词空间自 2026-10-07 起统一小写（jieba 与 bigram 同口径），ASCII 按小写比对
+    assert "傅里叶变换" in old_joined and "fft" not in old_joined
     # 只换《标题》前缀：heading_path（正文的 H1）本来就该保持不变
-    assert "《FFT 速查》" in new_joined and "《傅里叶变换》" not in new_joined
+    assert "fft" in new_joined and "《傅里叶变换》" not in new_joined

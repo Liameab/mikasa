@@ -91,3 +91,27 @@ def test_business_errors_pass_through_untouched():
 
     with pytest.raises(ValueError):
         with_retry(attempt, delay=0)
+
+
+def test_truncated_response_is_a_paper_error_not_a_crash(monkeypatch):
+    """读到一半连接断了（IncompleteRead）→ PaperError，而不是 500（2026-10-07 审查）。
+
+    `http.client.IncompleteRead` 是 HTTPException 的子类，**不是** OSError/URLError
+    ——不接住就会从 with_retry 穿出去，一个源响应被截断就让整页搜索失败。
+    """
+    import http.client
+
+    import mikasa.papers.http as http_mod
+    from mikasa.papers.errors import PaperError
+
+    class _Boom:
+        def __enter__(self):
+            raise http.client.IncompleteRead(b"partial")
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(http_mod.urllib.request, "urlopen", lambda *a, **k: _Boom())
+    client = http_mod.ThrottledClient("测试源", 0.0)
+    with pytest.raises(PaperError, match="截断"):
+        client.get("https://example.invalid/x", timeout=1.0)

@@ -344,8 +344,9 @@ offline 档没有可出题的模型，端点直接 400 拒绝而不是排队等�
 口径——offline 场次跑全流程零密钥（mock/none），正是 CI 与演示的
 默认形态。
 
-**配置查找顺序**：显式 `--config` → `config/config.yaml`（源码模式先看当前
-目录再看仓库根）→ `config/profiles/<profile>.yaml`。在 profile 文件之上，还会
+**配置查找顺序**：显式 `--config` → 仓库根 `config/config.yaml` → 
+`config/profiles/<profile>.yaml`（**当前目录不参与**：否则"在哪个目录敲命令"
+会静默换掉档位，2026-10-07 审查）。在 profile 文件之上，还会
 深合并一层用户可写覆盖层 `<数据目录>/config.yaml`（Web 设置面板写入，
 ADR-0018）——基底由 `--config`/`config.yaml` 提供时它不生效，且其中的
 `profile:` 键一律忽略。密钥不进以上任何文件：面板把密钥写进

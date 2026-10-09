@@ -449,8 +449,10 @@ All three profiles share one configuration (switched by profile), one SQLite
 database, and one evaluation methodology — an offline session runs the entire flow
 with zero API keys (mock/none), which is exactly the default form for CI and demos.
 
-**Configuration lookup order**: an explicit `--config` → `config/config.yaml` (working
-directory first, source mode only, then the repo root) → `config/profiles/<profile>.yaml`.
+**Configuration lookup order**: an explicit `--config` → the repo root's
+`config/config.yaml` → `config/profiles/<profile>.yaml` (the working directory is *not*
+consulted: otherwise the directory you happen to run from would silently switch profiles,
+2026-10-07 audit).
 On top of the profile file, a user-writable overlay `<data dir>/config.yaml` (written by the
 web settings panel, ADR-0018) is deep-merged — it never applies when `--config`/`config.yaml`
 supplied the base, and its `profile:` key is ignored. Secrets never live in any of these: the

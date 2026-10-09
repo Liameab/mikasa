@@ -1,8 +1,9 @@
 """中文分词：Protocol + 双实现 + 自动降级（本项目最核心的工程故事之一）。
 
 背景（详见 docs/design-decisions.md ADR-0008）：
-- 2026 年起新版 setuptools 移除 pkg_resources，`import jieba` 在新环境必崩
-  （jieba#1043，官方认可的临时方案是锁 setuptools<82）；
+- 新版 setuptools 起不再带 pkg_resources（jieba#1043 的背景）——jieba 的
+  `_compat.py` 对该 import 有 try/except 兜底，2026-10-09 实测 setuptools 84 +
+  Python 3.13 下 import 与分词均正常；pyproject 的 `<85` 只留一档缓冲；
 - 本项目不依赖锁版本单点：Tokenizer 抽象为函数协议，jieba 失败时
   自动降级到纯 Python 的字符 bigram 分词（零依赖、确定性），
   并在评测中实测两种分词对检索指标的影响（docs/evaluation.md）。
@@ -91,9 +92,16 @@ def bigram_tokenizer(text: str) -> list[str]:
 
 
 def jieba_tokenizer(text: str) -> list[str]:
-    """jieba 搜索引擎模式分词（召回更好）；不可用时自动降级 bigram。"""
+    """jieba 搜索引擎模式分词（召回更好）；不可用时自动降级 bigram。
+
+    **ASCII 一律折成小写**（2026-10-07 审查）：bigram 那条路本来就小写，
+    jieba 不折——于是同一份笔记里 `Adam` 与查询词 `adam` 在 BM25 里是两个字，
+    英文关键词零命中。两条路的词空间必须同口径。
+    注意：改的是**词空间**，旧库里的 ASCII 词仍是原大小写，改后建议重跑
+    `mikasa ingest --reindex`。
+    """
     if _probe_jieba(verbose=True):
-        return list(_import_jieba().cut_for_search(text))
+        return [token.lower() for token in _import_jieba().cut_for_search(text)]
     return bigram_tokenizer(text)
 
 

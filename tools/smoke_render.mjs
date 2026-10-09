@@ -17,7 +17,8 @@ const source = fs.readFileSync(
   "utf8"
 );
 const mod = await import("data:text/javascript;base64," + Buffer.from(source).toString("base64"));
-const { renderAnswer, renderCitations, renderMarkdown, fmtLatency, fmtSeconds, errorMessage } = mod;
+const { renderAnswer, renderCitations, renderMarkdown, fmtLatency, fmtSeconds, errorMessage, el } =
+  mod;
 
 let passed = 0;
 const assert = (cond, msg) => {
@@ -364,6 +365,47 @@ const free = (text, citations = []) => renderAnswer(text, citations, false); // 
   // 行内（非独占一行）的图片语法不当作图片：那是正文里的字面量
   const inline = free("看这个 ![x](/api/images/generated/y.png) 就行");
   assert(!inline.includes("<img"), "非独占一行时不渲染成块级图片");
+}
+
+/* ---- 同源图片白名单：反斜杠不能变成协议相对地址（2026-10-07 审查）---- */
+{
+  // 浏览器把 URL 里的 `\` 当 `/`：`/\evil.example.com/x.png` 等于 `//evil.example.com/x.png`
+  const backslash = free("![x](/\\evil.example.com/pixel.png)");
+  assert(!backslash.includes("<img"), "反斜杠拼出的外链不放行（否则是追踪像素）");
+  const sameOrigin = free("![x](/api/images/generated/ok.png)");
+  assert(sameOrigin.includes('<img src="/api/images/generated/ok.png"'), "同源图片照常渲染");
+}
+
+/* ---- el()：条件子节点（null/undefined）不能渲染成字面量 "null" ---- */
+{
+  class FakeNode {
+    constructor() {
+      this.children = [];
+      this.attrs = {};
+    }
+    append(...cs) {
+      for (const c of cs) this.children.push(c);
+    }
+    setAttribute(k, v) {
+      this.attrs[k] = v;
+    }
+    addEventListener() {}
+  }
+  globalThis.Node = FakeNode;
+  globalThis.document = {
+    createElement: () => new FakeNode(),
+    createTextNode: (t) => {
+      const n = new FakeNode();
+      n.text = t;
+      return n;
+    },
+  };
+  const texts = (node) => node.children.filter((c) => "text" in c).map((c) => c.text);
+  // 真实调用点：papers-page.js 的 `paper.abstract ? el(...) : null`——null 是**直接子节点**
+  const withNull = el("div", {}, "标题", null);
+  assert(texts(withNull).join("|") === "标题", "null 子节点不产生文本");
+  const withUndef = el("div", {}, undefined, "实文本");
+  assert(texts(withUndef).join("|") === "实文本", "undefined 子节点同样跳过");
 }
 
 console.log(`✓ smoke_render：${passed} 条断言全部通过`);

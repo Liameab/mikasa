@@ -563,24 +563,23 @@ def _config_lookup(profile: str, config_path: Path | None) -> tuple[Path, str, s
 
     查找顺序：
       1. 显式 --config 参数
-      2. 当前目录 config/config.yaml（运行时覆盖层）
-      3. 仓库根 config/config.yaml
-      4. 仓库根 config/profiles/<profile>.yaml
+      2. 仓库根 config/config.yaml（运行时覆盖层）
+      3. 仓库根 config/profiles/<profile>.yaml
+
+    **当前目录不再参与查找**（2026-10-07 审查）：原来源码模式下 `./config/config.yaml`
+    优先于仓库根，于是"在哪个目录敲命令"会静默换掉配置与档位——那份额外的
+    config.yaml 里若写着 `profile: api`（带着真密钥），`--profile offline` 就形同虚设。
+    仓库里也没有这份文件（只有 `config.example.yaml`），显式路径请用 `--config`。
     """
     if config_path is not None:
         if not config_path.is_file():
             raise ConfigError(f"配置文件不存在：{config_path}")
         return config_path, profile, str(config_path)
 
-    # cwd 只在开发时参与查找：打包后双击 exe 的 cwd 可能是 System32 之类，
-    # 命中无关 config.yaml 还会按它的 profile 字段静默改档（打包审查发现）
-    candidates = [REPO_ROOT / "config" / "config.yaml"]
-    if not is_frozen():
-        candidates.insert(0, Path.cwd() / "config" / "config.yaml")
-    for cwd_file in candidates:
-        if cwd_file.is_file():
-            declared = _declared_profile(cwd_file)
-            return cwd_file, declared or profile, str(cwd_file)
+    overlay_file = REPO_ROOT / "config" / "config.yaml"
+    if overlay_file.is_file():
+        declared = _declared_profile(overlay_file)
+        return overlay_file, declared or profile, str(overlay_file)
 
     profile_file = REPO_ROOT / "config" / "profiles" / f"{profile}.yaml"
     if not profile_file.is_file():

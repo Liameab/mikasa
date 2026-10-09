@@ -131,3 +131,17 @@ def test_bilingual_flag_per_profile(offline_settings, api_settings, local_settin
     assert offline_settings.answer.bilingual is False  # offline yaml 不翻
     assert api_settings.answer.bilingual is True  # 云端库中英混排：开
     assert local_settings.answer.bilingual is True  # 本地库（qwen3 翻译）同样开
+
+
+def test_cwd_config_yaml_is_not_consulted(tmp_path, monkeypatch):
+    """当前目录的 config/config.yaml 不再参与查找（2026-10-07 审查）。
+
+    原来源码模式下 `./config/config.yaml` 优先于仓库根：在哪个目录敲命令会静默
+    换掉配置与档位——那份文件里写着 `profile: api`（带着真密钥）时，`--profile
+    offline` 形同虚设。仓库里本来也没有这份文件（只有 config.example.yaml），
+    要显式指定路径请用 `--config`。
+    """
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("profile: api\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert load_settings("offline").profile == "offline"
