@@ -24,11 +24,10 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from chrome_probe import CDP, wait_json_list  # noqa: E402 复用 chrome_probe 封装
+from chrome_probe import CDP, chrome_profile, wait_json_list  # noqa: E402 复用 chrome_probe 封装
 
 
 async def wait_truthy(cdp, expr, timeout=8.0):
@@ -42,7 +41,7 @@ async def wait_truthy(cdp, expr, timeout=8.0):
 
 
 async def run(args):
-    profile = tempfile.mkdtemp(prefix="rename-check-")
+    profile = chrome_profile("rename-check-")
     chrome = subprocess.Popen(
         [
             args.chrome,

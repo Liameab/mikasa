@@ -29,12 +29,11 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tools.chrome_corpus import free_port, wait_server, wait_until  # noqa: E402
-from tools.chrome_probe import CDP, log, wait_json_list  # noqa: E402
+from tools.chrome_probe import CDP, chrome_profile, log, wait_json_list  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MIKASA_EXE = REPO_ROOT / ".venv" / "Scripts" / "mikasa.exe"
@@ -168,7 +167,7 @@ GUARD_JS = f"""(() => {{
 
 async def run(args) -> int:
     bad: list[str] = []
-    tmp = Path(tempfile.mkdtemp(prefix="textlayer-e2e-"))
+    tmp = Path(chrome_profile("textlayer-e2e-"))
     server = chrome = None
     try:
         if args.server_port is None:
@@ -212,7 +211,7 @@ async def run(args) -> int:
                 "--disable-gpu",
                 "--no-first-run",
                 f"--remote-debugging-port={args.cdp_port}",
-                f"--user-data-dir={tempfile.mkdtemp(prefix='textlayer-chrome-')}",
+                f"--user-data-dir={chrome_profile('textlayer-chrome-')}",
                 "--window-size=1400,900",
                 url,
             ]

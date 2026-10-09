@@ -34,14 +34,13 @@ import os
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from tools.chrome_probe import CDP, log, wait_json_list  # noqa: E402
+from tools.chrome_probe import CDP, chrome_profile, log, wait_json_list  # noqa: E402
 
 REPO_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MIKASA_EXE = REPO_ROOT / ".venv" / "Scripts" / "mikasa.exe"
@@ -145,7 +144,7 @@ async def wait_until(cdp, expr: str, what: str, timeout: float = 25.0) -> None:
 
 
 async def run(args):
-    tmp = Path(tempfile.mkdtemp(prefix="model-settings-e2e-"))
+    tmp = Path(chrome_profile("model-settings-e2e-"))
     userdata = tmp / "userdata"
     userdata.mkdir(parents=True)
     env = dict(os.environ)
@@ -178,7 +177,7 @@ async def run(args):
             raise
 
         url = f"http://127.0.0.1:{port}/"
-        profile = tempfile.mkdtemp(prefix="model-settings-chrome-")
+        profile = chrome_profile("model-settings-chrome-")
         chrome = subprocess.Popen(
             [
                 args.chrome,

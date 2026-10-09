@@ -30,7 +30,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -42,7 +41,7 @@ from tools.chrome_corpus import (  # noqa: E402  复用隔离服务器与页面�
     submit_input,
     wait_until,
 )
-from tools.chrome_probe import CDP, log, wait_json_list  # noqa: E402
+from tools.chrome_probe import CDP, chrome_profile, log, wait_json_list  # noqa: E402
 
 REPO_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MIKASA_EXE = REPO_ROOT / ".venv" / "Scripts" / "mikasa.exe"
@@ -78,7 +77,7 @@ async def wait_new_server(port: int, timeout: float = 30.0) -> None:
 
 
 async def run(args):
-    tmp = Path(tempfile.mkdtemp(prefix="reader-e2e-"))
+    tmp = Path(chrome_profile("reader-e2e-"))
     server = None
     chrome = None
     bad: list[str] = []
@@ -116,7 +115,7 @@ async def run(args):
         await wait_new_server(args.server_port)
 
         base = f"http://127.0.0.1:{args.server_port}"
-        profile = tempfile.mkdtemp(prefix="reader-chrome-")
+        profile = chrome_profile("reader-chrome-")
         chrome = subprocess.Popen(
             [
                 args.chrome,

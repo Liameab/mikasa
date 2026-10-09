@@ -21,7 +21,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -29,7 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tools.chrome_corpus import free_port, wait_server, wait_until  # noqa: E402
-from tools.chrome_probe import CDP, log, wait_json_list  # noqa: E402
+from tools.chrome_probe import CDP, chrome_profile, log, wait_json_list  # noqa: E402
 
 REPO_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MIKASA_EXE = REPO_ROOT / ".venv" / "Scripts" / "mikasa.exe"
@@ -114,7 +113,7 @@ async def _run(args) -> int:
     _start_fake_ollama(args.fake_port)
     log(f"假 Ollama：http://127.0.0.1:{args.fake_port}")
 
-    tmp = Path(tempfile.mkdtemp(prefix="ollama-pull-e2e-"))
+    tmp = Path(chrome_profile("ollama-pull-e2e-"))
     server = None
     chrome = None
     try:
@@ -147,7 +146,7 @@ async def _run(args) -> int:
             return 1
 
         url = f"http://127.0.0.1:{args.server_port}/"
-        profile = tempfile.mkdtemp(prefix="ollama-pull-chrome-")
+        profile = chrome_profile("ollama-pull-chrome-")
         chrome = subprocess.Popen(
             [
                 args.chrome,

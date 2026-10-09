@@ -31,7 +31,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -40,7 +39,7 @@ from tools.chrome_corpus import (  # noqa: E402
     wait_server,
     wait_until,
 )
-from tools.chrome_probe import CDP, log, wait_json_list  # noqa: E402
+from tools.chrome_probe import CDP, chrome_profile, log, wait_json_list  # noqa: E402
 from tools.fake_llm import make_handler, serve  # noqa: E402
 
 REPO_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -101,7 +100,7 @@ _FAKE = make_handler(ANSWER)  # 假模型端点类（calls 里留取证记录）
 
 
 async def run(args):
-    tmp = Path(tempfile.mkdtemp(prefix="math-e2e-"))
+    tmp = Path(chrome_profile("math-e2e-"))
     fake = None
     server = None
     chrome = None
@@ -143,7 +142,7 @@ async def run(args):
             raise
 
         url = f"http://127.0.0.1:{args.server_port}/"
-        profile = tempfile.mkdtemp(prefix="math-chrome-")
+        profile = chrome_profile("math-chrome-")
         chrome = subprocess.Popen(
             [
                 args.chrome,

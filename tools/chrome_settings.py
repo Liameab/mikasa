@@ -26,7 +26,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from tools.chrome_probe import CDP, wait_json_list  # noqa: E402
+from tools.chrome_probe import CDP, chrome_profile, wait_json_list  # noqa: E402
 
 NICK = "张三"
 
@@ -39,7 +39,7 @@ def make_fixture(path):
 
 
 async def run(args):
-    profile = tempfile.mkdtemp(prefix="probe-settings-")
+    profile = chrome_profile("probe-settings-")
     chrome = subprocess.Popen(
         [
             args.chrome,

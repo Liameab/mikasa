@@ -28,7 +28,6 @@ import os
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -36,7 +35,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tools.chrome_corpus import free_port, wait_until  # noqa: E402
-from tools.chrome_probe import CDP, log, wait_json_list  # noqa: E402
+from tools.chrome_probe import CDP, chrome_profile, log, wait_json_list  # noqa: E402
 
 REPO_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MIKASA_EXE = REPO_ROOT / ".venv" / "Scripts" / "mikasa.exe"
@@ -60,7 +59,7 @@ async def _run(args) -> int:
     lan_ip = args.lan_ip or _lan_ip()
     log(f"局域网地址：{lan_ip}（服务绑 0.0.0.0，来源地址决定要不要口令）")
 
-    tmp = Path(tempfile.mkdtemp(prefix="lan-login-e2e-"))
+    tmp = Path(chrome_profile("lan-login-e2e-"))
     server = None
     chrome = None
     try:
@@ -131,7 +130,7 @@ async def _run(args) -> int:
             log(f"注意：从 {lan_ip} 直连服务失败（{exc}）——浏览器步骤会再验一次")
 
         # ---- 真浏览器：从局域网地址打开 ----
-        profile = tempfile.mkdtemp(prefix="lan-login-chrome-")
+        profile = chrome_profile("lan-login-chrome-")
         chrome = subprocess.Popen(
             [
                 args.chrome,

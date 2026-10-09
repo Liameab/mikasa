@@ -19,12 +19,11 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from tools.chrome_probe import CDP, log, wait_json_list  # noqa: E402
+from tools.chrome_probe import CDP, chrome_profile, log, wait_json_list  # noqa: E402
 
 CHROME_FALLBACKS = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -62,7 +61,7 @@ async def run(args) -> int:
         server_docs = json.loads(r.read().decode("utf-8"))["documents"]
 
     cdp_port = free_port()
-    profile = tempfile.mkdtemp(prefix="empty-folder-chrome-")
+    profile = chrome_profile("empty-folder-chrome-")
     chrome = subprocess.Popen(
         [
             find_chrome(),

@@ -27,7 +27,6 @@ import os
 import struct
 import subprocess
 import sys
-import tempfile
 import threading
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -40,7 +39,7 @@ from tools.chrome_corpus import (  # noqa: E402
     wait_server,
     wait_until,
 )
-from tools.chrome_probe import CDP, log, wait_json_list  # noqa: E402
+from tools.chrome_probe import CDP, chrome_profile, log, wait_json_list  # noqa: E402
 
 REPO_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MIKASA_EXE = REPO_ROOT / ".venv" / "Scripts" / "mikasa.exe"
@@ -181,7 +180,7 @@ async def _run(args) -> int:
     _start_fake_image(args.fake_port)
     log(f"假出图服务：http://127.0.0.1:{args.fake_port}/v1/images/generations")
 
-    tmp = Path(tempfile.mkdtemp(prefix="image-e2e-"))
+    tmp = Path(chrome_profile("image-e2e-"))
     server = None
     chrome = None
     try:
@@ -214,7 +213,7 @@ async def _run(args) -> int:
             return 1
 
         url = f"http://127.0.0.1:{args.server_port}/"
-        profile = tempfile.mkdtemp(prefix="image-chrome-")
+        profile = chrome_profile("image-chrome-")
         chrome = subprocess.Popen(
             [
                 args.chrome,

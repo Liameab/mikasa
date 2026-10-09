@@ -30,7 +30,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -42,7 +41,7 @@ from tools.chrome_corpus import (  # noqa: E402
     wait_server,
     wait_until,
 )
-from tools.chrome_probe import CDP, log, wait_json_list  # noqa: E402
+from tools.chrome_probe import CDP, chrome_profile, log, wait_json_list  # noqa: E402
 
 REPO_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MIKASA_EXE = REPO_ROOT / ".venv" / "Scripts" / "mikasa.exe"
@@ -118,7 +117,7 @@ def ask(port: int, question: str) -> dict:
 
 
 async def run(args):
-    tmp = Path(tempfile.mkdtemp(prefix="notes-e2e-"))
+    tmp = Path(chrome_profile("notes-e2e-"))
     server = None
     chrome = None
     try:
@@ -156,7 +155,7 @@ async def run(args):
             raise
 
         url = f"http://127.0.0.1:{args.server_port}/documents"
-        profile = tempfile.mkdtemp(prefix="notes-chrome-")
+        profile = chrome_profile("notes-chrome-")
         chrome = subprocess.Popen(
             [
                 args.chrome,

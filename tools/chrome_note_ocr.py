@@ -36,7 +36,6 @@ import shutil
 import struct
 import subprocess
 import sys
-import tempfile
 import threading
 import urllib.request
 import zlib
@@ -50,7 +49,7 @@ from tools.chrome_corpus import (  # noqa: E402
     wait_server,
     wait_until,
 )
-from tools.chrome_probe import CDP, log, wait_json_list  # noqa: E402
+from tools.chrome_probe import CDP, chrome_profile, log, wait_json_list  # noqa: E402
 
 REPO_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MIKASA_EXE = REPO_ROOT / ".venv" / "Scripts" / "mikasa.exe"
@@ -239,7 +238,7 @@ def _api(port: int, path: str) -> dict:
 
 
 async def run(args):
-    tmp = Path(tempfile.mkdtemp(prefix="note-ocr-e2e-"))
+    tmp = Path(chrome_profile("note-ocr-e2e-"))
     real = bool(args.vision_url.strip())
     # 真机模式的 marker：识别结果不可复现，用"我们后加的这一行"验保存/回填链路
     marker = "（人工补注）" if real else "（惯性系）"
@@ -301,7 +300,7 @@ async def run(args):
             raise
 
         url = f"http://127.0.0.1:{args.server_port}/documents"
-        profile = tempfile.mkdtemp(prefix="note-ocr-chrome-")
+        profile = chrome_profile("note-ocr-chrome-")
         chrome = subprocess.Popen(
             [
                 args.chrome,

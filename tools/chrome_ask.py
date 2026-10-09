@@ -24,16 +24,15 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 
 # 脚本直跑时 sys.path[0] 是 tools/ 自身，"tools.*" 包式导入需要仓库根入路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from tools.chrome_probe import CDP, wait_json_list  # 复用极简 CDP 封装与就绪等待
+from tools.chrome_probe import CDP, chrome_profile, wait_json_list  # 复用极简 CDP 封装与就绪等待
 
 
 async def run(args):
-    profile = tempfile.mkdtemp(prefix="probe-ask-")
+    profile = chrome_profile("probe-ask-")
     chrome = subprocess.Popen(
         [
             args.chrome,

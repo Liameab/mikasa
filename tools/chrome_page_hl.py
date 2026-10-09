@@ -26,13 +26,12 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from chrome_probe import CDP, wait_json_list  # noqa: E402 复用 CDP 封装
+from chrome_probe import CDP, chrome_profile, wait_json_list  # noqa: E402 复用 CDP 封装
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MIKASA_EXE = REPO_ROOT / ".venv" / "Scripts" / "mikasa.exe"
@@ -120,7 +119,7 @@ MEASURE = """(() => {
 
 
 async def run(args) -> int:
-    tmp = Path(tempfile.mkdtemp(prefix="page-hl-"))
+    tmp = Path(chrome_profile("page-hl-"))
     server = chrome = None
     try:
         pdf = tmp / "page-hl-probe.pdf"
@@ -157,7 +156,7 @@ async def run(args) -> int:
 
         # ---- 上传探针 PDF（走真实 file input 链路） ----
         cdp_port = free_port()
-        profile = tempfile.mkdtemp(prefix="page-hl-chrome-")
+        profile = chrome_profile("page-hl-chrome-")
         chrome = subprocess.Popen(
             [
                 args.chrome,

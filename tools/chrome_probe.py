@@ -21,8 +21,10 @@ Chrome DevTools Protocol（CDP）：启动一个可点击的无头 Chrome，可�
 
 import argparse
 import asyncio
+import atexit
 import base64
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,6 +34,17 @@ import urllib.request
 import websockets
 
 DEFAULT_PORT = 9333
+
+
+def chrome_profile(prefix: str) -> str:
+    """建一个本次运行专用的 Chrome profile 目录，进程退出时自动删掉。
+
+    脚本们原先各自 `tempfile.mkdtemp(prefix=...)` 之后就没人管，跑一次 E2E 就在
+    系统临时目录里留一个目录——攒几十次就是几百 MB 的垃圾（2026-10-05 审查）。
+    """
+    path = tempfile.mkdtemp(prefix=prefix)
+    atexit.register(shutil.rmtree, path, ignore_errors=True)
+    return path
 
 
 def log(msg):
@@ -119,7 +132,7 @@ class CDP:
 
 
 async def run(args):
-    profile = tempfile.mkdtemp(prefix="probe-profile-")
+    profile = chrome_profile("probe-profile-")
     chrome = subprocess.Popen(
         [
             args.chrome,

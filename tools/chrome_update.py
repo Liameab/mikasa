@@ -40,7 +40,6 @@ import re
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import urllib.error
@@ -49,7 +48,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from tools.chrome_probe import CDP, log, wait_json_list  # noqa: E402
+from tools.chrome_probe import CDP, chrome_profile, log, wait_json_list  # noqa: E402
 
 REPO_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MIKASA_EXE = REPO_ROOT / ".venv" / "Scripts" / "mikasa.exe"
@@ -326,7 +325,7 @@ async def screenshot(cdp, path: str) -> None:
 
 
 async def run(args):
-    tmp = Path(tempfile.mkdtemp(prefix="update-e2e-"))
+    tmp = Path(chrome_profile("update-e2e-"))
     log(f"临时目录：{tmp}")
     data_dir = tmp / "data"  # 隔离的生命线：下载文件也落在这里
     fake = FakeGitHub()
@@ -352,7 +351,7 @@ async def run(args):
             log((tmp / "serve.log").read_text(encoding="utf-8")[-3000:])
             raise
 
-        profile = tempfile.mkdtemp(prefix="update-chrome-")
+        profile = chrome_profile("update-chrome-")
         chrome = subprocess.Popen(
             [
                 args.chrome,
