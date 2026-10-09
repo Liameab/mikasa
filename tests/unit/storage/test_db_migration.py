@@ -265,7 +265,14 @@ def test_migration_resumes_after_crash_before_version_row(tmp_path):
 
     # 模拟"迁移函数执行完、版本行更新前崩溃"：版本行回退到 1，
     # 并把一个会话的标题改成手动值（等价于崩溃与重跑之间用户已改名）
-    conn.execute("UPDATE schema_version SET version = 1 WHERE version = 3")
+    #
+    # 这里必须按**当前** SCHEMA_VERSION 匹配：原先写死 `WHERE version = 3`，
+    # 而库早就迁到 v5 了——UPDATE 一行都改不到，版本没回退，下面的"续跑"其实
+    # 什么都没测（测试照样绿）。断言回退生效，免得它再悄悄失效（2026-10-05 审查）。
+    conn.execute(
+        "UPDATE schema_version SET version = 1 WHERE version = ?", (db.SCHEMA_VERSION,)
+    )
+    assert int(conn.execute("SELECT version FROM schema_version").fetchone()["version"]) == 1
     repo.set_session_title(conn, sessions[0]["id"], "手动改名")
     conn.commit()
 
