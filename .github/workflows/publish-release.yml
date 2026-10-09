@@ -24,7 +24,10 @@ jobs:
     # 只认**首行**：squash 合并会把 PR 标题与正文拼成一条提交，正文里只要出现
     # 这个标记就会被 contains() 命中而误发布（2026-10-05 审查）。首行匹配把
     # "被夹带的标记"排除掉；本仓的发布提交恒为 `chore(release): publish vX [publish-release]`。
-    if: startsWith(github.event.head_commit.message, 'chore(release): publish')
+    # 值必须加引号：表达式里的 `publish'` 前有 ": "，而 YAML 的裸标量不允许出现
+    # 冒号+空格——否则**整个工作流文件解析失败**，表现为"一个 job 都没有的启动
+    # 失败"，转正永远不执行（2026-10-09 实打实踩到：v0.1.16 转正连挂三次）。
+    if: "${{ startsWith(github.event.head_commit.message, 'chore(release): publish') }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
