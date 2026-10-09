@@ -284,7 +284,7 @@ class AskService:
         except BaseException:
             # 失败不留"幽灵空会话"：会话是提问前就建的，中途抛错（模型故障、额度
             # 用尽）时 Web 端有 qa.py 兜底，CLI/MCP 这条路上原先会留一条空对话。
-            if created_here:
+            if created_here and session_id is not None:  # 类型收窄：见上面建会话那一支
                 with open_db(self.settings.db_path) as conn:
                     repo.delete_session_if_empty(conn, session_id)
                     conn.commit()
