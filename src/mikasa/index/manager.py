@@ -15,6 +15,7 @@ import numpy as np
 from mikasa.config.settings import Settings
 from mikasa.index.bm25 import BM25Index
 from mikasa.index.tokenizer import get_tokenizer
+from mikasa.index.vector_store import ExactVectorStore
 from mikasa.models.document import Chunk
 from mikasa.storage.db import open_db
 from mikasa.storage.repo import all_chunks_ordered, corpus_fingerprint, load_embedding_matrix
@@ -33,9 +34,18 @@ class Corpus:
     matrix: np.ndarray | None = None  # (n, dim)，行序与 chunks 一致
     embedding_model: str | None = None
     sha256: str = ""  # 语料指纹：(id, content_sha256) 序列的哈希，评测防错配
+    # 归一化好的向量检索器，**每个快照建一次**：Corpus 本身按指纹缓存，而
+    # Retriever 是每问新建的——store 的构造会对整个矩阵做 L2 归一化，放在
+    # Retriever 里等于每问重做一遍（2026-10-05 审查）。
+    dense_store: ExactVectorStore | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "row_of", {c.id: i for i, c in enumerate(self.chunks)})
+        object.__setattr__(
+            self,
+            "dense_store",
+            ExactVectorStore(self.matrix) if self.matrix is not None else None,
+        )
         if not self.sha256:
             # 与 repo.corpus_digest 逐字节一致：混入 id，重建导致的 id 平移
             # 也会触发指纹失配（否则黄金集 gold_chunk_ids 会静默错位）

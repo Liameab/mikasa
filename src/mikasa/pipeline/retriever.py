@@ -11,7 +11,6 @@ from time import perf_counter
 from mikasa.config.settings import Settings
 from mikasa.index.hybrid import rrf_fuse
 from mikasa.index.manager import Corpus
-from mikasa.index.vector_store import ExactVectorStore
 from mikasa.models.retrieval import RetrievedChunk
 from mikasa.providers import get_reranker
 from mikasa.providers.embedding import EmbeddingProvider
@@ -68,7 +67,9 @@ class Retriever:
         self._corpus = corpus
         self._embedding = embedding
         self._reranker: RerankerProvider = get_reranker(settings.reranker)
-        self._dense_store = ExactVectorStore(corpus.matrix) if corpus.matrix is not None else None
+        # 复用快照里**已经归一化好**的 store：Retriever 是每问新建的，而归一化整个
+        # 矩阵放在这里就是每问白做一遍（2026-10-05 审查）。Corpus 按指纹缓存。
+        self._dense_store = corpus.dense_store
 
     # ------------------------------------------------------------------
 

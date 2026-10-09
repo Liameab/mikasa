@@ -398,3 +398,32 @@ def test_rerank_empty_result_keeps_fusion_order(tmp_path, offline_settings):
     assert hits, "重排返回空不该把可答问题的命中清空"
     assert latency["rerank"] >= 0.0
     assert [h.rank for h in hits] == list(range(1, len(hits) + 1))
+
+
+def test_dense_store_is_built_once_per_corpus(tmp_path, offline_settings):
+    """向量 store（含整矩阵归一化）每个快照只建一次（2026-10-05 审查）。
+
+    Retriever 是每问新建的，而 store 的构造会对整个矩阵做 L2 归一化——放在
+    Retriever 里等于每次提问都白算一遍全库矩阵。Corpus 本身按指纹缓存，所以
+    挂在它上面就只算一次。
+    """
+    retriever, corpus = _retriever(tmp_path, offline_settings)
+    # offline 档没有向量（dense 关闭），两条都应为 None——这条先钉住"不炸"
+    assert corpus.dense_store is None
+    assert retriever._dense_store is corpus.dense_store
+
+    # 有向量时：两个 Retriever 共用同一个 store 对象
+    import numpy as np
+
+    fake = corpus.__class__(
+        chunks=corpus.chunks,
+        bm25=corpus.bm25,
+        matrix=np.eye(4, dtype=np.float32),
+        embedding_model="fake",
+    )
+    from mikasa.pipeline.retriever import Retriever
+
+    r1 = Retriever(offline_settings, fake, get_embedding(offline_settings.embedding))
+    r2 = Retriever(offline_settings, fake, get_embedding(offline_settings.embedding))
+    assert fake.dense_store is not None
+    assert r1._dense_store is r2._dense_store is fake.dense_store
