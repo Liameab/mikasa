@@ -41,6 +41,10 @@ class BM25Index:
         self.k1 = k1
         self.b = b
         self._docs: list[list[str]] = [list(tokens) for tokens in corpus_tokens]
+        # 词频在建索引时算一次。原先 score_doc 里现算 `Counter(doc)`，而 search 对
+        # **每篇**都调一次——一次查询等于把全库词条重扫一遍，实测慢 3.5–20×
+        # （2026-10-05 审查）。代价是每篇多一个 Counter，与 _docs 本身同阶。
+        self._freqs: list[Counter[str]] = [Counter(doc) for doc in self._docs]
         self._n = len(self._docs)
         self._avgdl = sum(len(d) for d in self._docs) / self._n if self._n else 0.0
         self._df: Counter[str] = Counter()
@@ -66,7 +70,7 @@ class BM25Index:
         doc = self._docs[doc_index]
         if not doc or not query_terms:
             return 0.0
-        freq = Counter(doc)
+        freq = self._freqs[doc_index]  # 预建好的词频，见 __init__
         dl = len(doc)
         norm = 1.0 - self.b + self.b * dl / self._avgdl if self._avgdl else 1.0
         score = 0.0

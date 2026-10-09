@@ -92,3 +92,21 @@ def test_empty_corpus_and_no_overlap_query():
     assert empty.size == 0 and empty.vocabulary_size == 0
     idx = BM25Index(CORPUS, tokenize=bigram_tokenizer)
     assert idx.search("量子引力", top_k=10) == []  # 无任何词重叠 → 空结果
+
+
+def test_term_frequencies_are_precomputed_and_match_the_docs():
+    """词频在建索引时算一次，且与文档保持一致（2026-10-05 审查）。
+
+    原先 `score_doc` 每次现算 `Counter(doc)`，而 `search` 对每篇都调一次——一次
+    查询等于把全库词条重扫一遍（实测慢 3.5–20×）。这条守两件事：预建值确实等于
+    逐篇词频；查询结果与"现算"的行为一致（同查询两次完全一样）。
+    """
+    from collections import Counter
+
+    corpus = [["a", "b", "a"], ["b", "c"], []]
+    index = BM25Index(corpus, tokenize=lambda text: text.split())
+    assert [index._freqs[i] for i in range(len(corpus))] == [Counter(d) for d in corpus]
+
+    first = index.search(["a", "b"])
+    assert index.search(["a", "b"]) == first
+    assert first and first[0][0] == 0  # "a" 只出现在第 0 篇
