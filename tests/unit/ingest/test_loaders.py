@@ -552,3 +552,18 @@ def test_small_text_still_cleans_repeated_lines(tmp_path):
     small.write_text("页眉\n正文\n页眉\n正文\n页眉\n", encoding="utf-8")
 
     assert _read_text(small) == "页眉\n正文\n正文"
+
+
+def test_markdown_with_utf8_bom_keeps_its_title(tmp_path: Path):
+    """带 UTF-8 BOM 的 Markdown：BOM 是编码标记不是内容，不能吃掉首个标题。
+
+    实测（2026-10-05 审查）：BOM 解码后留成正文开头一个不可见字符，
+    `_ATX_HEADING` 匹配不上 → **标题回落到文件名**、`# 标题` 那行还被当正文
+    混进段落（检索与引用展示里都带着它）。统一在 decode_text 剥掉 BOM。
+    """
+    md = tmp_path / "bom.md"
+    md.write_bytes("\ufeff# 主标题\n\n正文一段。\n".encode("utf-8"))
+    doc = load_markdown(md)
+    assert doc.title == "主标题"
+    assert [p.text for p in doc.paragraphs] == ["正文一段。"]
+    assert doc.paragraphs[0].heading_path == "主标题"

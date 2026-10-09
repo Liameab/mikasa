@@ -79,7 +79,11 @@ def guess_encoding(raw: bytes) -> str:
 def decode_text(raw: bytes) -> str:
     """按探测编码解码为文本（容错）。"""
     encoding = guess_encoding(raw)
-    return raw.decode(encoding, errors="replace")
+    text = raw.decode(encoding, errors="replace")
+    # UTF-8 BOM 解码后是一个**不可见字符**留在正文开头：Markdown 的首个
+    # `# 标题` 于是认不出来（标题回落到文件名、那行还当成正文混进段落）。
+    # BOM 是编码标记不是内容，统一在这一层剥掉（2026-10-05 审查实测确认）。
+    return text[1:] if text.startswith("\ufeff") else text
 
 
 def strip_repeated_lines(text: str, min_count: int = 3) -> str:
