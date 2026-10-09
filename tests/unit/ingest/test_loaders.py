@@ -567,3 +567,29 @@ def test_markdown_with_utf8_bom_keeps_its_title(tmp_path: Path):
     assert doc.title == "主标题"
     assert [p.text for p in doc.paragraphs] == ["正文一段。"]
     assert doc.paragraphs[0].heading_path == "主标题"
+
+
+def test_markdown_front_matter_does_not_steal_the_title(tmp_path: Path):
+    """YAML front-matter 不能抢标题（2026-10-05 审查实测）。
+
+    `---` 是合法的 Setext 下划线，于是 front-matter 的**最后一行**会被当成一级
+    标题：实测 `title: 我的笔记 / tags: [a, b]` 让文档标题变成 `tags: [a, b]`，
+    真正的 `# 主标题` 反而不算标题、还混进正文。
+    """
+    md = tmp_path / "fm.md"
+    md.write_text(
+        "---\ntitle: 我的笔记\ntags: [a, b]\n---\n\n# 真正的主标题\n\n正文一段。\n",
+        encoding="utf-8",
+    )
+    doc = load_markdown(md)
+    assert doc.title == "真正的主标题"
+    assert [p.text for p in doc.paragraphs] == ["正文一段。"]
+    assert not any("tags:" in p.text for p in doc.paragraphs)
+
+
+def test_markdown_leading_rule_without_closing_is_kept(tmp_path: Path):
+    """首行 `---` 但没有收尾分隔线 → 那是水平线，不是 front-matter，原样保留。"""
+    md = tmp_path / "rule.md"
+    md.write_text("---\n\n# 标题\n\n正文。\n", encoding="utf-8")
+    doc = load_markdown(md)
+    assert doc.title == "标题"

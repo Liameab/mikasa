@@ -183,10 +183,26 @@ def _cut_reference_tail(page_texts: list[str]) -> list[str]:
     return page_texts
 
 
+def _strip_front_matter(lines: list[str]) -> list[str]:
+    """去掉开头的 YAML front-matter 块（首行 `---`、到下一个 `---`/`...` 为止）。
+
+    **不剥的话它会抢标题**（2026-10-05 审查实测）：`---` 是合法的 Setext 下划线，
+    于是 front-matter 的**最后一行**被当成一级标题——`title: 我的笔记\ntags: [a, b]`
+    让文档标题变成 `tags: [a, b]`，而真正的 `# 主标题` 反而没被识别。
+    没有收尾分隔线时原样返回：那种情况多半只是正文里的一根水平线。
+    """
+    if not lines or lines[0].strip() != "---":
+        return lines
+    for i in range(1, len(lines)):
+        if lines[i].strip() in ("---", "..."):
+            return lines[i + 1 :]
+    return lines
+
+
 def load_markdown(path: Path) -> LoadedDocument:
     """Markdown：按 H1-H3 标题生成 heading_path，段落 = 空行分隔。"""
     text = _read_text(path, strip_repeats=False)  # 结构化格式不做重复行清理（见 _read_text）
-    lines = text.splitlines()
+    lines = _strip_front_matter(text.splitlines())
 
     paragraphs: list[Para] = []
     heading_stack: list[str] = []
