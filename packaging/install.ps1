@@ -186,9 +186,20 @@ if ($running.Count -gt 0) {
 # ---------------- 3. 复制文件 ----------------
 Say ""
 Say "正在复制文件（约 220 MB，视磁盘速度几十秒）…" "Cyan"
-if (Test-Path $target) { Remove-Item $target -Recurse -Force }
-New-Item -ItemType Directory -Path $target -Force | Out-Null
-Copy-Item -Path (Join-Path $Payload "*") -Destination $target -Recurse -Force
+# 先拷到同级暂存目录，成功了再换位：中途失败（磁盘满、文件被占用）时**旧版本原封不动**。
+# 原来是"先删后拷"——删掉之后拷一半失败，用户手上连原来那份能用的都没了（2026-10-05 审查）。
+# 与程序内同名替换同一条纪律：让位用 rename，不先删。
+$staging = "$target.new"
+$retired = "$target.old"
+if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
+if (Test-Path $retired) { Remove-Item $retired -Recurse -Force }
+New-Item -ItemType Directory -Path $staging -Force | Out-Null
+Copy-Item -Path (Join-Path $Payload "*") -Destination $staging -Recurse -Force
+if (Test-Path $target) { Rename-Item -Path $target -NewName (Split-Path $retired -Leaf) }
+Rename-Item -Path $staging -NewName (Split-Path $target -Leaf)
+if (Test-Path $retired) {
+    Remove-Item $retired -Recurse -Force -ErrorAction SilentlyContinue
+}
 Say "文件复制完成。" "Green"
 
 # ---------------- 4. 快捷方式 ----------------
