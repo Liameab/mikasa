@@ -307,7 +307,15 @@ export async function openNoteEditor({ docId = null, onSaved = null } = {}) {
         const res = await readResponse(
           await fetch(`/api/notes/${docId}/media`, { method: "POST", body: fd })
         );
-        if (!res.ok) {
+        if (res.ok) {
+          // 存进服务端了：换成服务端地址并**回收本机 object URL**。不回收的话，
+          // 同一会话里反复"插图 → 保存"会让每张图的内存一直挂到编辑器关闭
+          // （2026-10-05 审查）。blob 引用一并摘掉，后续保存不再重复上传。
+          if (item.url.startsWith("blob:")) URL.revokeObjectURL(item.url);
+          item.name = res.body?.name ?? item.name;
+          if (item.name) item.url = `/api/notes/${docId}/media/${item.name}`;
+          delete item.blob;
+        } else {
           failed += 1;
           reason ||= apiMessage(res);
         }
@@ -319,6 +327,7 @@ export async function openNoteEditor({ docId = null, onSaved = null } = {}) {
     if (failed) {
       toast(`笔记已保存，但有 ${failed} 张原图没存上：${reason}（可重开这篇再传一次）`, "warn");
     }
+    renderMediaBar(); // 缩略图改成服务端地址（旧的 blob URL 已经回收）
   }
 
   /** 打开已有笔记时把已存原图拉进缩略图条（拉不到就静默：不挡编辑）。 */
