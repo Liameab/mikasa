@@ -536,6 +536,10 @@ class AskService:
         # 流式用量（2026-09-27，ADR-0038）：provider 在流尽后把末帧的用量放在
         # `last_usage` 上（协议方法会波及十来处测试替身，所以用属性 + getattr）。
         # 拿不到就是 (None, None)，界面显示"—"，不假装是 0。
+        # shortcut: 用量挂在 provider 的共享属性上，两个流**恰好同时收尾**时可能串号
+        # （写入与读取之间只隔几条语句，单用户桌面形态下窗口极窄，后果仅是日志数字）。
+        # 要根治得把用量挂到"每次调用"的落点上——那要改 LLMProvider.stream 协议与
+        # 十来处替身；出现真实误报再动。
         prompt_tokens, completion_tokens = getattr(self._llm, "last_usage", (None, None))
         answer = generator.build_answer(
             "".join(parts),
@@ -939,7 +943,7 @@ class AskService:
             latency_ms={"generate": round((time.perf_counter() - t0) * 1000.0, 1)},
             # 用量与 kb 流式同口径（ADR-0038）：provider 流尽后把末帧用量放在
             # `last_usage` 上。原先 free 流式两个字段恒为 None，用量统计少一半
-            # （2026-10-05 审查）。
+            # （2026-10-05 审查）。共享属性的窄竞态见 ask() 里的 shortcut 说明。
             prompt_tokens=getattr(self._llm, "last_usage", (None, None))[0],
             completion_tokens=getattr(self._llm, "last_usage", (None, None))[1],
         )
