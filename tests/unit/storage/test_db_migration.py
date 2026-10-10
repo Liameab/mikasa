@@ -395,7 +395,10 @@ def test_v2_to_v3_migration_resumes_after_crash(tmp_path):
     _add_v2_doc(conn, "甲")
     conn.commit()
     db.init_db(conn)  # 完整迁移到当前版本
-    conn.execute("UPDATE schema_version SET version = 2 WHERE version = 4")
+    # 按**当前** SCHEMA_VERSION 匹配：写死 4 时（库早已到 v5）UPDATE 一行都改不到，
+    # 版本没回退 → 下面的"续跑"什么都没测。断言回退生效，防它再悄悄失效。
+    conn.execute("UPDATE schema_version SET version = 2 WHERE version = ?", (db.SCHEMA_VERSION,))
+    assert int(conn.execute("SELECT version FROM schema_version").fetchone()["version"]) == 2
     conn.commit()
 
     db.init_db(conn)  # 续跑：kb_folders 已建、两列都已加 → 守卫下空操作
@@ -462,7 +465,9 @@ def test_v3_to_v4_migration_resumes_after_crash(tmp_path):
     _add_v3_doc(conn, "甲")
     conn.commit()
     db.init_db(conn)  # 完整迁移到 v4
-    conn.execute("UPDATE schema_version SET version = 3 WHERE version = 4")
+    # 同上：写死的 4 早就对不上当前版本，UPDATE 静默落空。
+    conn.execute("UPDATE schema_version SET version = 3 WHERE version = ?", (db.SCHEMA_VERSION,))
+    assert int(conn.execute("SELECT version FROM schema_version").fetchone()["version"]) == 3
     conn.commit()
 
     db.init_db(conn)  # 续跑：列已加 → 守卫下空操作
