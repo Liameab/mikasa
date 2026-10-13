@@ -61,9 +61,6 @@ docs/resume-zhangzhixuan.html
 docs/resume-zhangzhixuan.docx
 docs/resume-job-zhangzhixuan.docx
 docs/resume-photo.jpg
-# 技术路线提案（Claude ↔ Codex 的协商稿）：内部工作文档，不进公开仓库
-docs/tech-roadmap-proposal.md
-
 # ===== 本地工具产物与配置 =====
 # 无头 Chrome 验收截图
 tools/shots/
