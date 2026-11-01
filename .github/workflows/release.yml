@@ -33,7 +33,7 @@ jobs:
       # 与 CI 同款：英文 Windows 控制台默认 cp1252，中文日志会变成问号
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v6
         with:
